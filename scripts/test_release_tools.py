@@ -404,7 +404,8 @@ class AndroidSdkWorkflowTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 source = (root / ".github/workflows" / name).read_text(encoding="utf-8")
                 action = source.split("      - uses: android-actions/setup-android@v3\n", 1)[1].split("      - ", 1)[0]
-                self.assertIn("packages: 'platform-tools platforms;android-37 build-tools;37.0.0'", action)
+                self.assertIn("cmdline-tools-version: '15859902'", action)
+                self.assertIn("packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'", action)
 
 
 if __name__ == "__main__":
