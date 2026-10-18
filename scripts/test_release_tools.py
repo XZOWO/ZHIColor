@@ -397,5 +397,15 @@ class ReleaseToolsTest(unittest.TestCase):
         self.assertEqual(bucket.remote["versionCode"], 21)
 
 
+class AndroidSdkWorkflowTests(unittest.TestCase):
+    def test_workflows_install_explicit_supported_sdk_packages(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in ("check.yml", "prepare-release.yml"):
+            with self.subTest(workflow=name):
+                source = (root / ".github/workflows" / name).read_text(encoding="utf-8")
+                action = source.split("      - uses: android-actions/setup-android@v3\n", 1)[1].split("      - ", 1)[0]
+                self.assertIn("packages: 'platform-tools platforms;android-37 build-tools;37.0.0'", action)
+
+
 if __name__ == "__main__":
     unittest.main()
