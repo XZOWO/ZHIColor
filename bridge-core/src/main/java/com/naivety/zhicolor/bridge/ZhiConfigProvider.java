@@ -1,0 +1,8 @@
+package com.naivety.zhicolor.bridge;
+import android.content.*;import android.database.Cursor;import android.net.Uri;import android.os.*;
+public final class ZhiConfigProvider extends ContentProvider {
+ public boolean onCreate(){return true;}
+ public Bundle call(String method,String arg,Bundle extras){int uid=Binder.getCallingUid();int systemUiUid=-1;try{systemUiUid=getContext().getPackageManager().getApplicationInfo("com.android.systemui",0).uid;}catch(android.content.pm.PackageManager.NameNotFoundException ignored){}if(!isTrustedCaller(uid,android.os.Process.myUid(),systemUiUid))throw new SecurityException("caller");long token=Binder.clearCallingIdentity();try{if(ToolsSettings.SNAPSHOT_METHOD.equals(method))return ToolsSettings.snapshot(getContext());if("bind".equals(method)&&extras!=null){BridgeSettings.recordProvider(getContext(),extras.getString("player"),extras.getString("provider"));return Bundle.EMPTY;}if(!"snapshot".equals(method))return Bundle.EMPTY;return BridgeSettings.snapshot(getContext());}finally{Binder.restoreCallingIdentity(token);}}
+ static boolean isTrustedCaller(int callerUid,int moduleUid,int systemUiUid){return callerUid>=0&&(callerUid==moduleUid||callerUid==android.os.Process.SYSTEM_UID||callerUid==systemUiUid);}
+ public Cursor query(Uri u,String[]p,String s,String[]a,String o){return null;}public String getType(Uri u){return "application/json";}public Uri insert(Uri u,ContentValues v){throw new UnsupportedOperationException();}public int delete(Uri u,String s,String[]a){throw new UnsupportedOperationException();}public int update(Uri u,ContentValues v,String s,String[]a){throw new UnsupportedOperationException();}
+}

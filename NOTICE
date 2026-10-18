@@ -1,0 +1,28 @@
+ZHIColor
+
+This project includes code adapted from:
+
+- ZHITool (XZOWO/ZHITool).
+  GPL-3.0. Portions of the home screen and lyric animations are adapted
+  from this project.
+
+- ColorOS-Live-Lyrics-Bridge (Andrea-lyz), v4.4.0.
+  Apache-2.0. Original copyrights remain with its contributors.
+  Changes include package relocation, Lyricon integration,
+  settings, rendering, and compatibility adaptations.
+
+- Lyricon central (Proify, Tomakino), source from commit
+  2bc34008b8a22c7261d33acceed7d708e23ef6d6, the 0.1.70 SDK period.
+  Apache-2.0. Source headers and LICENSE are preserved in lyricon-central.
+  Only the Gradle integration is adapted for this project.
+
+- Kyant AndroidLiquidGlass catalog, tag 1.0.6, commit
+  896a94a3ade1cc1a940b92365f942a34971fecda.
+  Copyright 2025 Kyant. Apache-2.0. Liquid bottom tab components and
+  drag/highlight helpers are adapted directly from the official source.
+  Package relocation and project integration changes are recorded in
+  docs/upstream/kyant-ui.json. Original headers and LICENSE are retained.
+
+See LICENSE, bridge-core/LICENSE, lyricon-central/LICENSE, and THIRD_PARTY_NOTICES.md for
+license texts and dependency notices. The APK includes the same notices
+and license texts in assets/licenses/.

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Core feature: discover installed audio apps and arbitrary Lyricon Provider manifests locally. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+    <permission android:name="com.naivety.zhicolor.permission.CHANGE_LYRIC_UI_SETTINGS" android:protectionLevel="signature" />
+    <uses-permission android:name="com.naivety.zhicolor.permission.CHANGE_LYRIC_UI_SETTINGS" />
+    <queries>
+        <package android:name="io.github.proify.lyricon" />
+        <package android:name="io.github.proify.lyricon.core" />
+        <package android:name="com.android.systemui" />
+    </queries>
+    <application
+        android:name=".ZhiColorApplication"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="ZHIColor"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:localeConfig="@xml/locales_config"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ZHIColor">
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <receiver android:name=".home.MediaSnapshotReceiver" android:exported="false" />
+        <provider android:name="com.naivety.zhicolor.bridge.ZhiConfigProvider" android:authorities="com.naivety.zhicolor.bridgeconfig" android:exported="true" />
+        <provider android:name="com.naivety.zhicolor.bridge.LyricContentCleanupConfigProvider" android:authorities="com.naivety.zhicolor.contentcleanup" android:exported="false" android:grantUriPermissions="true" />
+    </application>
+</manifest>

@@ -1,0 +1,12 @@
+<resources>
+    <string name="access_title">Set up access</string>
+    <string name="access_description">Root and LSPosed are required to use ZHIColor.</string>
+    <string name="access_root">Root</string>
+    <string name="access_framework">LSPosed</string>
+    <string name="access_checking">Checking</string>
+    <string name="access_granted">Granted</string>
+    <string name="access_enabled">Enabled</string>
+    <string name="access_required">Required</string>
+    <string name="access_root_denied">Root access was not granted. Grant it in your root manager and try again.</string>
+    <string name="access_language">Language</string>
+</resources>

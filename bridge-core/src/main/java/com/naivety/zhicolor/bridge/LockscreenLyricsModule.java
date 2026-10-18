@@ -1,0 +1,17258 @@
+package com.naivety.zhicolor.bridge;
+
+import android.app.KeyguardManager;
+import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BlurMaskFilter;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.RenderEffect;
+import android.graphics.Shader;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Icon;
+import android.media.MediaMetadata;
+import android.app.Notification;
+import android.service.notification.StatusBarNotification;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
+import android.os.Build;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.os.ResultReceiver;
+import android.os.SystemClock;
+import android.text.TextUtils;
+import android.text.TextPaint;
+import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+import android.widget.ImageView;
+import android.widget.TextView;
+
+import org.json.JSONObject;
+
+import com.naivety.zhicolor.bridge.render.CachedDrawFrame;
+import com.naivety.zhicolor.bridge.render.CharLiftGeometry;
+import com.naivety.zhicolor.bridge.render.DrawFrame;
+import com.naivety.zhicolor.bridge.render.LyricDrawLine;
+import com.naivety.zhicolor.bridge.render.LyricDrawLayoutEngine;
+import com.naivety.zhicolor.bridge.render.LyricSecondaryWindowPolicy;
+import com.naivety.zhicolor.bridge.render.LyricTimingMode;
+import com.naivety.zhicolor.bridge.render.LyricOverlapHandoffPolicy;
+import com.naivety.zhicolor.bridge.render.LyricViewportMotionPolicy;
+import com.naivety.zhicolor.bridge.render.LyricWakeTransitionPolicy;
+import com.naivety.zhicolor.bridge.render.LyricWakeRowPolicy;
+import com.naivety.zhicolor.bridge.render.LyricsRecyclerGeometry;
+import com.naivety.zhicolor.bridge.render.OfficialLyricFrameResolver;
+import com.naivety.zhicolor.bridge.render.WordLine;
+import com.naivety.zhicolor.bridge.render.WordLyricModel;
+import com.naivety.zhicolor.bridge.render.WordLyricRenderConstants;
+import com.naivety.zhicolor.bridge.render.WordLyricRenderSupport;
+import com.naivety.zhicolor.bridge.render.WordRange;
+import com.naivety.zhicolor.bridge.render.ZhiToolLyricMotion;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.ref.WeakReference;
+import java.util.AbstractList;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
+
+import com.naivety.zhicolor.bridge.bootstrap.SystemUiRuntimeBootstrap;
+import com.naivety.zhicolor.bridge.diagnostics.BridgeDebugApplyPolicy;
+import com.naivety.zhicolor.bridge.diagnostics.BridgeDebugArea;
+import com.naivety.zhicolor.bridge.diagnostics.BridgeDebugConfig;
+import com.naivety.zhicolor.bridge.diagnostics.BridgeEvents;
+import com.naivety.zhicolor.bridge.diagnostics.BridgePerformanceSampler;
+import com.naivety.zhicolor.bridge.diagnostics.ArtworkDiagnostics;
+import com.naivety.zhicolor.bridge.diagnostics.SensitiveFieldRedactor;
+import com.naivety.zhicolor.bridge.diagnostics.StructuredBridgeLog;
+import com.naivety.zhicolor.bridge.players.kuwo.KuWoCoverPolicy;
+import com.naivety.zhicolor.bridge.players.kuwo.KuWoMediaIdentityPolicy;
+import com.naivety.zhicolor.bridge.players.kuwo.KuWoPluginMediaModelReader;
+import com.naivety.zhicolor.bridge.players.kuwo.KuWoSameTrackLyricRetention;
+import com.naivety.zhicolor.bridge.players.kuwo.KuWoSystemUiRuntime;
+import com.naivety.zhicolor.bridge.systemui.lyrics.LyricsRecyclerFieldAccessor;
+import com.naivety.zhicolor.bridge.systemui.lyrics.LyricsRecyclerPolicy;
+import com.naivety.zhicolor.bridge.systemui.lyrics.SystemUiLoadLyricPolicy;
+import io.github.libxposed.api.XposedInterface;
+import io.github.libxposed.api.XposedModule;
+
+public final class LockscreenLyricsModule extends XposedModule {
+    static volatile LockscreenLyricsModule zhiInstance;
+    private static final String TAG = "LockscreenLyrics";
+    private static final String LYRIC_PARSE_TRACE_TAG = "LockscreenLyricsParse";
+    private static final String LYRIC_RENDER_PIPELINE_REVISION =
+            "native-v15-continuous-lyric-handoff";
+    // Runtime debug is off by default. Enable it from the settings Debug page, or with
+    // log.tag.LockscreenLyrics=DEBUG. Release and debug APKs share the same default.
+    private static final boolean LYRIC_VERBOSE_DIAGNOSTICS_ENABLED = false;
+    private static final boolean LYRIC_PARSE_TRACE_ENABLED = false;
+    private static final int LYRIC_PARSE_TRACE_CHUNK_SIZE = 3000;
+    private static volatile String logProcessName = "unknown";
+    private static volatile LyricUiConfig runtimeLyricUiConfig = LyricUiConfig.defaults();
+    private static final String MODULE_PACKAGE = "com.naivety.zhicolor";
+    private static final String SYSTEMUI_PACKAGE = "com.android.systemui";
+    private static final String OPLUS_MEDIA_CONTROL_SERVICE_CLASS =
+            "com.android.server.media.OplusMediaControlService";
+    private static final String OPLUS_HISTORY_WHITELIST_METHOD =
+            "isInHistoryPlayInfoWhiteList";
+    private static final String OPLUS_MEDIA_BLACKLIST_METHOD = "isInMediaBlackList";
+    private static final String OPLUS_PLUGIN_CLASS_LOADER_CLASS =
+            "com.android.systemui.shared.plugins.OPlusPluginClassLoader";
+    private static final String LYRICS_RECYCLER_VIEW_CLASS =
+            "com.oplus.systemui.plugins.shared.template.component.media.view.LyricsRecyclerView";
+    private static final String LYRICS_SWITCHER_VIEW_CLASS =
+            "com.oplus.systemui.plugins.shared.template.component.media.view.LyricsSwitcherView";
+    private static final String OPLUS_LYRIC_INFO_KEY = LyricInfoContract.METADATA_KEY;
+    private static final String OPLUS_RAW_LYRIC_INFO_KEY = LyricInfoContract.JSON_RAW_LYRIC;
+    private static final String HOOK_ID_SYSTEMUI_LOAD_LYRIC = "oplus-word-load-lyric";
+    private static final String HOOK_ID_SYSTEMUI_ARTWORK_ICON =
+            "oplus-word-artwork-icon";
+    private static final String HOOK_ID_SYSTEMUI_SEEDLING_ARTWORK =
+            "oplus-seedling-artwork-icon";
+    private static final String HOOK_ID_SYSTEMUI_ARTWORK_LOADER_PROBE =
+            "oplus-seedling-artwork-loader-probe";
+    private static final String HOOK_ID_MEDIA_DATA_METADATA_CHANGED =
+            "oplus-media-data-metadata-changed";
+    private static final String HOOK_ID_MEDIA_DATA_LOAD_METADATA =
+            "oplus-media-data-load-metadata";
+    private static final String HOOK_ID_SEEDLING_MEDIA_BUNDLE = "oplus-word-seedling-media-bundle";
+    private static final String HOOK_ID_TEXTVIEW_ON_DRAW = "oplus-word-textview-on-draw";
+    private static final String HOOK_ID_TEXTVIEW_SET_TEXT = "oplus-word-textview-set-text";
+    private static final String HOOK_ID_VIEW_ON_ATTACHED = "oplus-word-view-on-attached";
+    private static final String HOOK_ID_VIEW_ON_DETACHED = "oplus-word-view-on-detached";
+    private static final String HOOK_ID_VIEW_SET_CONTENT_DESCRIPTION =
+            "oplus-translation-button-content-description";
+    private static final String HOOK_ID_VIEW_SET_VISIBILITY =
+            "oplus-translation-button-visibility";
+    private static final String HOOK_ID_VIEW_WINDOW_VISIBILITY =
+            "oplus-lyric-window-visibility";
+    private static final String HOOK_ID_IMAGE_VIEW_SET_IMAGE_DRAWABLE =
+            "oplus-translation-button-image-drawable";
+    private static final String HOOK_ID_IMAGE_VIEW_SET_IMAGE_BITMAP =
+            "oplus-translation-button-image-bitmap";
+    private static final String HOOK_ID_PLUGIN_CLASS_LOADER_CONSTRUCTOR =
+            "oplus-word-plugin-classloader-constructor";
+    private static final String HOOK_ID_LYRICS_RECYCLER = "oplus-word-lyrics-recycler";
+    private static final String HOOK_ID_LYRICS_RECYCLER_NOTIFY_GUARD =
+            "oplus-word-lyrics-recycler-notify-guard";
+    private static final String HOOK_ID_RECYCLER_ADAPTER_NOTIFY_CHANGED =
+            "oplus-word-recycler-adapter-notify-changed";
+    private static final String HOOK_ID_RUS_GET_WHITE_LIST = "oplus-media-rus-get-white-list";
+    private static final String HOOK_ID_GET_LYRIC_ENTRANCE = "oplus-media-get-lyric-entrance";
+    private static final String HOOK_ID_UPDATE_PKG_ACTIONS_RULE = "oplus-media-update-pkg-actions-rule";
+    private static final String HOOK_ID_TRANSLATION_TOGGLE_ACTION =
+            "oplus-media-translation-toggle-action";
+    private static final String HOOK_ID_TRANSLATION_MAIN_ACTIONS =
+            "oplus-media-translation-main-actions";
+    private static final String HOOK_ID_OPLUS_HISTORY_WHITELIST =
+            "oplus-media-history-whitelist-salt";
+    private static final String HOOK_ID_OPLUS_MEDIA_BLACKLIST =
+            "oplus-media-blacklist-bypass";
+    private static final String HOOK_ID_AOD_MEDIA_SUPPORT =
+            "oplus-aod-media-support";
+    private static final String TRANSLATION_TOGGLE_ACTION =
+            LyricInfoContract.ACTION_TOGGLE_TRANSLATION;
+    private static final String TRANSLATION_PREFERENCES_NAME = LyricUiSettings.PREFERENCES_NAME;
+    private static final String TRANSLATION_PREFERENCE_KEY =
+            LyricUiSettings.TRANSLATION_PREFERENCE_KEY;
+    private static final String TRANSLATION_ACTION_DESCRIPTION_PREFIX =
+            "\u7ffb\u8bd1\uff1a";
+    private static final String TRANSLATION_ACTION_NAME = "\u7ffb\u8bd1";
+    private static final int TRANSLATION_ICON_FINGERPRINT_SIZE = 48;
+    private static final int OPLUS_LYRIC_ENTRANCE_ALL = 52;
+    private static final long SCREEN_TIMEOUT_USER_ACTIVITY_INTERVAL_MS =
+            LyricTimingTuningConstants.ScreenTimeout.USER_ACTIVITY_INTERVAL_MS;
+    private static final long SCREEN_TIMEOUT_WAKE_LOCK_LEASE_MS =
+            LyricTimingTuningConstants.ScreenTimeout.WAKE_LOCK_LEASE_MS;
+    private static final long SCREEN_TIMEOUT_VISIBLE_LYRIC_VIEW_MAX_AGE_MS =
+            LyricTimingTuningConstants.ScreenTimeout.VISIBLE_LYRIC_VIEW_MAX_AGE_MS;
+    private static final long SCREEN_TIMEOUT_MODEL_EVIDENCE_GRACE_MS =
+            LyricTimingTuningConstants.ScreenTimeout.MODEL_EVIDENCE_GRACE_MS;
+    private static final long SCREEN_TIMEOUT_USER_PRESENT_RECHECK_DELAY_MS =
+            LyricTimingTuningConstants.ScreenTimeout.USER_PRESENT_RECHECK_DELAY_MS;
+    private static final long SCREEN_TIMEOUT_KEYGUARD_STATE_CACHE_MS =
+            LyricTimingTuningConstants.ScreenTimeout.KEYGUARD_STATE_CACHE_MS;
+    private static final long SCREEN_TIMEOUT_VISIBLE_LYRIC_NOTE_THROTTLE_MS =
+            LyricTimingTuningConstants.ScreenTimeout.VISIBLE_LYRIC_NOTE_THROTTLE_MS;
+    private static final long OFFICIAL_DRAW_FRAME_TRANSIENT_MISS_GRACE_MS =
+            LyricTimingTuningConstants.OfficialLyric.DRAW_FRAME_TRANSIENT_MISS_GRACE_MS;
+    private static final long SYSTEMUI_LYRIC_MODEL_HANDOFF_MAX_MS =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_LYRIC_MODEL_HANDOFF_MAX_MS;
+    private static final long SYSTEMUI_LYRIC_HANDOFF_MIN_MASK_MS =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_LYRIC_HANDOFF_MIN_MASK_MS;
+    private static final float SYSTEMUI_LYRIC_HANDOFF_HIDDEN_ALPHA =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_LYRIC_HANDOFF_HIDDEN_ALPHA;
+    private static final float SYSTEMUI_LYRIC_VISIBLE_ALPHA =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_LYRIC_VISIBLE_ALPHA;
+    private static final long SYSTEMUI_LYRIC_HANDOFF_FADE_IN_MS =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_LYRIC_HANDOFF_FADE_IN_MS;
+    private static final long[] AOD_LYRIC_HANDOFF_REDRAW_DELAYS_MS =
+            LyricTimingTuningConstants.Aod.HANDOFF_REDRAW_DELAYS_MS;
+    private static final long SYSTEMUI_LYRIC_ROW_REBIND_WINDOW_MS =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_LYRIC_ROW_REBIND_WINDOW_MS;
+    private static final long SYSTEMUI_TRACK_RESET_POSITION_GUARD_MS =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_TRACK_RESET_POSITION_GUARD_MS;
+    private static final long SYSTEMUI_TRACK_RESET_STALE_POSITION_MS =
+            LyricTimingTuningConstants.OfficialLyric.SYSTEMUI_TRACK_RESET_STALE_POSITION_MS;
+    // Text-only line updates do not need a 60 Hz invalidation loop. Word-timed progress and
+    // active row visual transitions still retain the display-rate path below.
+    private static final long ACTIVE_LYRIC_FRAME_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.ACTIVE_LYRIC_FRAME_DELAY_MS;
+    private static final long ACTIVE_LYRIC_STATIC_FRAME_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.ACTIVE_LYRIC_STATIC_FRAME_DELAY_MS;
+    private static final long AOD_ACTIVE_LYRIC_REFRESH_DELAY_MS =
+            LyricTimingTuningConstants.Aod.ACTIVE_LYRIC_REFRESH_DELAY_MS;
+    private static final long ACTIVE_LYRIC_RETRY_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.ACTIVE_LYRIC_RETRY_DELAY_MS;
+    private static final long LYRIC_RECYCLER_SCREEN_STATE_SETTLE_MS =
+            LyricTimingTuningConstants.LyricGeneral.LYRIC_RECYCLER_SCREEN_STATE_SETTLE_MS;
+    private static final long LYRIC_RECYCLER_SET_CURRENT_SETTLE_MS =
+            LyricTimingTuningConstants.LyricGeneral.LYRIC_RECYCLER_SET_CURRENT_SETTLE_MS;
+    private static final long ADAPTIVE_LINE_TIMED_RECYCLER_MIN_LAG_MS = 650L;
+    private static final long LYRIC_PLAYBACK_POSITION_JUMP_MS =
+            LyricTimingTuningConstants.LyricGeneral.PLAYBACK_POSITION_JUMP_MS;
+    private static final int LYRIC_BOUND_FRAME_RETRY_MAX =
+            LyricTimingTuningConstants.LyricGeneral.BOUND_FRAME_RETRY_MAX;
+    private static final int LYRIC_SURFACE_RENDER_PASS_MAX_FRAMES =
+            LyricTimingTuningConstants.LyricGeneral.SURFACE_RENDER_PASS_MAX_FRAMES;
+    private static final long LYRIC_SURFACE_RENDER_PASS_MAX_MS =
+            LyricTimingTuningConstants.LyricGeneral.SURFACE_RENDER_PASS_MAX_MS;
+    private static final long LYRIC_UI_STYLE_SETTINGS_RELOAD_MS =
+            LyricTimingTuningConstants.LyricGeneral.UI_STYLE_SETTINGS_RELOAD_MS;
+    private static final long LYRIC_VISIBILITY_RECOVERY_FIRST_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.VISIBILITY_RECOVERY_FIRST_DELAY_MS;
+    private static final long LYRIC_VISIBILITY_RECOVERY_SECOND_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.VISIBILITY_RECOVERY_SECOND_DELAY_MS;
+    private static final long LYRIC_VISIBILITY_RECOVERY_FINAL_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.VISIBILITY_RECOVERY_FINAL_DELAY_MS;
+    private static final long LYRIC_VISIBILITY_RECOVERY_LONG_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.VISIBILITY_RECOVERY_LONG_DELAY_MS;
+    private static final long LYRIC_VISIBILITY_RECOVERY_LAST_DELAY_MS =
+            LyricTimingTuningConstants.LyricGeneral.VISIBILITY_RECOVERY_LAST_DELAY_MS;
+    private static final long LYRIC_SURFACE_PROVISIONAL_DRAW_GRACE_MS =
+            LyricTimingTuningConstants.LyricGeneral.SURFACE_PROVISIONAL_DRAW_GRACE_MS;
+    private static final long[] LYRIC_VISIBILITY_RECOVERY_DELAYS_MS =
+            LyricTimingTuningConstants.LyricGeneral.VISIBILITY_RECOVERY_DELAYS_MS;
+    private static final long TRANSLATION_TOGGLE_LAYOUT_FRAME_MS =
+            LyricTimingTuningConstants.Translation.TOGGLE_LAYOUT_FRAME_MS;
+    private static final float OFFICIAL_LYRIC_INACTIVE_BLUR_RADIUS_PX =
+            LyricTimingTuningConstants.OfficialLyric.INACTIVE_BLUR_RADIUS_PX;
+    private static final float OFFICIAL_LYRIC_BLUR_ZERO_THRESHOLD_PX =
+            LyricTimingTuningConstants.OfficialLyric.BLUR_ZERO_THRESHOLD_PX;
+    private static final long OFFICIAL_LYRIC_ROW_SCALE_ATTACH_SUPPRESS_MS =
+            LyricTimingTuningConstants.OfficialLyric.ROW_SCALE_ATTACH_SUPPRESS_MS;
+    private static final long AOD_WORD_PROGRESS_TO_LINE_ANIMATION_MS =
+            LyricTimingTuningConstants.Aod.WORD_PROGRESS_TO_LINE_ANIMATION_MS;
+    private static final float ACTIVE_LYRIC_CENTER_OFFSET_DP =
+            LyricTimingTuningConstants.LyricGeneral.ACTIVE_LYRIC_CENTER_OFFSET_DP;
+    private static final float ACTIVE_LYRIC_POSITION_SHIFT_UP_DP =
+            LyricTimingTuningConstants.LyricGeneral.ACTIVE_LYRIC_POSITION_SHIFT_UP_DP;
+    // A bound lyric row is reused by more than one immersive RecyclerView during SystemUI
+    // cross-fades. Reusing a frame by TextView identity can therefore carry the old surface's
+    // adapter position into the new surface. Resolve every frame from the current binding.
+    private static final boolean OFFICIAL_DRAW_FRAME_REUSE_ENABLED =
+            LyricTimingTuningConstants.OfficialLyric.DRAW_FRAME_REUSE_ENABLED;
+    private static final long OFFICIAL_FRAME_DECISION_LOG_INTERVAL_MS =
+            LyricTimingTuningConstants.OfficialLyric.FRAME_DECISION_LOG_INTERVAL_MS;
+    private static final long OFFICIAL_ADAPTER_SUPPRESSION_LOG_INTERVAL_MS =
+            LyricTimingTuningConstants.OfficialLyric.ADAPTER_SUPPRESSION_LOG_INTERVAL_MS;
+    private static final Pattern LRC_TIME_TAG = Pattern.compile("\\[[0-9]{1,3}:[0-9]{2}(?:[.:][0-9]{1,3})?\\]");
+    private volatile WordLyricModel currentWordLyricModel;
+    private volatile String currentWordLyricModelSignature = "";
+    private final Object wordLyricModelCacheLock = new Object();
+    private volatile String currentWordLyricModelTrackKey = "";
+    private final LyricTrackRevealPolicy trackRevealPolicy = new LyricTrackRevealPolicy();
+    private volatile long lastTextViewSpanLogAt;
+    private volatile long lastTextViewDrawLogAt;
+    private volatile long lastRecyclerLogAt;
+    private volatile long lastRecyclerScrollStabilizeLogAt;
+    private volatile long lastLyricsRecyclerForceAlignLogAt;
+    private volatile long lastOfficialLyricPayloadLogAt;
+    private volatile long lastLyricLayoutDiagnosticsLogAt;
+    private volatile long lastOfficialFrameDecisionLogAt;
+    private final Map<String, Long> officialRendererFallbackLogAt =
+            new ConcurrentHashMap<>();
+    private volatile String lastOfficialFrameDecisionLogKey = "";
+    private static final Map<String, Long> officialAdapterSuppressionLogTimes =
+            new ConcurrentHashMap<>();
+    private volatile long lastActiveRefreshLogAt;
+    private volatile long lastSeedlingPlaybackStateLogAt;
+    private volatile long lastComputedPositionMs = -1L;
+    private volatile long lastComputedPositionElapsedMs = -1L;
+    private volatile long lastSeedlingActiveLineTimeMs = -1L;
+    private volatile long lastSeedlingActiveLineObservedAtMs = -1L;
+    private volatile long lastLyricTrackPositionResetLogAt;
+    private volatile long lyricTrackPositionResetGuardUntilElapsedMs;
+    private volatile long lastSystemUiTrackIdentityChangedAtElapsedMs;
+    private volatile long lastStalePlaybackPositionIgnoredLogAt;
+    private volatile long lastTransientLyricInfoMissLogAt;
+    private volatile boolean lastSystemUiPackageSupported;
+    private volatile String currentLyricProviderPackage = "";
+    private volatile LyricInfoContract.Payload currentLyricProviderPayload;
+    private volatile String currentLyricObservedTrackKey = "";
+    private final SystemUiLyricPublicationGate systemUiLyricPublicationGate =
+            new SystemUiLyricPublicationGate();
+    private volatile String playbackClockTrackKey = "";
+    private volatile boolean lastPlaybackIsPlaying = true;
+    private volatile float lastPlaybackSpeed = 1f;
+    private volatile int lastSystemUiPlaybackState = -1;
+    private volatile int lastLoggedSystemUiPlaybackState = -100;
+    private volatile String lastSystemUiSongName = "";
+    private volatile String lastSystemUiArtistName = "";
+    private volatile String lastSystemUiAlbumName = "";
+    private volatile boolean systemUiHasOfficialLyric;
+    private volatile SystemUiDexKitAdapter.Targets systemUiDexKitTargets;
+    private final Object officialLyricsRecyclerCompatibilityLock = new Object();
+    // Strong values are scoped to the active plugin generation and explicitly cleared when a
+    // replacement ClassLoader arrives; this keeps the hot path fast without pinning old loaders.
+    private final Map<Class<?>, OfficialLyricsRecyclerCompatibility.Binding>
+            officialLyricsRecyclerBindings = new IdentityHashMap<>();
+    private final Map<Class<?>, Boolean> unavailableOfficialLyricsRecyclerBindings =
+            new IdentityHashMap<>();
+    private volatile SystemUiLyricLoadContext latestSystemUiLyricLoadContext;
+    private volatile Method systemUiMetadataRefreshMethod;
+    private volatile boolean systemUiMetadataRefreshMethodUnavailableLogged;
+    private volatile boolean oplusLyricEntranceOverrideLogged;
+    private final KuWoSystemUiRuntime kuWoRuntime = new KuWoSystemUiRuntime();
+    private volatile boolean oplusPluginMediaModelHookInstalled;
+    private volatile OplusPluginDexKitAdapter.Targets oplusPluginKuWoTargets;
+    /** Immersive controller entry resolved in the same DexKit pass as the media-model targets. */
+    private volatile Method resolvedLyricPositionController;
+    private volatile boolean lyricPositionControllerHooked;
+    // Monotonic guard for the vendor timed-lyric method; touched only on the SystemUI main thread.
+    private WeakReference<View> timedLyricGuardRecycler = new WeakReference<>(null);
+    private WeakReference<WordLyricModel> timedLyricGuardModel = new WeakReference<>(null);
+    private long timedLyricGuardPosition = -1L;
+    private long timedLyricGuardElapsedMs = -1L;
+    private volatile boolean oplusMediaPolicyHooksInstalled;
+    private volatile boolean oplusHistoryWhitelistHookInstalled;
+    private volatile boolean oplusMediaBlacklistHookInstalled;
+    private volatile boolean aodMediaSupportHookInstalled;
+    private final Set<String> loggedOplusHistoryIntegrationPackages =
+            ConcurrentHashMap.newKeySet();
+    private final Set<String> loggedOplusHistoryManifestFailures =
+            ConcurrentHashMap.newKeySet();
+    private final Set<String> loggedOplusBlacklistBypassPackages =
+            ConcurrentHashMap.newKeySet();
+    private final Set<String> loggedAodMediaSupportPackages =
+            ConcurrentHashMap.newKeySet();
+    private volatile boolean translationToggleActionHookInstalled;
+    private volatile boolean translationMainActionsHookInstalled;
+    private volatile boolean injectedTranslationToggleActionHookInstalled;
+    private volatile boolean injectedTranslationToggleActionLogged;
+    private volatile boolean injectedTranslationToggleActionFailureLogged;
+    private volatile Object oplusMediaActionPrioritySelector;
+    private volatile Method oplusUpdatePkgActionsRuleMethod;
+    private volatile Object[] lastOplusPkgActionsRuleArgs;
+    private volatile Object[] rawOplusPkgActionsRuleArgs;
+    private String lastTranslationModelRebindKey = "";
+    private final Set<String> translationToggleRule0Packages =
+            ConcurrentHashMap.newKeySet();
+    private final Set<String> pendingTranslationToggleRule0Packages =
+            ConcurrentHashMap.newKeySet();
+    private final Set<String> refreshedTranslationToggleRule0Packages =
+            ConcurrentHashMap.newKeySet();
+    private final Set<String> providerDeclaredTranslationTogglePackages =
+            ConcurrentHashMap.newKeySet();
+    private final Map<String, Boolean> translationButtonEnabledByPackage =
+            new ConcurrentHashMap<>();
+    private final Map<String, WeakReference<Object>> latestTranslationMediaButtons =
+            new ConcurrentHashMap<>();
+    private final TranslationToggleMediaActionBinder translationToggleActionBinder =
+            new TranslationToggleMediaActionBinder(new TranslationToggleMediaActionBinder.Host() {
+                @Override
+                public Context currentApplicationContext() {
+                    return LockscreenLyricsModule.currentApplicationContext();
+                }
+
+                @Override
+                public String logProcessName() {
+                    return logProcessName;
+                }
+
+                @Override
+                public boolean isLyricInfoTranslationEnabled(String packageName) {
+                    return LockscreenLyricsModule.this.isLyricInfoTranslationEnabled(packageName);
+                }
+
+                @Override
+                public void rememberTranslationIconFingerprint(Drawable drawable) {
+                    LockscreenLyricsModule.this.rememberTranslationIconFingerprint(drawable);
+                }
+
+                @Override
+                public void onTranslationToggleClicked(String packageName) {
+                    LockscreenLyricsModule.this.toggleLyricInfoTranslation(packageName);
+                }
+            });
+    private final Set<String> loadedTranslationPreferencePackages =
+            ConcurrentHashMap.newKeySet();
+    private final Map<String, Boolean> lyricInfoTranslationEnabledByPackage =
+            new ConcurrentHashMap<>();
+    private volatile boolean screenTimeoutReceiverRegistered;
+    private volatile boolean systemUiLyricModeKeepAwakeActive;
+    private volatile boolean lyricUiScrollScaleEnabled = LyricUiConfig.defaults().scaleEnabled;
+    private volatile boolean lyricUiInactiveBlurEnabled = LyricUiConfig.defaults().blurEnabled;
+    private volatile boolean lyricUiLineTimedProgressEnabled =
+            LyricUiSettings.DEFAULT_LINE_TIMED_PROGRESS_ENABLED;
+    private volatile boolean lyricUiTranslationProgressEnabled =
+            LyricUiSettings.DEFAULT_TRANSLATION_PROGRESS_ENABLED;
+    private volatile boolean screenTimeoutSmartEnabled =
+            LyricUiSettings.DEFAULT_SCREEN_TIMEOUT_ENABLED;
+    private volatile int screenTimeoutCustomSeconds =
+            LyricUiSettings.DEFAULT_SCREEN_TIMEOUT_SECONDS;
+    private volatile LyricUiConfig lyricUiConfig = LyricUiConfig.defaults();
+    private volatile LyricContentCleanupConfig lyricContentCleanupConfig =
+            LyricContentCleanupConfig.defaults();
+    private volatile String currentCleanupSnapshotTrackKey = "";
+    private volatile String currentCleanupSnapshotRawLyric = "";
+    private volatile String currentCleanupSnapshotDisplayLyric = "";
+    private volatile String currentCleanupSnapshotTitle = "";
+    private volatile String currentCleanupSnapshotArtist = "";
+    private volatile long lyricUiStyleSettingsLoadedAtElapsedMs = -1L;
+    private boolean bridgeDebugConfigAnnounced;
+    private volatile int lyricModeRebindGeneration;
+    private Runnable lyricModeRebindRunnable;
+    private volatile int translationLayoutGeneration;
+    private boolean secondaryLayoutRefreshPosted;
+    private WordLyricModel secondaryLayoutModel;
+    private int secondaryLayoutFocusIndex = Integer.MIN_VALUE;
+    private boolean secondaryLayoutVocalReady;
+    private int secondaryLayoutOverlapIndex = -1;
+    private boolean secondaryLayoutOverlapVocalReady;
+    private boolean secondaryLayoutPlaybackAdvancing;
+    private boolean secondaryLayoutMotionEnabled;
+    private final Map<View, PendingNativeOverlapHandoff> nativeOverlapHandoffs = new WeakHashMap<>();
+    private volatile long officialLyricDrawSuppressedUntilElapsedMs;
+    private volatile long officialLyricHandoffStartedAtElapsedMs;
+    private volatile int officialLyricHandoffReleaseRetryGeneration = -1;
+    private volatile int officialLyricHandoffGeneration;
+    private volatile int lyricRecyclerForceAlignGeneration;
+    private volatile long lastTransientLyricSurfaceMissLogAt;
+    private volatile boolean lyricModelReplacementInProgress;
+    private final Object brightLyricGeometryCommitLock = new Object();
+    private volatile WordLyricModel pendingBrightLyricGeometryModel;
+    private String pendingBrightLyricGeometryPackage = "";
+    private volatile int brightLyricGeometryCommitGeneration;
+    private volatile boolean pendingCustomLyricTakeoverFade;
+    private volatile boolean lyricUiSettingsReceiverRegistered;
+    private BroadcastReceiver lyricUiSettingsReceiver;
+    private volatile boolean universalBindingsReceiverRegistered;
+    private BroadcastReceiver universalBindingsReceiver;
+    private volatile long lyricTrackRowRebindEligibleUntilElapsedMs;
+    private volatile long lyricRecyclerFadeInUntilElapsedMs;
+    private volatile int lyricRecyclerFadeGeneration;
+    private final Object suppressedLyricsRecyclerAlphasLock = new Object();
+    private final WeakHashMap<View, Float> suppressedLyricsRecyclerAlphas =
+            new WeakHashMap<>();
+    private volatile long lastSystemUiLyricModeLogAt;
+    private volatile long lastSystemUiLyricModeStateLogAt;
+    private volatile long lastScreenTimeoutLogAt;
+    private volatile long lastVisibleOfficialLyricTextViewAt;
+    private volatile boolean screenTimeoutUserActivityPulsePosted;
+    private volatile boolean screenTimeoutUserPresentRecheckPosted;
+    private volatile boolean screenTimeoutUserActivityFailureLogged;
+    private volatile boolean screenTimeoutPausedByScreenOff;
+    private volatile boolean screenTimeoutPausedByUserPresent;
+    private volatile long screenTimeoutLyricEvidenceGraceUntilElapsedMs;
+    private volatile long screenTimeoutKeepAwakeUntilElapsedMs;
+    private volatile boolean aodLowFrameRateLyricMode;
+    private BroadcastReceiver screenTimeoutReceiver;
+    private volatile boolean screenTurnedOffForLockState;
+    private PowerManager.WakeLock screenTimeoutWakeLock;
+    private PowerManager screenTimeoutPowerManager;
+    private KeyguardManager screenTimeoutKeyguardManager;
+    private volatile boolean screenTimeoutKeyguardLockedCached;
+    private volatile long screenTimeoutKeyguardCacheUntilElapsedMs;
+    private volatile int lastLyricsRecyclerIndex = -1;
+    private volatile boolean adaptiveLineTimedRecyclerFollowActive;
+    private volatile int lastAdaptiveLineTimedRecyclerAlignedIndex = -1;
+    private volatile int adaptiveLineTimedLagCandidateIndex = -1;
+    private volatile long adaptiveLineTimedLagObservedAtElapsedMs = -1L;
+    private volatile int lyricRecyclerSettleOfficialIndex = -1;
+    private volatile long lyricRecyclerSettleUntilElapsedMs;
+    private volatile long lyricTrackPositionResetGuardStartedAtElapsedMs = -1L;
+    private volatile long lastOfficialLyricIndexObservedAtElapsedMs = -1L;
+    private volatile long officialRowScaleAnimationSuppressUntilElapsedMs;
+    private volatile boolean lyricsRecyclerHookInstallAttempted;
+    private volatile boolean pluginClassLoaderConstructorHookInstalled;
+    private final Object pluginHookGenerationLock = new Object();
+    private WeakReference<ClassLoader> activePluginClassLoader = new WeakReference<>(null);
+    private final ArrayList<XposedInterface.HookHandle> activePluginHookHandles =
+            new ArrayList<>();
+    private volatile boolean lyricsRecyclerSetCurrentUnavailable;
+    private volatile boolean recyclerAdapterNotifyHookInstalled;
+    private volatile boolean recyclerAdapterNotifyGuardUnavailableLogged;
+    private final Object lyricsRecyclerViewsLock = new Object();
+    private final ArrayList<WeakReference<View>> lyricsRecyclerViews = new ArrayList<>();
+    private final WeakHashMap<View, LyricWakeSurfaceObserver> lyricWakeSurfaceObservers =
+            new WeakHashMap<>();
+    private final Object lyricSurfaceRenderEpochsLock = new Object();
+    private final WeakHashMap<View, Integer> lyricSurfaceRenderEpochs = new WeakHashMap<>();
+    private final WeakHashMap<View, LyricSurfaceReadinessState> lyricSurfaceReadinessStates =
+            new WeakHashMap<>();
+    private final WeakHashMap<View, Integer> lyricSurfacePendingDrawGenerations =
+            new WeakHashMap<>();
+    private final WeakHashMap<View, Integer> lyricSurfaceVisibleSessionGenerations =
+            new WeakHashMap<>();
+    private final Object lyricsRecyclerAdaptersLock = new Object();
+    private final ArrayList<WeakReference<Object>> lyricsRecyclerAdapters = new ArrayList<>();
+    private WeakReference<View> lastPrimedLyricsRecyclerView = new WeakReference<>(null);
+    private int lastPrimedLyricsRecyclerIndex = -1;
+    private final Object activeLyricTextViewsLock = new Object();
+    private final ArrayList<WeakReference<TextView>> activeLyricTextViews = new ArrayList<>();
+    private final ArrayList<TextView> activeLyricRefreshCandidates = new ArrayList<>(8);
+    private final WeakHashMap<TextView, NormalizedTextSnapshot> normalizedLyricTextCache =
+            new WeakHashMap<>();
+    private final WeakHashMap<TextView, CachedDrawFrame> recentOfficialDrawFrames =
+            new WeakHashMap<>();
+    private final Object lyricTextBindEpochsLock = new Object();
+    private final WeakHashMap<TextView, Integer> lyricTextBindEpochs = new WeakHashMap<>();
+    private final WeakHashMap<TextView, Integer> lyricTextBindRetryPostedEpochs =
+            new WeakHashMap<>();
+    private final WeakHashMap<TextView, Integer> lyricTextBindRetryCounts =
+            new WeakHashMap<>();
+    private final WeakHashMap<TextView, BoundLyricFrameStamp> boundLyricFrameStamps =
+            new WeakHashMap<>();
+    private int nextLyricTextBindEpoch;
+    private WeakReference<TextView> activeRendererTextView = new WeakReference<>(null);
+    private final Object activeRendererTargetsLock = new Object();
+    private final WeakHashMap<View, WeakReference<TextView>> activeRendererTargetsByRecycler =
+            new WeakHashMap<>();
+    private WordLine activeRendererWordLine;
+    private final Object lyricRootViewsLock = new Object();
+    private final ArrayList<WeakReference<View>> lyricRootViews = new ArrayList<>();
+    private final Object translationActionViewsLock = new Object();
+    private final WeakHashMap<View, Boolean> translationActionViews = new WeakHashMap<>();
+    private final WeakHashMap<ImageView, Boolean> translationActionPresentationStates =
+            new WeakHashMap<>();
+    private final WeakHashMap<ImageView, Boolean> translationActionPresentationInFlight =
+            new WeakHashMap<>();
+    private volatile boolean translationActionTrackingActive;
+    private final WeakHashMap<Bitmap, Boolean> translationBitmapMatchCache = new WeakHashMap<>();
+    private final WeakHashMap<Drawable, Boolean> translationDrawableMatchCache =
+            new WeakHashMap<>();
+    private final WeakHashMap<View, Long> translationRootLastScanAt = new WeakHashMap<>();
+    private volatile boolean translationActionViewRecoveryPosted;
+    private static final Object VIEW_VISUAL_EFFECT_CACHE_LOCK = new Object();
+    private static final WeakHashMap<Class<?>, WeakReference<Method[]>>
+            VIEW_BLUR_METHOD_CACHE = new WeakHashMap<>();
+    private static final WeakHashMap<View, Boolean> VIEW_BLUR_DISABLED = new WeakHashMap<>();
+    private static final WeakHashMap<View, Integer> VIEW_LYRIC_RENDER_EFFECT_MODE =
+            new WeakHashMap<>();
+    private static final Object RECYCLER_POSITION_METHOD_CACHE_LOCK = new Object();
+    private static final WeakHashMap<Class<?>, WeakReference<Method>>
+            RECYCLER_POSITION_METHOD_CACHE = new WeakHashMap<>();
+    private static final WeakHashMap<Class<?>, Boolean> RECYCLER_POSITION_METHOD_MISSING =
+            new WeakHashMap<>();
+    private static final WeakHashMap<Class<?>, Boolean> LYRICS_RECYCLER_VIEW_CLASS_MATCH_CACHE =
+            new WeakHashMap<>();
+    private static final WeakHashMap<TextView, LyricsRecyclerMatch> LYRICS_RECYCLER_MATCH_CACHE =
+            new WeakHashMap<>();
+    private static final LyricsRecyclerFieldAccessor LYRICS_RECYCLER_FIELD_ACCESSOR =
+            new LyricsRecyclerFieldAccessor();
+    private static final LyricsRecyclerMatch NO_LYRICS_RECYCLER_MATCH =
+            new LyricsRecyclerMatch(null, null);
+    private static final ThreadLocal<Rect> VIEW_VISIBLE_RECT =
+            ThreadLocal.withInitial(Rect::new);
+    private volatile byte[] translationIconAlphaFingerprint;
+    private volatile String activeLyricLine = "";
+    private volatile long activeLyricLineTimeMs = -1L;
+    private volatile boolean activeLyricUpdatePosted;
+
+    private volatile boolean lyricSurfaceReactivationPending;
+    private volatile int lyricSurfaceReactivationGeneration;
+    private final Object lyricSurfaceReactivationCallbacksLock = new Object();
+    private final ArrayList<Runnable> lyricSurfaceReactivationCallbacks =
+            new ArrayList<>(LYRIC_VISIBILITY_RECOVERY_DELAYS_MS.length);
+    private volatile long lyricSurfaceProvisionalDrawUntilElapsedMs;
+    private WeakReference<View> lyricSurfaceProvisionalRecyclerView = new WeakReference<>(null);
+    private View activeLyricRefreshAnchor;
+    private volatile long lastRecyclerAdapterNotifyGuardLogAt;
+    private final ThreadLocal<Boolean> suppressLyricsRecyclerHook = new ThreadLocal<>();
+    private final OfficialLyricTextRenderer officialLyricTextRenderer = new OfficialLyricTextRenderer();
+    private final OfficialLyricFrameResolver officialLyricFrameResolver =
+            new OfficialLyricFrameResolver();
+    private final OfficialLyricFrameResolver.Selection officialFrameSelection =
+            new OfficialLyricFrameResolver.Selection();
+    private final OfficialLyricFrameResolver.Selection lyricTextMatchSelection =
+            new OfficialLyricFrameResolver.Selection();
+    private final BridgePerformanceSampler performanceSampler = new BridgePerformanceSampler();
+    private final NativeLyricModelAssembler nativeLyricModelAssembler =
+            new NativeLyricModelAssembler(new LyricParseTraceSink() {
+                @Override
+                public boolean traceEnabled() {
+                    return isLyricParseTraceEnabled();
+                }
+
+                @Override
+                public void trace(String message) {
+                    traceLyricParse(message);
+                }
+
+                @Override
+                public void onCoreParseFailure(boolean primarySource, Throwable failure) {
+                    error(primarySource
+                            ? "Lyrics Core parsing failed; using official SystemUI lyric renderer"
+                            : "Lyrics Core parsing failed for supplemental lyric; ignoring supplemental translations",
+                            failure);
+                }
+            });
+    private final OfficialLyricDrawCoordinator officialLyricDrawCoordinator =
+            new OfficialLyricDrawCoordinator(new OfficialLyricDrawCoordinator.Host() {
+                @Override
+                public boolean shouldInspectLyricTextViewHooks() {
+                    return LockscreenLyricsModule.this.shouldInspectLyricTextViewHooks();
+                }
+
+                @Override
+                public boolean lyricSurfaceReactivationPending() {
+                    return lyricSurfaceReactivationPending;
+                }
+
+                @Override
+                public long lyricRecyclerFadeInUntilElapsedMs() {
+                    return lyricRecyclerFadeInUntilElapsedMs;
+                }
+
+                @Override
+                public WordLyricModel currentWordLyricModel() {
+                    return currentWordLyricModel;
+                }
+
+                @Override
+                public WordLyricModel pendingBrightLyricGeometryModel() {
+                    return pendingBrightLyricGeometryModel;
+                }
+
+                @Override
+                public boolean lyricModelReplacementInProgress() {
+                    return lyricModelReplacementInProgress;
+                }
+
+                @Override
+                public boolean isAodLowFrameRateLyricMode() {
+                    return LockscreenLyricsModule.this.isAodLowFrameRateLyricMode();
+                }
+
+                @Override
+                public boolean isLyricRecyclerSettleWindowActive() {
+                    return LockscreenLyricsModule.this.isLyricRecyclerSettleWindowActive();
+                }
+
+                @Override
+                public boolean shouldSuppressOfficialLyricForTrackHandoff() {
+                    return LockscreenLyricsModule.this.shouldSuppressOfficialLyricForTrackHandoff();
+                }
+
+                @Override
+                public View findContainingLyricsRecyclerView(TextView textView) {
+                    return LockscreenLyricsModule.this.findContainingLyricsRecyclerView(textView);
+                }
+
+                @Override
+                public boolean activateSystemUiLyricModeFromPendingDraw(
+                        TextView textView, View lyricsRecycler, String reason) {
+                    return LockscreenLyricsModule.this.activateSystemUiLyricModeFromPendingDraw(
+                            textView, lyricsRecycler, reason);
+                }
+
+                @Override
+                public void officialRendererFallback(
+                        String reason, TextView textView, WordLyricModel model, String details) {
+                    maybeLogOfficialRendererFallback(reason, textView, model, details);
+                }
+
+                @Override
+                public void noteVisibleLockscreenLyricTextView(
+                        TextView textView, View lyricsRecycler, long elapsedRealtime) {
+                    LockscreenLyricsModule.this.noteVisibleLockscreenLyricTextView(
+                            textView, lyricsRecycler, elapsedRealtime);
+                }
+
+                @Override
+                public void refreshLyricUiStyleSettingsIfNeeded() {
+                    LockscreenLyricsModule.this.refreshLyricUiStyleSettingsIfNeeded();
+                }
+
+                @Override
+                public void setRendererAodLowFrameRateMode(boolean enabled) {
+                    officialLyricTextRenderer.setAodLowFrameRateMode(enabled);
+                }
+
+                @Override
+                public void setRendererForceOfficialSlotHeight(boolean force) {
+                    officialLyricTextRenderer.setForceOfficialSlotHeight(force);
+                }
+
+                @Override
+                public void drawWithOfficialRenderer(Canvas canvas, TextView textView, DrawFrame frame) {
+                    long rendererStartedAt = performanceSampler.begin();
+                    try {
+                        officialLyricTextRenderer.setTranslationEnabled(
+                                isCurrentPlayerTranslationEnabled());
+                        officialLyricTextRenderer.setPlaybackAdvancing(isSecondaryPlaybackAdvancing());
+                        officialLyricTextRenderer.draw(canvas, textView, frame);
+                    } finally {
+                        performanceSampler.end(
+                                BridgePerformanceSampler.Metric.RENDERER_DRAW,
+                                rendererStartedAt);
+                    }
+                }
+
+                @Override
+                public DrawFrame findOfficialLyricDrawFrame(TextView textView) {
+                    return LockscreenLyricsModule.this.findOfficialLyricDrawFrame(textView);
+                }
+
+                @Override
+                public DrawFrame findRecentOfficialDrawFrame(TextView textView) {
+                    return LockscreenLyricsModule.this.findRecentOfficialDrawFrame(textView);
+                }
+
+                @Override
+                public void rememberRecentOfficialDrawFrame(TextView textView, DrawFrame frame) {
+                    LockscreenLyricsModule.this.rememberRecentOfficialDrawFrame(textView, frame);
+                }
+
+                @Override
+                public void forgetRecentOfficialDrawFrame(TextView textView) {
+                    recentOfficialDrawFrames.remove(textView);
+                }
+
+                @Override
+                public void markBoundLyricFrameReady(TextView textView, DrawFrame frame) {
+                    LockscreenLyricsModule.this.markBoundLyricFrameReady(textView, frame);
+                }
+
+                @Override
+                public void scheduleBoundLyricFrameRetry(TextView textView, WordLyricModel model) {
+                    LockscreenLyricsModule.this.scheduleBoundLyricFrameRetry(textView, model);
+                }
+
+                @Override
+                public String normalizedTextOf(TextView textView) {
+                    return LockscreenLyricsModule.this.normalizedTextOf(textView);
+                }
+
+                @Override
+                public void followAdaptiveNativeLineTimedRecycler(
+                        WordLyricModel model, WordLine line, TextView textView) {
+                    LockscreenLyricsModule.this.followAdaptiveNativeLineTimedRecycler(
+                            model, line, textView);
+                }
+
+                @Override
+                public void logTextViewDraw(DrawFrame frame, TextView textView) {
+                    maybeLogTextViewDraw(frame, textView);
+                }
+
+                @Override
+                public void finishOfficialLyricTrackHandoffAfterStableCustomFrame(TextView textView) {
+                    LockscreenLyricsModule.this
+                            .finishOfficialLyricTrackHandoffAfterStableCustomFrame(textView);
+                }
+
+                @Override
+                public void fadeInLateCustomLyricTakeover(TextView textView) {
+                    LockscreenLyricsModule.this.fadeInLateCustomLyricTakeover(textView);
+                }
+
+                @Override
+                public void onCustomDrawError(TextView textView, WordLyricModel model, Throwable failure) {
+                    error("Failed to custom-draw official lyric TextView"
+                            + " | alignment=" + lyricUiConfig.alignment
+                            + ", view=" + describeViewForLog(textView), failure);
+                }
+            });
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final LyricCleanupRefreshDispatcher lyricCleanupRefreshDispatcher =
+            new LyricCleanupRefreshDispatcher(task -> mainHandler.post(task));
+    private final Object systemUiPlaybackControllerLock = new Object();
+    private PlaybackControllerBinding systemUiPlaybackControllerBinding;
+    private long nextSystemUiPlaybackControllerEpoch;
+    private volatile long lastPlaybackControllerDiscoveryElapsedMs = -1L;
+    private volatile String lastPlaybackControllerDiscoveryPackage = "";
+    private WeakReference<Object> oplusMediaDataManager = new WeakReference<>(null);
+    private volatile Method oplusPlaybackStateRefreshMethod;
+    private final SystemUiRuntimeBootstrap systemUiRuntimeBootstrap =
+            new SystemUiRuntimeBootstrap(
+                    new SystemUiRuntimeBootstrap.Host() {
+                        @Override
+                        public void installAodMediaSupportHooks(ClassLoader classLoader) {
+                            LockscreenLyricsModule.this.installAodMediaSupportHooks(classLoader);
+                        }
+
+                        @Override
+                        public SystemUiDexKitAdapter.Targets resolveSystemUiTargets(
+                                ClassLoader classLoader) {
+                            return LockscreenLyricsModule.this.resolveSystemUiTargets(classLoader);
+                        }
+
+                        @Override
+                        public void installOplusMediaPolicyBypassHooks(
+                                SystemUiDexKitAdapter.Targets targets) {
+                            LockscreenLyricsModule.this.installOplusMediaPolicyBypassHooks(targets);
+                        }
+
+                        @Override
+                        public void installSystemUiWordLyricHooks(
+                                ClassLoader classLoader,
+                                SystemUiDexKitAdapter.Targets targets) {
+                            LockscreenLyricsModule.this.installSystemUiWordLyricHooks(
+                                    classLoader,
+                                    targets);
+                        }
+
+                        @Override
+                        public void installSystemUiTranslationToggleActionHook(
+                                SystemUiDexKitAdapter.Targets targets) {
+                            LockscreenLyricsModule.this.installSystemUiTranslationToggleActionHook(
+                                    targets);
+                        }
+
+                        @Override
+                        public Context currentApplicationContext() {
+                            return LockscreenLyricsModule.this.currentApplicationContext();
+                        }
+
+                        @Override
+                        public void ensureLyricUiSettingsReceiver(Context context) {
+                            LockscreenLyricsModule.this.ensureLyricUiSettingsReceiver(context);
+                        }
+
+                        @Override
+                        public void loadLyricUiStyleSettings(Context context, boolean force) {
+                            LockscreenLyricsModule.this.loadLyricUiStyleSettings(context, force);
+                        }
+
+                        @Override
+                        public void post(Runnable runnable) {
+                            mainHandler.post(runnable);
+                        }
+
+                        @Override
+                        public void postDelayed(Runnable runnable, long delayMillis) {
+                            mainHandler.postDelayed(runnable, delayMillis);
+                        }
+
+                        @Override
+                        public void infoAlways(BridgeDebugArea area, String event, String message) {
+                            LockscreenLyricsModule.this.infoAlways(area, event, message);
+                        }
+                    },
+                    LYRIC_RENDER_PIPELINE_REVISION,
+                    OFFICIAL_DRAW_FRAME_REUSE_ENABLED,
+                    WordLyricRenderConstants.OFFICIAL_SLOT_ALIAS_REUSE_ENABLED);
+    private final LyricAnimationFrameScheduler lyricFrameScheduler =
+            new LyricAnimationFrameScheduler(() -> this.lyricUiConfig.maxRefreshRateHz);
+
+    private static void requestLyricAnimationFrame(View view) {
+        LockscreenLyricsModule module = zhiInstance;
+        if (module != null) module.lyricFrameScheduler.invalidate(view);
+        else if (view != null) view.postInvalidateOnAnimation();
+    }
+
+    private final Runnable activeLyricRefreshRunnable = () -> {
+        activeLyricUpdatePosted = false;
+        activeLyricRefreshAnchor = null;
+        refreshActiveLyricTextView();
+    };
+    private final Runnable screenTimeoutUserActivityPulse = new Runnable() {
+        @Override
+        public void run() {
+            screenTimeoutUserActivityPulsePosted = false;
+            Context context = currentApplicationContext();
+            if (!hasScreenTimeoutWakeLockBaseConditions(context)) {
+                resetScreenTimeoutKeepAwakeWindow();
+                releaseScreenTimeoutWakeLock("conditions changed");
+                return;
+            }
+            if (!isScreenTimeoutKeepAwakeWindowActive()) {
+                releaseScreenTimeoutWakeLock("custom timeout elapsed");
+                maybeLogScreenTimeout("Stopped screen timeout keep-awake after custom timeout", true);
+                return;
+            }
+            PowerManager powerManager = screenTimeoutPowerManager;
+            if (powerManager != null) {
+                renewScreenTimeoutWakeLockLease(powerManager);
+                pulseScreenTimeoutUserActivity(powerManager, false);
+            }
+            scheduleScreenTimeoutUserActivityPulse();
+        }
+    };
+
+    @Override
+    public void onModuleLoaded(ModuleLoadedParam param) {
+        zhiInstance = this;
+        String processName = param.getProcessName();
+        if (param.isSystemServer()) {
+            logProcessName = "system_server";
+            configureBridgeDiagnostics(BridgeDebugConfig.disabled());
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SYSTEMUI_BOOTSTRAP, "Loaded in system_server, API " + getApiVersion());
+            return;
+        }
+        logProcessName = nullToEmpty(processName);
+        configureBridgeDiagnostics(BridgeDebugConfig.disabled());
+        if (processName == null || !isSupportedProcess(processName)) {
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SYSTEMUI_BOOTSTRAP, "Skip process " + processName);
+            detach();
+            return;
+        }
+        infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SYSTEMUI_BOOTSTRAP, "Loaded in " + processName + ", API " + getApiVersion());
+    }
+
+    @Override
+    public void onSystemServerStarting(SystemServerStartingParam param) {
+        try {Class<?> at=Class.forName("android.app.ActivityThread");Object thread=at.getMethod("currentActivityThread").invoke(null);Method get=at.getDeclaredMethod("getSystemContext");get.setAccessible(true);ZhiBridgeRuntime.attach((Context)get.invoke(thread));}catch(Throwable ignored){}
+        installOplusHistoryWhitelistHook(param.getClassLoader());
+        installOplusMediaBlacklistBypassHook(param.getClassLoader());
+    }
+
+    @Override
+    public void onPackageReady(PackageReadyParam param) {
+        String packageName = param.getPackageName();
+        if (SYSTEMUI_PACKAGE.equals(packageName)) {
+            systemUiRuntimeBootstrap.initialize(param.getClassLoader());
+        }
+    }
+
+    public void refreshFromZhiRuntime(boolean enabled) {
+        Context context=currentApplicationContext();
+        if(context!=null) {
+            loadLyricUiStyleSettings(context,true);
+            lyricInfoTranslationEnabledByPackage.clear();
+            loadedTranslationPreferencePackages.clear();
+            translationButtonEnabledByPackage.clear();
+            ensureTranslationPreferenceLoaded(currentTranslationPreferencePackage());
+            reapplyCurrentTranslationButtonSetting();
+        }
+        if(!enabled || !ZhiBridgeRuntime.active()) {
+            currentWordLyricModel=null;
+            clearCurrentLyricProvider();
+            resetOfficialRowScaleState();
+            restoreSuppressedLyricsRecyclerViews(false);
+            restoreOriginalPkgActionsRules();
+
+        } else {
+            if ((ZhiBridgeRuntime.hasPendingLyricHandoff() && !ZhiBridgeRuntime.hasCurrentPayload())
+                    || (currentWordLyricModel != null
+                    && !ZhiBridgeRuntime.isCurrentPlayerPackage(currentLyricProviderPackage))) {
+                clearPendingLyricRenderState();
+            }
+            scheduleActiveLyricRefresh(ACTIVE_LYRIC_FRAME_DELAY_MS);
+        }
+        // Runtime source changes are published to live MediaController callbacks. Replaying
+        // latestSystemUiLyricLoadContext here can be null on first enable or belong to an old song.
+        invalidateRememberedLyricViews();
+    }
+
+    private SystemUiDexKitAdapter.Targets resolveSystemUiTargets(ClassLoader classLoader) {
+        SystemUiDexKitAdapter.Targets cached = systemUiDexKitTargets;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (this) {
+            cached = systemUiDexKitTargets;
+            if (cached != null) {
+                return cached;
+            }
+            try {
+                cached = SystemUiDexKitAdapter.resolve(classLoader);
+                systemUiDexKitTargets = cached;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SYSTEMUI_BOOTSTRAP, "Resolved SystemUI private hooks via DexKit (rusVariant=" + cached.rusVariant
+                        + ", whitelistGetter=" + whitelistGetterLabel(cached) + ")");
+                return cached;
+            } catch (Throwable dexKitFailure) {
+                error("Failed to resolve SystemUI private hooks via DexKit; trying legacy names",
+                        dexKitFailure);
+            }
+            try {
+                cached = SystemUiDexKitAdapter.resolveLegacy(classLoader);
+                systemUiDexKitTargets = cached;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SYSTEMUI_BOOTSTRAP, "Resolved SystemUI private hooks via legacy-name fallback (rusVariant="
+                        + cached.rusVariant + ", whitelistGetter=" + whitelistGetterLabel(cached)
+                        + ")");
+                return cached;
+            } catch (Throwable fallbackFailure) {
+                error("Failed to resolve SystemUI private hook targets", fallbackFailure);
+                return null;
+            }
+        }
+    }
+
+    private static String whitelistGetterLabel(SystemUiDexKitAdapter.Targets targets) {
+        if (targets.getRusWhiteList != null) {
+            return "getRusWhiteList";
+        }
+        if (targets.mediaRusConfigWhiteListGetter != null) {
+            return "MediaRusConfig.getWhiteList";
+        }
+        return "none";
+    }
+
+    private static boolean isSupportedProcess(String processName) {
+        return LockscreenIntegrationPolicy.isSupportedSystemUiProcess(processName);
+    }
+
+    private static boolean isModuleManagedPlayerPackage(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return false;
+        }
+        return ZhiBridgeRuntime.enabledFor(packageName) && PlayerSystemUiPolicy.isHistoryPackage(packageName);
+    }
+
+    private static String moduleManagedPlayerKind(String packageName) {
+        return isModuleManagedPlayerPackage(packageName) ? "player" : "manifest";
+    }
+
+    @SuppressLint("PrivateApi") // LSPosed hook resolves the vendor SystemUI service by name.
+    private void installOplusHistoryWhitelistHook(ClassLoader classLoader) {
+        if (oplusHistoryWhitelistHookInstalled) {
+            return;
+        }
+        synchronized (this) {
+            if (oplusHistoryWhitelistHookInstalled) {
+                return;
+            }
+            try {
+                Class<?> serviceClass = classLoader.loadClass(
+                        OPLUS_MEDIA_CONTROL_SERVICE_CLASS);
+                Method whitelistMethod = serviceClass.getDeclaredMethod(
+                        OPLUS_HISTORY_WHITELIST_METHOD,
+                        String.class);
+                whitelistMethod.setAccessible(true);
+                hook(whitelistMethod)
+                        .setId(HOOK_ID_OPLUS_HISTORY_WHITELIST)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(this::onOplusHistoryWhitelistLookup, "onOplusHistoryWhitelistLookup"));
+                oplusHistoryWhitelistHookInstalled = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus media history integration");
+            } catch (ClassNotFoundException | NoSuchMethodException e) {
+                info(BridgeDebugArea.BOOTSTRAP, BridgeEvents.DETAIL, "OPlus media history whitelist hook is unavailable on this system");
+            } catch (Throwable t) {
+                error("Failed to hook OPlus media history whitelist", t);
+            }
+        }
+    }
+
+    private Object onOplusHistoryWhitelistLookup(
+            XposedInterface.Chain chain) throws Throwable {
+        Object originalResult = chain.proceed();
+        boolean alreadyWhitelisted = Boolean.TRUE.equals(originalResult);
+        if (alreadyWhitelisted) {
+            return originalResult;
+        }
+        Object packageNameArg = chain.getArg(0);
+        if (!(packageNameArg instanceof String)
+                || TextUtils.isEmpty((String) packageNameArg)) {
+            return originalResult;
+        }
+
+        String packageName = (String) packageNameArg;
+        boolean moduleManagedPackage = isModuleManagedPlayerPackage(packageName);
+        boolean manifestOptIn = !moduleManagedPackage
+                && isOplusHistoryIntegrationDeclared(
+                        chain.getThisObject(),
+                        packageName);
+        if (!LockscreenIntegrationPolicy.shouldEnableOplusHistoryIntegration(
+                false,
+                moduleManagedPackage,
+                manifestOptIn)) {
+            return originalResult;
+        }
+        if (loggedOplusHistoryIntegrationPackages.add(packageName)) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Accepted " + packageName + " into OPlus media history"
+                    + (moduleManagedPackage
+                    ? " via " + moduleManagedPlayerKind(packageName) + " integration"
+                    : " via manifest opt-in"));
+        }
+        return true;
+    }
+
+    @SuppressLint("PrivateApi") // LSPosed hook resolves the OPlus media control service by name.
+    private void installOplusMediaBlacklistBypassHook(ClassLoader classLoader) {
+        if (oplusMediaBlacklistHookInstalled) {
+            return;
+        }
+        synchronized (this) {
+            if (oplusMediaBlacklistHookInstalled) {
+                return;
+            }
+            try {
+                Class<?> serviceClass = classLoader.loadClass(
+                        OPLUS_MEDIA_CONTROL_SERVICE_CLASS);
+                Method blacklistMethod = serviceClass.getDeclaredMethod(
+                        OPLUS_MEDIA_BLACKLIST_METHOD,
+                        String.class);
+                blacklistMethod.setAccessible(true);
+                hook(blacklistMethod)
+                        .setId(HOOK_ID_OPLUS_MEDIA_BLACKLIST)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaBlackListLookup, "onOplusMediaBlackListLookup"));
+                oplusMediaBlacklistHookInstalled = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus media blacklist bypass");
+            } catch (ClassNotFoundException | NoSuchMethodException e) {
+                info(BridgeDebugArea.BOOTSTRAP, BridgeEvents.DETAIL, "OPlus media blacklist bypass hook is unavailable on this system");
+            } catch (Throwable t) {
+                error("Failed to hook OPlus media blacklist bypass", t);
+            }
+        }
+    }
+
+    private Object onOplusMediaBlackListLookup(
+            XposedInterface.Chain chain) throws Throwable {
+        Object originalResult = chain.proceed();
+        boolean blacklisted = Boolean.TRUE.equals(originalResult);
+        if (!blacklisted) {
+            return originalResult;
+        }
+        Object packageNameArg = chain.getArg(0);
+        if (!(packageNameArg instanceof String)
+                || TextUtils.isEmpty((String) packageNameArg)) {
+            return originalResult;
+        }
+
+        String packageName = (String) packageNameArg;
+        boolean moduleManagedPackage = isModuleManagedPlayerPackage(packageName);
+        boolean manifestOptIn = !moduleManagedPackage
+                && isOplusHistoryIntegrationDeclared(
+                        chain.getThisObject(),
+                        packageName);
+        if (!LockscreenIntegrationPolicy.shouldEnableOplusHistoryIntegration(
+                false,
+                moduleManagedPackage,
+                manifestOptIn)) {
+            return originalResult;
+        }
+        if (loggedOplusBlacklistBypassPackages.add(packageName)) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Bypassed OPlus media blacklist for " + packageName
+                    + (moduleManagedPackage
+                    ? " via " + moduleManagedPlayerKind(packageName) + " integration"
+                    : " via manifest opt-in"));
+        }
+        return false;
+    }
+
+    private boolean isOplusHistoryIntegrationDeclared(
+            Object service,
+            String packageName) {
+        Object contextValue = readFieldValue(service, "mContext");
+        if (!(contextValue instanceof Context)) {
+            return false;
+        }
+
+        Context context = (Context) contextValue;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            ApplicationInfo applicationInfo = context.getPackageManager()
+                    .getApplicationInfo(packageName, PackageManager.GET_META_DATA);
+            Bundle metadata = applicationInfo.metaData;
+            return metadata != null
+                    && metadata.getBoolean(
+                            LyricInfoContract.MANIFEST_METADATA_OPLUS_MEDIA_HISTORY,
+                            false);
+        } catch (PackageManager.NameNotFoundException ignored) {
+            return false;
+        } catch (Throwable t) {
+            if (loggedOplusHistoryManifestFailures.add(packageName)) {
+                error("Failed to read OPlus media history opt-in for " + packageName, t);
+            }
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    private void installAodMediaSupportHooks(ClassLoader classLoader) {
+        if (aodMediaSupportHookInstalled) {
+            return;
+        }
+        synchronized (this) {
+            if (aodMediaSupportHookInstalled) {
+                return;
+            }
+            try {
+                Class<?> companionClass = classLoader.loadClass(
+                        "com.oplusos.systemui.aod.mediapanel.AodMediaDataListener$Companion");
+                int hooked = 0;
+                hooked += hookAodMediaSupportMethod(companionClass, "isAodMediaSupport");
+                hooked += hookAodMediaSupportMethod(
+                        companionClass,
+                        "isAodMediaSupportWithoutFeature");
+                if (hooked > 0) {
+                    aodMediaSupportHookInstalled = true;
+                    infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus AOD media support whitelist, methods=" + hooked);
+                }
+            } catch (ClassNotFoundException e) {
+                info(BridgeDebugArea.AOD, BridgeEvents.AOD_TRANSITION, "OPlus AOD media support whitelist hook is unavailable on this system");
+            } catch (Throwable t) {
+                error("Failed to hook OPlus AOD media support whitelist", t);
+            }
+        }
+    }
+
+    private int hookAodMediaSupportMethod(Class<?> companionClass, String methodName)
+            throws NoSuchMethodException {
+        Method method = companionClass.getDeclaredMethod(methodName, String.class);
+        method.setAccessible(true);
+        hook(method)
+                .setId(HOOK_ID_AOD_MEDIA_SUPPORT + "-" + methodName)
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(ZhiBridgeRuntime.guard(this::onAodMediaSupportLookup, "onAodMediaSupportLookup"));
+        return 1;
+    }
+
+    private Object onAodMediaSupportLookup(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        if (Boolean.TRUE.equals(result)) {
+            return result;
+        }
+        Object packageNameArg = chain.getArg(0);
+        if (!(packageNameArg instanceof String)
+                || TextUtils.isEmpty((String) packageNameArg)) {
+            return result;
+        }
+
+        String packageName = (String) packageNameArg;
+        if (!isModuleManagedPlayerPackage(packageName)) {
+            return result;
+        }
+        if (loggedAodMediaSupportPackages.add(packageName)) {
+            info(BridgeDebugArea.AOD, BridgeEvents.AOD_TRANSITION, "Accepted " + packageName + " into OPlus AOD media panel whitelist"
+                    + " via " + moduleManagedPlayerKind(packageName) + " integration");
+        }
+        return true;
+    }
+
+    private boolean isCurrentLyricProviderPackage(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return false;
+        }
+        if (!TextUtils.isEmpty(currentLyricProviderPackage)) {
+            return packageName.equals(currentLyricProviderPackage);
+        }
+        return isModuleManagedPlayerPackage(packageName);
+    }
+
+    private void installOplusMediaPolicyBypassHooks(SystemUiDexKitAdapter.Targets targets) {
+        if (oplusMediaPolicyHooksInstalled) {
+            return;
+        }
+        synchronized (this) {
+            if (oplusMediaPolicyHooksInstalled) {
+                return;
+            }
+            try {
+                Method getRusWhiteList = targets.getRusWhiteList;
+                if (getRusWhiteList != null) {
+                    getRusWhiteList.setAccessible(true);
+                    hook(getRusWhiteList)
+                            .setId(HOOK_ID_RUS_GET_WHITE_LIST)
+                            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                            .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaRusGetWhiteList, "onOplusMediaRusGetWhiteList"));
+                } else {
+                    Method mediaRusConfigWhiteListGetter = targets.mediaRusConfigWhiteListGetter;
+                    if (mediaRusConfigWhiteListGetter != null) {
+                        mediaRusConfigWhiteListGetter.setAccessible(true);
+                        hook(mediaRusConfigWhiteListGetter)
+                                .setId(HOOK_ID_RUS_GET_WHITE_LIST)
+                                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                                .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaRusGetWhiteList, "onOplusMediaRusGetWhiteList"));
+                    } else {
+                        warn(
+                                LyricLogFormatter.Area.SYSTEM_UI,
+                                "bypass",
+                                "Skipped OPlus media whitelist bypass: no whitelist getter "
+                                        + "available on this build");
+                    }
+                }
+
+                Method getLyricEntrance = targets.getLyricEntrance;
+                getLyricEntrance.setAccessible(true);
+                hook(getLyricEntrance)
+                        .setId(HOOK_ID_GET_LYRIC_ENTRANCE)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaGetLyricEntrance, "onOplusMediaGetLyricEntrance"));
+
+                Method updatePkgActionsRule = targets.updatePkgActionsRule;
+                updatePkgActionsRule.setAccessible(true);
+                hook(updatePkgActionsRule)
+                        .setId(HOOK_ID_UPDATE_PKG_ACTIONS_RULE)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaUpdatePkgActionsRule, "onOplusMediaUpdatePkgActionsRule"));
+                oplusUpdatePkgActionsRuleMethod = updatePkgActionsRule;
+
+                oplusMediaPolicyHooksInstalled = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus media policy bypass");
+            } catch (Throwable t) {
+                error("Failed to hook OPlus media policy bypass", t);
+            }
+        }
+    }
+
+    private Object onOplusMediaRusGetWhiteList(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        if (result instanceof OplusMediaWhitelistBypassList) {
+            return result;
+        }
+        if (result instanceof List) {
+            return new OplusMediaWhitelistBypassList((List<?>) result);
+        }
+        return result;
+    }
+
+    private Object onOplusMediaGetLyricEntrance(XposedInterface.Chain chain) throws Throwable {
+        Object packageNameArg = chain.getArg(0);
+        String packageName = packageNameArg instanceof String ? (String) packageNameArg : "";
+        Object result = chain.proceed();
+        int original = result instanceof Number ? ((Number) result).intValue() : 0;
+        int overrideResult = 0;
+        if (original != 0) {
+            return result;
+        }
+        if (isModuleManagedPlayerPackage(packageName)) {
+            overrideResult = OPLUS_LYRIC_ENTRANCE_ALL;
+            if (!oplusLyricEntranceOverrideLogged) {
+                oplusLyricEntranceOverrideLogged = true;
+                info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "OPlus lyric entrance normalized: package=" + packageName
+                        + ", " + original + "->" + overrideResult);
+            }
+        }
+        return overrideResult;
+    }
+
+    private Object onOplusMediaUpdatePkgActionsRule(XposedInterface.Chain chain) throws Throwable {
+        oplusMediaActionPrioritySelector = chain.getThisObject();
+        List<Object> args = chain.getArgs();
+        if (args.isEmpty() || !(args.get(0) instanceof Map)) {
+            return chain.proceed();
+        }
+
+        Object[] rawArgs = args.toArray(new Object[0]);
+        rawOplusPkgActionsRuleArgs = TranslationActionRulePolicy.snapshotRawArgs(rawArgs);
+
+        Context lockContext = currentApplicationContext();
+        boolean keyguardLocked = isDeviceKeyguardLocked(lockContext);
+        if (!keyguardLocked) {
+            lastOplusPkgActionsRuleArgs = rawArgs.clone();
+            return chain.proceed();
+        }
+
+        ArrayList<String> knownTranslationPackages =
+                new ArrayList<>(translationToggleRule0Packages);
+        Object[] patchedArgs = TranslationActionRulePolicy.patch(
+                rawArgs, knownTranslationPackages);
+        lastOplusPkgActionsRuleArgs = patchedArgs.clone();
+        Object result = chain.proceed(patchedArgs);
+        markTranslationToggleRule0PackagesRefreshed(knownTranslationPackages);
+        return result;
+    }
+
+    private void installSystemUiTranslationToggleActionHook(
+            SystemUiDexKitAdapter.Targets targets) {
+        installSystemUiMainTranslationActionsHook(targets);
+        if (translationToggleActionHookInstalled) {
+            return;
+        }
+        synchronized (this) {
+            if (translationToggleActionHookInstalled) {
+                return;
+            }
+            try {
+                ensureTranslationPreferenceLoaded();
+                Method createActionsFromState = targets.createActionsFromState;
+                createActionsFromState.setAccessible(true);
+                hook(createActionsFromState)
+                        .setId(HOOK_ID_TRANSLATION_TOGGLE_ACTION)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaCreateActionsFromState, "onOplusMediaCreateActionsFromState"));
+                translationToggleActionHookInstalled = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus media translation toggle action");
+            } catch (Throwable t) {
+                error("Failed to hook OPlus media translation toggle action", t);
+            }
+        }
+    }
+
+    private void installSystemUiMainTranslationActionsHook(
+            SystemUiDexKitAdapter.Targets targets) {
+        if (translationMainActionsHookInstalled) return;
+        synchronized (this) {
+            if (translationMainActionsHookInstalled) return;
+            try {
+                ClassLoader loader = targets.createActionsFromState.getDeclaringClass().getClassLoader();
+                Class<?> binderClass = Class.forName(
+                        "com.oplus.systemui.media.controls.ui.MediaActionBinderKt", false, loader);
+                Method createMainActions = null;
+                for (Method method : binderClass.getDeclaredMethods()) {
+                    Class<?>[] parameters = method.getParameterTypes();
+                    if ("createOplusMediaActions".equals(method.getName())
+                            && java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                            && parameters.length == 5
+                            && parameters[0] == Context.class
+                            && "MediaData".equals(parameters[1].getSimpleName())
+                            && parameters[2] == boolean.class
+                            && "ActivityStarter".equals(parameters[3].getSimpleName())
+                            && "MediaOutputDialogManager".equals(parameters[4].getSimpleName())) {
+                        createMainActions = method;
+                        break;
+                    }
+                }
+                if (createMainActions == null) {
+                    throw new NoSuchMethodException("createOplusMediaActions(Context,MediaData,boolean,"
+                            + "ActivityStarter,MediaOutputDialogManager)");
+                }
+                createMainActions.setAccessible(true);
+                hook(createMainActions)
+                        .setId(HOOK_ID_TRANSLATION_MAIN_ACTIONS)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(
+                                this::onOplusMainMediaActions, "onOplusMainMediaActions"));
+                translationMainActionsHookInstalled = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED,
+                        "Hooked OPlus main media translation action");
+            } catch (Throwable error) {
+                StructuredBridgeLog.warn(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_FAILED,
+                        "OPlus main media translation action hook unavailable"
+                                + " | error=" + error.getClass().getName()
+                                + ", message=" + nullToEmpty(error.getMessage()));
+            }
+        }
+    }
+
+    private Object onOplusMainMediaActions(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        try {
+            Object mediaData = chain.getArg(1);
+            Object packageValue = invokeNoArgByName(mediaData, "getPackageName");
+            String packageName = packageValue instanceof String ? (String) packageValue : "";
+            Object semanticButton = invokeNoArgByName(mediaData, "getSemanticActions");
+            boolean eligible = isDeviceKeyguardLocked(currentApplicationContext())
+                    && userWantsTranslationButton(packageName)
+                    && isCurrentLyricProviderPackage(packageName)
+                    && currentTranslationCountForAction() > 0;
+            StructuredBridgeLog.debug(BridgeDebugArea.PLAYER_SPECIAL, "MAIN_ACTIONS_INPUT",
+                    () -> "Main-card actions, package=" + packageName
+                            + ", eligible=" + eligible
+                            + ", priority=" + invokeNoArgByName(
+                            invokeNoArgByName(mediaData, "getMediaDataEx"), "getMediaActionPriority")
+                            + ", action0=" + invokeNoArgByName(result, "getAction0"));
+            return translationToggleActionBinder.applyToMainActions(
+                    packageName, semanticButton, result, eligible);
+        } catch (Throwable error) {
+            warn(LyricLogFormatter.Area.SYSTEM_UI, "main-translation-action-failed",
+                    "Could not configure main media translation action"
+                            + " | error=" + error.getClass().getName()
+                            + ", message=" + nullToEmpty(error.getMessage()));
+            return result;
+        }
+    }
+
+    private Object onOplusMediaCreateActionsFromState(XposedInterface.Chain chain) throws Throwable {
+        Object packageNameArg = chain.getArg(0);
+        Object controllerArg = chain.getArg(2);
+        String packageName = packageNameArg instanceof String ? (String) packageNameArg : "";
+        Context lockContext = currentApplicationContext();
+        boolean keyguardLocked = isDeviceKeyguardLocked(lockContext);
+        boolean isCurrentProvider = isCurrentLyricProviderPackage(packageName);
+        boolean hasTranslationAction = keyguardLocked
+                && isCurrentProvider
+                && !TextUtils.isEmpty(packageName)
+                && controllerHasTranslationAction(controllerArg);
+        boolean canOverrideWithTranslation = keyguardLocked
+                && isCurrentProvider
+                && PlayerTranslationTogglePolicy.canOverrideFavoriteActionWithTranslation(
+                        packageName,
+                        providerDeclaredTranslationTogglePackages);
+        translationButtonDebug("createActionsFromState package=" + nullToEmpty(packageName)
+                + ", keyguardLocked=" + keyguardLocked
+                + ", hasPublicAction=" + hasTranslationAction
+                + ", canOverride=" + canOverrideWithTranslation
+                + ", controller=" + (controllerArg == null
+                ? "null"
+                : controllerArg.getClass().getName()));
+        if (hasTranslationAction || canOverrideWithTranslation) {
+            if (PlayerSystemUiPolicy.preservesNativeActionRow(packageName)) {
+                dropTranslationToggleRule0(packageName);
+                translationButtonDebug("Rule0 ensure skipped: player keeps its native action row"
+                        + ", package=" + nullToEmpty(packageName));
+            } else {
+                ensureTranslationToggleRule0(packageName);
+            }
+        } else {
+            dropTranslationToggleRule0(packageName);
+        }
+
+        Object result = chain.proceed();
+        try {
+            if (!TextUtils.isEmpty(packageName)) {
+                rememberMediaControllerPlaybackState(
+                        packageName,
+                        controllerArg);
+                if (result != null) {
+                    latestTranslationMediaButtons.put(
+                            packageName,
+                            new WeakReference<>(result));
+                    translationButtonDebug("createActionsFromState result for "
+                            + packageName
+                            + ", class=" + result.getClass().getName());
+                    boolean userWantsButton = keyguardLocked && userWantsTranslationButton(packageName);
+                    int translationCount = currentTranslationCountForAction();
+                    translationToggleActionBinder.applyTranslationToggle(
+                            packageName, result,
+                            userWantsButton && PlayerTranslationTogglePolicy
+                                    .shouldReplaceFavoriteActionWithTranslation(canOverrideWithTranslation,
+                                            isCurrentLyricProviderPackage(packageName), translationCount, null),
+                            userWantsButton, currentLyricProviderPackage, translationCount, -1);
+                } else {
+                    translationButtonDebug("createActionsFromState result null for "
+                            + packageName);
+                }
+            }
+        } catch (Throwable t) {
+            error("Failed to configure lyric translation toggle action", t);
+        }
+        return result;
+    }
+
+    private static boolean controllerHasTranslationAction(Object controllerObject) {
+        if (!(controllerObject instanceof MediaController)) {
+            return false;
+        }
+        PlaybackState state = ((MediaController) controllerObject).getPlaybackState();
+        return hasCustomAction(state, TRANSLATION_TOGGLE_ACTION);
+    }
+
+    private void ensureTranslationToggleRule0(String packageName) {
+        if (TextUtils.isEmpty(packageName)
+                ) {
+            translationButtonDebug("skip Rule0 ensure, package=" + nullToEmpty(packageName)
+                    + ", reason=empty");
+            return;
+        }
+        boolean added = translationToggleRule0Packages.add(packageName);
+        if (!refreshedTranslationToggleRule0Packages.contains(packageName)) {
+            pendingTranslationToggleRule0Packages.add(packageName);
+        }
+        translationButtonDebug("ensure Rule0 package=" + packageName
+                + ", added=" + added
+                + ", pending=" + pendingTranslationToggleRule0Packages.contains(packageName)
+                + ", refreshed=" + refreshedTranslationToggleRule0Packages.contains(packageName));
+        refreshPendingTranslationToggleRule0Packages();
+    }
+
+    /**
+     * Keeps a native-action-row player out of the forced Rule0 refresh so the cached, already
+     * patched argument map cannot re-apply Rule0 to it on the next {@code updatePkgActionsRule}.
+     */
+    private void restoreOriginalPkgActionsRules() {
+        Object selector = oplusMediaActionPrioritySelector;
+        Method updateMethod = oplusUpdatePkgActionsRuleMethod;
+        Object[] rawSnapshot = rawOplusPkgActionsRuleArgs;
+        if (selector == null || updateMethod == null || rawSnapshot == null) {
+            return;
+        }
+        try {
+            synchronized (selector) {
+                Object[] cleanArgs = TranslationActionRulePolicy.snapshotRawArgs(rawSnapshot);
+                updateMethod.invoke(selector, cleanArgs);
+                lastOplusPkgActionsRuleArgs = cleanArgs.clone();
+            }
+            translationButtonDebug("Restored native OPlus action rules from clean snapshot");
+        } catch (Throwable t) {
+            error("Failed to restore native OPlus action rules from snapshot", t);
+        }
+    }
+
+    private void dropTranslationToggleRule0(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return;
+        }
+        translationToggleRule0Packages.remove(packageName);
+        pendingTranslationToggleRule0Packages.remove(packageName);
+        refreshedTranslationToggleRule0Packages.remove(packageName);
+    }
+
+    private void refreshPendingTranslationToggleRule0Packages() {
+        ArrayList<String> pendingPackages = new ArrayList<>();
+        for (String packageName : pendingTranslationToggleRule0Packages) {
+            if (refreshedTranslationToggleRule0Packages.contains(packageName)) {
+                pendingTranslationToggleRule0Packages.remove(packageName);
+            } else {
+                pendingPackages.add(packageName);
+            }
+        }
+        if (pendingPackages.isEmpty()) {
+            translationButtonDebug("refresh Rule0 skipped: no pending packages");
+            return;
+        }
+
+        Object selector = oplusMediaActionPrioritySelector;
+        Method updateMethod = oplusUpdatePkgActionsRuleMethod;
+        Object[] baseArgs = rawOplusPkgActionsRuleArgs != null ? rawOplusPkgActionsRuleArgs : lastOplusPkgActionsRuleArgs;
+        if (selector == null
+                || updateMethod == null
+                || baseArgs == null) {
+            translationButtonDebug("refresh Rule0 waiting, pending=" + pendingPackages
+                    + ", selector=" + (selector != null)
+                    + ", updateMethod=" + (updateMethod != null)
+                    + ", baseArgs=" + (baseArgs != null));
+            return;
+        }
+
+        try {
+            ArrayList<String> knownTranslationPackages = new ArrayList<>();
+            synchronized (selector) {
+                Object[] refreshArgs = TranslationActionRulePolicy.snapshotRawArgs(baseArgs);
+                if (!(refreshArgs[0] instanceof Map)) {
+                    return;
+                }
+                for (String packageName : translationToggleRule0Packages) {
+                    if (!PlayerSystemUiPolicy.preservesNativeActionRow(packageName)) {
+                        knownTranslationPackages.add(packageName);
+                    }
+                }
+                refreshArgs = TranslationActionRulePolicy.patch(
+                        refreshArgs, knownTranslationPackages);
+                updateMethod.invoke(selector, refreshArgs);
+                lastOplusPkgActionsRuleArgs = refreshArgs.clone();
+            }
+            markTranslationToggleRule0PackagesRefreshed(knownTranslationPackages);
+            info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL, "Enabled OPlus Rule0 through updatePkgActionsRule for translation providers "
+                    + pendingPackages);
+        } catch (Throwable t) {
+            error("Failed to enable OPlus Rule0 through updatePkgActionsRule for "
+                    + pendingPackages, t);
+        }
+    }
+
+    private void markTranslationToggleRule0PackagesRefreshed(List<String> packageNames) {
+        for (String packageName : packageNames) {
+            if (TextUtils.isEmpty(packageName)) {
+                continue;
+            }
+            refreshedTranslationToggleRule0Packages.add(packageName);
+            pendingTranslationToggleRule0Packages.remove(packageName);
+        }
+    }
+
+    private void toggleLyricInfoTranslation(String packageName) {
+        setLyricInfoTranslationEnabled(packageName, !isLyricInfoTranslationEnabled(packageName));
+    }
+
+    private boolean isLyricInfoTranslationEnabled() {
+        return isLyricInfoTranslationEnabled(currentTranslationPreferencePackage());
+    }
+
+    private boolean isCurrentPlayerTranslationEnabled() {
+        return isLyricInfoTranslationEnabled(currentTranslationPreferencePackage());
+    }
+
+    private boolean isLyricInfoTranslationEnabled(String packageName) {
+        String preferencePackage = normalizeTranslationPreferencePackage(packageName);
+        ensureTranslationPreferenceLoaded(preferencePackage);
+        return isLyricInfoTranslationEnabledFromCache(preferencePackage);
+    }
+
+    private void ensureTranslationPreferenceLoaded() {
+        ensureTranslationPreferenceLoaded(currentTranslationPreferencePackage());
+    }
+
+    private void ensureTranslationPreferenceLoaded(String packageName) {
+        String preferencePackage = normalizeTranslationPreferencePackage(packageName);
+        if (loadedTranslationPreferencePackages.contains(preferencePackage)) {
+            return;
+        }
+        synchronized (this) {
+            if (loadedTranslationPreferencePackages.contains(preferencePackage)) {
+                return;
+            }
+            Context context = currentApplicationContext();
+            if (context == null) {
+                if (shouldApplyTranslationPreferenceToRenderer(preferencePackage)) {
+                    officialLyricTextRenderer.setTranslationEnabledImmediately(
+                            isLyricInfoTranslationEnabledFromCache(preferencePackage));
+                }
+                return;
+            }
+            SharedPreferences preferences = context.getSharedPreferences(
+                    TRANSLATION_PREFERENCES_NAME,
+                    Context.MODE_PRIVATE);
+            boolean defaultValue = defaultTranslationPreferenceValue(
+                    preferences,
+                    preferencePackage);
+            boolean enabled = preferences.getBoolean(
+                    translationPreferenceKeyForPackage(preferencePackage),
+                    defaultValue);
+            lyricInfoTranslationEnabledByPackage.put(preferencePackage, enabled);
+            loadedTranslationPreferencePackages.add(preferencePackage);
+            if (shouldApplyTranslationPreferenceToRenderer(preferencePackage)) {
+                officialLyricTextRenderer.setTranslationEnabledImmediately(enabled);
+            }
+        }
+    }
+
+    private void setLyricInfoTranslationEnabled(String packageName, boolean enabled) {
+        String preferencePackage = normalizeTranslationPreferencePackage(packageName);
+        ensureTranslationPreferenceLoaded(preferencePackage);
+        if (isLyricInfoTranslationEnabledFromCache(preferencePackage) == enabled) {
+            return;
+        }
+
+        lyricInfoTranslationEnabledByPackage.put(preferencePackage, enabled);
+        if (shouldApplyTranslationPreferenceToRenderer(preferencePackage)) {
+            officialLyricTextRenderer.setTranslationEnabled(enabled);
+        }
+        Context context = currentApplicationContext();
+        if (context != null) {
+            context.getSharedPreferences(TRANSLATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(translationPreferenceKeyForPackage(preferencePackage), enabled)
+                    .apply();
+        }
+
+        int generation = ++translationLayoutGeneration;
+        mainHandler.post(() -> refreshLyricViewsAfterTranslationToggle(generation));
+        mainHandler.post(() -> {
+            discoverTranslationActionViewsNearRememberedLyrics();
+            infoAlways(
+                    BridgeDebugArea.PLAYER_SPECIAL,
+                    BridgeEvents.TRANSLATION_ACTION_REBIND,
+                    "Scanned current translation action views"
+                            + " | package=" + preferencePackage
+                            + ", enabled=" + enabled
+                            + ", trackedViews=" + rememberedTranslationActionViewCount());
+            requestOplusTranslationActionRebind(preferencePackage);
+            refreshTranslationActionViewVisibility();
+        });
+        info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL, "lyricInfo translation " + (enabled ? "enabled" : "disabled")
+                + " for " + preferencePackage);
+    }
+
+    private void resolveOplusPlaybackStateRefreshMethod(Class<?> managerClass) {
+        if (managerClass == null || oplusPlaybackStateRefreshMethod != null) return;
+        oplusPlaybackStateRefreshMethod = OplusMediaActionRefreshResolver.resolve(managerClass);
+    }
+
+    private void rememberOplusMediaDataManager(Object manager) {
+        Method refreshMethod = oplusPlaybackStateRefreshMethod;
+        if (manager == null || refreshMethod == null) return;
+        Class<?>[] parameters = refreshMethod.getParameterTypes();
+        if (parameters.length == 3 && parameters[0].isInstance(manager)) {
+            oplusMediaDataManager = new WeakReference<>(manager);
+        }
+    }
+
+    private String resolveMediaEntryKey(Object manager, String packageName) {
+        if (manager == null || TextUtils.isEmpty(packageName)) {
+            return packageName;
+        }
+        try {
+            Method findEntryMethod = manager.getClass().getMethod("findExistingEntry", String.class);
+            findEntryMethod.setAccessible(true);
+            Object result = findEntryMethod.invoke(manager, packageName);
+            if (result instanceof String && !((String) result).isEmpty()) {
+                return (String) result;
+            }
+        } catch (Throwable ignored) {
+        }
+        return packageName;
+    }
+
+    /**
+     * Re-runs SystemUI's full media rebuild for every live entry of {@code packageName} by calling
+     * {@code LegacyMediaDataManagerImpl.updateState(key, state)} directly.
+     *
+     * <p>The synthetic {@code updateMediaDataFromPlayState} entry is guarded by
+     * {@code mediaPlayerIndex != -1 || state == PLAYING}; notification-keyed entries fail the index
+     * check and a stale controller state fails the PLAYING check, so a lock/unlock rebind silently
+     * did nothing until the player itself changed state (PJZ110 2026-09-19). {@code updateState}
+     * has no such guard: it re-runs {@code createActionsFromState} (our gate) and
+     * {@code onMediaDataLoaded} (priority recompute) for the real entry key and session token.</p>
+     */
+    private boolean requestDirectMediaDataUpdateState(Object exManager, String packageName) {
+        if (exManager == null || TextUtils.isEmpty(packageName)) {
+            return false;
+        }
+        Object legacyManager = invokeNoArgByName(exManager, "getMediaDataManager");
+        Object entries = legacyManager == null ? null : readFieldValue(legacyManager, "mediaEntries");
+        if (!(entries instanceof Map)) {
+            translationButtonDebug("direct updateState unavailable, package=" + packageName
+                    + ", legacyManager=" + (legacyManager == null ? "null" : legacyManager.getClass().getName())
+                    + ", entries=" + (entries == null ? "null" : entries.getClass().getName()));
+            return false;
+        }
+        Method updateState = null;
+        for (Class<?> current = legacyManager.getClass(); current != null && updateState == null;
+                current = current.getSuperclass()) {
+            try {
+                updateState = current.getDeclaredMethod("updateState", String.class, PlaybackState.class);
+                updateState.setAccessible(true);
+            } catch (NoSuchMethodException ignored) {
+                try {
+                    updateState = current.getDeclaredMethod("onStateUpdate", String.class, PlaybackState.class);
+                    updateState.setAccessible(true);
+                } catch (NoSuchMethodException absent) {
+                    // Keep walking for older implementations.
+                }
+            }
+        }
+        if (updateState == null) {
+            translationButtonDebug("direct updateState unavailable: method missing on "
+                    + legacyManager.getClass().getName());
+            return false;
+        }
+        Context context = currentApplicationContext();
+        if (context == null) {
+            return false;
+        }
+        List<Map.Entry<?, ?>> snapshot;
+        try {
+            snapshot = new ArrayList<>(((Map<?, ?>) entries).entrySet());
+        } catch (Throwable t) {
+            return false;
+        }
+        int updated = 0;
+        for (Map.Entry<?, ?> entry : snapshot) {
+            Object key = entry.getKey();
+            Object data = entry.getValue();
+            if (!(key instanceof String) || data == null) continue;
+            if (!packageName.equals(invokeNoArgByName(data, "getPackageName"))) continue;
+            Object token = invokeNoArgByName(data, "getToken");
+            if (!(token instanceof android.media.session.MediaSession.Token)) {
+                translationButtonDebug("direct updateState skipped: token null, key=" + key);
+                continue;
+            }
+            PlaybackState state;
+            try {
+                state = new MediaController(context, (android.media.session.MediaSession.Token) token)
+                        .getPlaybackState();
+            } catch (Throwable t) {
+                state = null;
+            }
+            if (state == null) {
+                translationButtonDebug("direct updateState skipped: state null, key=" + key);
+                continue;
+            }
+            try {
+                updateState.invoke(legacyManager, key, state);
+                updated++;
+                translationButtonDebug("direct updateState requested, key=" + key
+                        + ", state=" + state.getState());
+            } catch (Throwable t) {
+                error("Failed direct MediaDataManager.updateState for " + key, t);
+            }
+        }
+        return updated > 0;
+    }
+
+    private boolean requestOplusTranslationActionRebind(String packageName) {
+        String safePackage = normalizeTranslationPreferencePackage(packageName);
+        Method refreshMethod = oplusPlaybackStateRefreshMethod;
+        Object manager = oplusMediaDataManager.get();
+        if (requestDirectMediaDataUpdateState(manager, safePackage)) {
+            infoAlways(
+                    BridgeDebugArea.PLAYER_SPECIAL,
+                    BridgeEvents.TRANSLATION_ACTION_REBIND,
+                    "Requested translation action MediaData rebind via updateState"
+                            + " | package=" + safePackage
+                            + ", enabled=" + isLyricInfoTranslationEnabledFromCache(safePackage)
+                            + ", keyguardLocked=" + isDeviceKeyguardLocked(currentApplicationContext()));
+            return true;
+        }
+        MediaController controller;
+        String controllerPackage;
+        synchronized (systemUiPlaybackControllerLock) {
+            PlaybackControllerBinding binding = systemUiPlaybackControllerBinding;
+            controller = binding == null ? null : binding.controller;
+            controllerPackage = binding == null ? "" : binding.packageName;
+        }
+        PlaybackState playbackState = null;
+        if (controller != null) {
+            try {
+                playbackState = controller.getPlaybackState();
+            } catch (Throwable ignored) {
+                // A released session will be rejected by the missing-state gate below.
+            }
+        }
+        if (refreshMethod == null
+                || manager == null
+                || controller == null
+                || playbackState == null
+                || !safePackage.equals(controllerPackage)) {
+            infoAlways(
+                    BridgeDebugArea.PLAYER_SPECIAL,
+                    BridgeEvents.TRANSLATION_ACTION_REBIND,
+                    "Skipped translation action MediaData rebind"
+                            + " | package=" + safePackage
+                            + ", manager=" + (manager != null)
+                            + ", method=" + (refreshMethod != null)
+                            + ", controller=" + (controller != null)
+                            + ", state=" + (playbackState != null)
+                            + ", controllerPackage=" + nullToEmpty(controllerPackage));
+            return false;
+        }
+        String resolvedKey = resolveMediaEntryKey(manager, safePackage);
+        try {
+            refreshMethod.invoke(null, manager, resolvedKey, playbackState);
+            infoAlways(
+                    BridgeDebugArea.PLAYER_SPECIAL,
+                    BridgeEvents.TRANSLATION_ACTION_REBIND,
+                    "Requested translation action MediaData rebind"
+                            + " | package=" + safePackage
+                            + ", key=" + resolvedKey
+                            + ", enabled="
+                            + isLyricInfoTranslationEnabledFromCache(safePackage)
+                            + ", playbackState=" + playbackState.getState());
+            return true;
+        } catch (Throwable throwable) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "translation-action-rebind-failed",
+                    "Could not request translation action MediaData rebind"
+                            + " | package=" + safePackage
+                            + ", error=" + throwable.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private void refreshLyricUiStyleSettingsIfNeeded() {
+        long now = SystemClock.elapsedRealtime();
+        if (lyricUiStyleSettingsLoadedAtElapsedMs >= 0L
+                && now - lyricUiStyleSettingsLoadedAtElapsedMs
+                < LYRIC_UI_STYLE_SETTINGS_RELOAD_MS) {
+            return;
+        }
+        loadLyricUiStyleSettings(currentApplicationContext(), false);
+    }
+
+    private void loadLyricUiStyleSettings(Context context, boolean force) {
+        if (context == null) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (!force
+                && lyricUiStyleSettingsLoadedAtElapsedMs >= 0L
+                && now - lyricUiStyleSettingsLoadedAtElapsedMs
+                < LYRIC_UI_STYLE_SETTINGS_RELOAD_MS) {
+            return;
+        }
+        SharedPreferences preferences = context.getSharedPreferences(
+                LyricUiSettings.PREFERENCES_NAME,
+                Context.MODE_PRIVATE);
+        LyricUiConfig previousConfig = lyricUiConfig;
+        LyricUiConfig config = LyricUiConfigRepository.load(preferences);
+        lyricContentCleanupConfig = LyricContentCleanupRepository.load(preferences);
+        lyricUiConfig = config;
+        runtimeLyricUiConfig = config;
+        applyLyricUiStyleSettings(
+                config.scaleEnabled,
+                config.blurEnabled,
+                config.lineTimedProgressEnabled,
+                config.translationProgressEnabled,
+                config.screenTimeoutEnabled,
+                config.screenTimeoutSeconds,
+                false);
+        lyricUiStyleSettingsLoadedAtElapsedMs = now;
+        if (force) {
+            loadBridgeDebugSettings(context);
+        }
+        if (force || previousConfig == null || !config.equals(previousConfig)) {
+            settingsInfo("Loaded lyric UI settings"
+                    + " | source=systemui-preferences"
+                    + ", alignment=" + config.alignment
+                    + ", fontSp10=" + config.mainFontTenthsSp
+                    + ", lineSpacingDp10=" + config.lineSpacingTenthsDp
+                    + ", wrappedLineSpacingDp10="
+                    + config.wrappedLineSpacingTenthsDp
+                    + ", force=" + force);
+        }
+    }
+
+    private void handleLyricUiStyleSettingsChanged(Context context, Intent intent) {
+        if (context == null || intent == null) {
+            return;
+        }
+        long revision = intent.getLongExtra(LyricUiSettings.EXTRA_CONFIG_REVISION, -1L);
+        String source = nullToEmpty(intent.getStringExtra(
+                LyricUiSettings.EXTRA_SETTINGS_SOURCE));
+        settingsInfo("Received lyric UI settings"
+                + " | source=" + source
+                + ", revision=" + revision
+                + ", previousAlignment=" + lyricUiConfig.alignment);
+        LyricUiConfig config = LyricUiConfigRepository.decodePartial(intent, lyricUiConfig);
+        if (config == null) {
+            warn(LyricLogFormatter.Area.SETTINGS, "schema-rejected",
+                    "Rejected lyric UI settings with unknown schema");
+            sendSettingsApplyResult(intent, false, lyricUiConfig, "unknown-schema");
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        if (appContext == null) {
+            appContext = context;
+        }
+        LyricUiConfig previousConfig = lyricUiConfig;
+        LyricUiConfigRepository.save(
+                appContext.getSharedPreferences(
+                        LyricUiSettings.PREFERENCES_NAME,
+                        Context.MODE_PRIVATE),
+                config);
+        lyricUiConfig = config;
+        runtimeLyricUiConfig = config;
+        if (intent.getBooleanExtra(
+                LyricUiSettings.EXTRA_CLEAR_TRANSLATION_OVERRIDES,
+                false)) {
+            clearTranslationPreferenceOverrides(appContext, config.defaultTranslationEnabled);
+        }
+        applyLyricUiStyleSettings(
+                config.scaleEnabled,
+                config.blurEnabled,
+                config.lineTimedProgressEnabled,
+                config.translationProgressEnabled,
+                config.screenTimeoutEnabled,
+                config.screenTimeoutSeconds,
+                true);
+        if (!config.equals(previousConfig)) {
+            resetOfficialRowScaleState();
+            boolean lineSpacingChanged = previousConfig == null
+                    || config.lineSpacingTenthsDp != previousConfig.lineSpacingTenthsDp;
+            boolean wrappedLineSpacingChanged = previousConfig == null
+                    || config.wrappedLineSpacingTenthsDp
+                    != previousConfig.wrappedLineSpacingTenthsDp;
+            boolean typographyChanged = previousConfig == null
+                    || config.mainFontTenthsSp != previousConfig.mainFontTenthsSp
+                    || config.translationFontRatioPercent != previousConfig.translationFontRatioPercent
+                    || config.secondaryFontRatioPercent != previousConfig.secondaryFontRatioPercent
+                    || config.fontWeight != previousConfig.fontWeight
+                    || config.glowRadiusPercent != previousConfig.glowRadiusPercent
+                    || config.glowEnabled != previousConfig.glowEnabled;
+            boolean translationDisplayChanged = previousConfig == null
+                    || config.translationDisplayMode != previousConfig.translationDisplayMode;
+            boolean defaultTranslationChanged = previousConfig == null
+                    || config.defaultTranslationEnabled != previousConfig.defaultTranslationEnabled;
+            if (defaultTranslationChanged) {
+                SharedPreferences preferences = appContext.getSharedPreferences(
+                        TRANSLATION_PREFERENCES_NAME, Context.MODE_PRIVATE);
+                lyricInfoTranslationEnabledByPackage.clear();
+                loadedTranslationPreferencePackages.clear();
+                String currentPackage = currentTranslationPreferencePackage();
+                boolean currentEnabled = preferences.getBoolean(
+                        translationPreferenceKeyForPackage(currentPackage),
+                        defaultTranslationPreferenceValue(preferences, currentPackage));
+                lyricInfoTranslationEnabledByPackage.put(currentPackage, currentEnabled);
+                loadedTranslationPreferencePackages.add(currentPackage);
+                officialLyricTextRenderer.setTranslationEnabled(currentEnabled);
+            }
+            for (View recycler : snapshotLyricsRecyclerViews()) {
+                configureOfficialLyricLineSpacing(recycler);
+                if (lineSpacingChanged || wrappedLineSpacingChanged) {
+                    recycler.requestLayout();
+                }
+            }
+            redrawLyricRenderTargets(
+                    wrappedLineSpacingChanged || translationDisplayChanged || typographyChanged,
+                    wrappedLineSpacingChanged || translationDisplayChanged || typographyChanged);
+            if (translationDisplayChanged || defaultTranslationChanged) {
+                int layoutGeneration = ++translationLayoutGeneration;
+                mainHandler.post(() -> refreshLyricViewsAfterTranslationToggle(layoutGeneration));
+            }
+        }
+        lyricUiStyleSettingsLoadedAtElapsedMs = SystemClock.elapsedRealtime();
+        settingsInfo("Applied lyric UI settings"
+                + " | source=" + source
+                + ", revision=" + revision
+                + ", alignment=" + config.alignment
+                + ", fontSp10=" + config.mainFontTenthsSp
+                + ", lineSpacingDp10=" + config.lineSpacingTenthsDp
+                + ", wrappedLineSpacingDp10=" + config.wrappedLineSpacingTenthsDp
+                + ", changed=" + !config.equals(previousConfig));
+        sendSettingsApplyResult(intent, true, config, "applied");
+    }
+
+    private void handleLyricContentCleanupChanged(Context context, Intent intent) {
+        if (context == null || intent == null) return;
+        LyricContentCleanupConfig config =
+                LyricContentCleanupConfigTransfer.decodeFromIntent(context, intent);
+        if (config == null) {
+            warn(
+                    LyricLogFormatter.Area.SETTINGS,
+                    "content-cleanup-schema-rejected",
+                    "Rejected lyric opening cleanup settings with unknown or invalid schema");
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        if (appContext == null) appContext = context;
+        LyricContentCleanupRepository.save(
+                appContext.getSharedPreferences(
+                        LyricUiSettings.PREFERENCES_NAME,
+                        Context.MODE_PRIVATE),
+                config);
+        lyricContentCleanupConfig = config;
+        replayCurrentSystemUiLyricLoadForCleanup();
+        info(BridgeDebugArea.BOOTSTRAP, BridgeEvents.DETAIL, "Applied lyric opening cleanup settings, learned="
+                + config.learnedRules.size()
+                + ", trackOverrides="
+                + config.firstFormalLineByTrack.size());
+    }
+
+    private void replayCurrentSystemUiLyricLoadForCleanup() {
+        final SystemUiLyricLoadContext context = latestSystemUiLyricLoadContext;
+        final Object owner = context == null ? null : context.owner.get();
+        final MediaMetadata metadata = context == null ? null : context.metadata.get();
+        final String packageName = currentLyricProviderPackage;
+        final String title = lastSystemUiSongName;
+        final String artist = lastSystemUiArtistName;
+        final String trackKey = buildTrackKey(title, artist);
+        final LyricContentCleanupConfig config = lyricContentCleanupConfig;
+        final long loadEpoch = systemUiLyricPublicationGate.currentEpoch();
+        lyricCleanupRefreshDispatcher.request(
+                () -> context == latestSystemUiLyricLoadContext
+                        && loadEpoch == systemUiLyricPublicationGate.currentEpoch()
+                        && config.equals(lyricContentCleanupConfig)
+                        && TextUtils.equals(packageName, currentLyricProviderPackage)
+                        && TextUtils.equals(title, lastSystemUiSongName)
+                        && TextUtils.equals(artist, lastSystemUiArtistName)
+                        && TextUtils.equals(trackKey,
+                                buildTrackKey(lastSystemUiSongName, lastSystemUiArtistName)),
+                () -> {
+                    if (context == null
+                            || owner == null
+                            || metadata == null
+                            || !"onMetaDataChanged".equals(context.refreshMethod.getName())
+                            || !TextUtils.equals(context.title, title)
+                            || !TextUtils.equals(context.artist, artist)) return false;
+                    try {
+                        context.refreshMethod.invoke(owner, context.key, metadata);
+                        return true;
+                    } catch (Throwable error) {
+                        warn(
+                                LyricLogFormatter.Area.SETTINGS,
+                                "content-cleanup-reload-failed",
+                                "Could not reload current SystemUI lyric after cleanup change");
+                        return false;
+                    }
+                },
+                this::rebuildCurrentWordLyricModelForCleanup);
+    }
+
+    private void rebuildCurrentWordLyricModelForCleanup() {
+        LyricInfoContract.Payload current = currentLyricProviderPayload;
+        if (current == null || current.snapshotPositionMillis >= 0L
+                || TextUtils.isEmpty(currentCleanupSnapshotRawLyric)) return;
+        try {
+            JSONObject object = new JSONObject();
+            object.put(LyricInfoContract.JSON_SONG_NAME, current.songName);
+            object.put(LyricInfoContract.JSON_ARTIST, current.artist);
+            object.put(LyricInfoContract.JSON_ALBUM, current.album);
+            object.put(LyricInfoContract.JSON_SONG_ID, current.songId);
+            object.put(LyricInfoContract.JSON_LYRIC, currentCleanupSnapshotDisplayLyric);
+            object.put(LyricInfoContract.JSON_RAW_LYRIC, currentCleanupSnapshotRawLyric);
+            object.put(LyricInfoContract.JSON_TRANSLATION_LYRIC, current.translationLyric);
+            object.put(LyricInfoContract.JSON_PROVIDER, current.provider);
+            object.put(LyricInfoContract.JSON_TRACK_KEY, currentCleanupSnapshotTrackKey);
+            object.put(LyricInfoContract.JSON_SESSION_GENERATION, current.sessionGeneration);
+            object.put(LyricInfoContract.JSON_SOURCE, current.source);
+            if (!TextUtils.isEmpty(current.lineMetadata)) {
+                object.put(LyricInfoContract.JSON_LINE_METADATA, new org.json.JSONArray(current.lineMetadata));
+            }
+            LyricInfoContract.NormalizedPayload source =
+                    LyricInfoContract.parseLyricInfo(object.toString());
+            LyricInfoContract.NormalizedPayload cleaned = applyModuleContentCleanup(
+                    source,
+                    lastSystemUiSongName,
+                    lastSystemUiArtistName,
+                    false);
+            cleaned = LyricInfoContract.normalizeOfficialLyricInfo(cleaned.lyricInfo);
+            if (cleaned == null || cleaned.payload == null) return;
+            long rebuildEpoch = systemUiLyricPublicationGate.beginLoad();
+            synchronized (wordLyricModelCacheLock) {
+                currentWordLyricModelSignature = "";
+                cacheSystemUiLyricModelLocked(
+                        null,
+                        cleaned.payload,
+                        source.payload,
+                        rebuildEpoch,
+                        currentLyricProviderPackage,
+                        lastSystemUiSongName,
+                        lastSystemUiArtistName);
+            }
+            redrawLyricRenderTargets(false, false);
+        } catch (Throwable error) {
+            warn(
+                    LyricLogFormatter.Area.SETTINGS,
+                    "content-cleanup-model-rebuild-failed",
+                    "Could not rebuild current word lyric model after cleanup change");
+        }
+    }
+
+    private void applyLyricUiStyleSettings(
+            boolean scrollScale,
+            boolean inactiveBlur,
+            boolean lineTimedProgress,
+            boolean translationProgress,
+            boolean screenTimeoutEnabled,
+            int screenTimeoutSeconds,
+            boolean refreshViews) {
+        int sanitizedScreenTimeoutSeconds =
+                LyricUiSettings.sanitizeScreenTimeoutSeconds(screenTimeoutSeconds);
+        boolean layoutChanged = lyricUiScrollScaleEnabled != scrollScale;
+        boolean styleChanged = layoutChanged
+                || lyricUiInactiveBlurEnabled != inactiveBlur
+                || lyricUiLineTimedProgressEnabled != lineTimedProgress
+                || lyricUiTranslationProgressEnabled != translationProgress;
+        boolean screenTimeoutChanged =
+                screenTimeoutSmartEnabled != screenTimeoutEnabled
+                        || screenTimeoutCustomSeconds != sanitizedScreenTimeoutSeconds;
+        boolean changed = styleChanged || screenTimeoutChanged;
+        lyricUiScrollScaleEnabled = scrollScale;
+        lyricUiInactiveBlurEnabled = inactiveBlur;
+        lyricUiLineTimedProgressEnabled = lineTimedProgress;
+        lyricUiTranslationProgressEnabled = translationProgress;
+        screenTimeoutSmartEnabled = screenTimeoutEnabled;
+        screenTimeoutCustomSeconds = sanitizedScreenTimeoutSeconds;
+        officialLyricTextRenderer.setStyleOptions(
+                scrollScale,
+                inactiveBlur,
+                lineTimedProgress,
+                translationProgress);
+        officialLyricTextRenderer.setConfig(lyricUiConfig);
+        if (!changed) {
+            return;
+        }
+        if (screenTimeoutChanged) {
+            resetScreenTimeoutKeepAwakeWindow();
+            if (screenTimeoutSmartEnabled) {
+                updateScreenTimeoutWakeLock(currentApplicationContext());
+            } else {
+                releaseScreenTimeoutWakeLock("disabled by user");
+            }
+        }
+        if (layoutChanged) {
+            resetOfficialRowScaleState();
+        }
+        info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL, "Updated lyric UI style settings, scrollScale=" + scrollScale
+                + ", inactiveBlur=" + inactiveBlur
+                + ", lineTimedProgress=" + lineTimedProgress
+                + ", translationProgress=" + translationProgress
+                + ", screenTimeoutEnabled=" + screenTimeoutEnabled
+                + ", screenTimeoutSeconds=" + sanitizedScreenTimeoutSeconds
+                + ", alignment=" + lyricUiConfig.alignment);
+        if (refreshViews && styleChanged) {
+            redrawLyricRenderTargets(layoutChanged, layoutChanged);
+        }
+    }
+
+    private void resetOfficialRowScaleState() {
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null) {
+            return;
+        }
+        for (WordLine line : model.lines) {
+            line.rowVisualScaleInitialized = false;
+            line.rowVisualScaleActiveIndex = Integer.MIN_VALUE;
+            line.highlightExit.reset();
+        }
+    }
+
+    private boolean shouldApplyTranslationPreferenceToRenderer(String packageName) {
+        String currentPackage = currentTranslationPreferencePackage();
+        return TextUtils.isEmpty(currentPackage)
+                || normalizeTranslationPreferencePackage(packageName).equals(currentPackage);
+    }
+
+    private void applyTranslationPreferenceForPackage(String packageName) {
+        String preferencePackage = normalizeTranslationPreferencePackage(packageName);
+        ensureTranslationPreferenceLoaded(preferencePackage);
+        officialLyricTextRenderer.setTranslationEnabledImmediately(
+                isLyricInfoTranslationEnabledFromCache(preferencePackage));
+        mainHandler.post(this::refreshTranslationActionViewVisibility);
+    }
+
+    private boolean isLyricInfoTranslationEnabledFromCache(String packageName) {
+        Boolean enabled = lyricInfoTranslationEnabledByPackage.get(
+                normalizeTranslationPreferencePackage(packageName));
+        return LyricTranslationPreferencePolicy.resolve(
+                enabled, null, lyricUiConfig.defaultTranslationEnabled);
+    }
+
+    private String currentTranslationPreferencePackage() {
+        return nullToEmpty(currentLyricProviderPackage);
+    }
+
+    private static String normalizeTranslationPreferencePackage(String packageName) {
+        return TextUtils.isEmpty(packageName) ? "" : packageName;
+    }
+
+    private static String translationPreferenceKeyForPackage(String packageName) {
+        String preferencePackage = normalizeTranslationPreferencePackage(packageName);
+        return TextUtils.isEmpty(preferencePackage)
+                ? TRANSLATION_PREFERENCE_KEY
+                : TRANSLATION_PREFERENCE_KEY + "." + preferencePackage;
+    }
+
+    private boolean defaultTranslationPreferenceValue(
+            SharedPreferences preferences,
+            String packageName) {
+        String key = LyricUiSettings.translationDefaultKeyForPackage(
+                normalizeTranslationPreferencePackage(packageName));
+        Boolean playerDefault = TextUtils.isEmpty(packageName) || !preferences.contains(key)
+                ? null : preferences.getBoolean(key, lyricUiConfig.defaultTranslationEnabled);
+        return LyricTranslationPreferencePolicy.resolve(
+                null, playerDefault, lyricUiConfig.defaultTranslationEnabled);
+    }
+
+    private boolean userWantsTranslationButton(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return defaultTranslationButtonEnabled();
+        }
+        Boolean cached = translationButtonEnabledByPackage.get(packageName);
+        if (cached != null) {
+            return cached;
+        }
+        Context context = currentApplicationContext();
+        if (context == null) {
+            return defaultTranslationButtonEnabled();
+        }
+        boolean enabled = context.getSharedPreferences(
+                        TRANSLATION_PREFERENCES_NAME,
+                        Context.MODE_PRIVATE)
+                .getBoolean(
+                        LyricUiSettings.translationButtonKeyForPackage(packageName),
+                        defaultTranslationButtonEnabled());
+        translationButtonEnabledByPackage.put(packageName, enabled);
+        return enabled;
+    }
+
+    private boolean defaultTranslationButtonEnabled() {
+        Context context = currentApplicationContext();
+        if (context == null) {
+            return true;
+        }
+        return LyricUiSettings.defaultTranslationButtonEnabled(
+                context.getSharedPreferences(
+                        TRANSLATION_PREFERENCES_NAME,
+                        Context.MODE_PRIVATE));
+    }
+
+    private void handlePlayerTranslationSettingsChanged(Context context, Intent intent) {
+        if (context == null || intent == null) return;
+        Context appContext = context.getApplicationContext();
+        if (appContext == null) appContext = context;
+        SharedPreferences preferences = appContext.getSharedPreferences(
+                TRANSLATION_PREFERENCES_NAME,
+                Context.MODE_PRIVATE);
+        String currentPackage = currentTranslationPreferencePackage();
+        boolean previousCurrentValue = isLyricInfoTranslationEnabled(currentPackage);
+        long revision = intent.getLongExtra(LyricUiSettings.EXTRA_CONFIG_REVISION, -1L);
+        String source = nullToEmpty(intent.getStringExtra(
+                LyricUiSettings.EXTRA_SETTINGS_SOURCE));
+        boolean globalDefaultEnabled = intent.hasExtra(
+                LyricUiSettings.EXTRA_DEFAULT_TRANSLATION_ENABLED)
+                ? intent.getBooleanExtra(
+                        LyricUiSettings.EXTRA_DEFAULT_TRANSLATION_ENABLED,
+                        lyricUiConfig.defaultTranslationEnabled)
+                : intent.getBooleanExtra(
+                        LyricUiConfigCodec.DEFAULT_TRANSLATION,
+                        lyricUiConfig.defaultTranslationEnabled);
+        if (intent.hasExtra(LyricUiSettings.EXTRA_DEFAULT_TRANSLATION_BUTTON_ENABLED)) {
+            preferences.edit()
+                    .putBoolean(
+                            LyricUiSettings.KEY_DEFAULT_TRANSLATION_BUTTON,
+                            intent.getBooleanExtra(
+                                    LyricUiSettings.EXTRA_DEFAULT_TRANSLATION_BUTTON_ENABLED,
+                                    true))
+                    .apply();
+            translationButtonEnabledByPackage.clear();
+        }
+        LyricUiConfig previousConfig = lyricUiConfig;
+        LyricUiConfig updatedConfig = LyricUiSettings.withGlobalTranslationDefault(
+                previousConfig,
+                globalDefaultEnabled);
+        boolean globalDefaultChanged = updatedConfig.defaultTranslationEnabled
+                != previousConfig.defaultTranslationEnabled;
+        LyricUiConfigRepository.save(
+                appContext.getSharedPreferences(
+                        LyricUiSettings.PREFERENCES_NAME,
+                        Context.MODE_PRIVATE),
+                updatedConfig);
+        lyricUiConfig = updatedConfig;
+        runtimeLyricUiConfig = updatedConfig;
+        officialLyricTextRenderer.setConfig(updatedConfig);
+        lyricUiStyleSettingsLoadedAtElapsedMs = SystemClock.elapsedRealtime();
+        settingsInfo("Received player translation settings"
+                + " | source=" + source
+                + ", revision=" + revision
+                + ", alignment=" + updatedConfig.alignment
+                + ", previousAlignment=" + previousConfig.alignment
+                + ", globalDefault=" + globalDefaultEnabled);
+        LinkedHashSet<String> affectedPackages = new LinkedHashSet<>();
+        SharedPreferences.Editor editor = preferences.edit();
+        if (intent.getBooleanExtra(LyricUiSettings.EXTRA_REPLACE_PLAYER_TRANSLATION_SETTINGS, false)) {
+            for (String key : preferences.getAll().keySet()) {
+                if (LyricUiSettings.isPlayerTranslationDefaultKey(key)) {
+                    editor.remove(key);
+                    affectedPackages.add(key.substring(key.lastIndexOf("lyric_info_translation_default.")
+                            + "lyric_info_translation_default.".length()));
+                } else if (LyricUiSettings.isPlayerTranslationButtonKey(key)) {
+                    editor.remove(key);
+                }
+            }
+            translationButtonEnabledByPackage.clear();
+        }
+        if (intent.getBooleanExtra(LyricUiSettings.EXTRA_CLEAR_TRANSLATION_OVERRIDES, false)) {
+            for (String key : preferences.getAll().keySet()) {
+                if (LyricUiSettings.isTranslationOverrideKey(key)) editor.remove(key);
+            }
+            affectedPackages.addAll(loadedTranslationPreferencePackages);
+            affectedPackages.add(currentPackage);
+            lyricInfoTranslationEnabledByPackage.clear();
+            loadedTranslationPreferencePackages.clear();
+        }
+
+        String[] packages = intent.getStringArrayExtra(
+                LyricUiSettings.EXTRA_PLAYER_TRANSLATION_PACKAGES);
+        boolean[] defaults = intent.getBooleanArrayExtra(
+                LyricUiSettings.EXTRA_PLAYER_TRANSLATION_DEFAULTS);
+        if (packages != null && defaults != null && packages.length == defaults.length) {
+            int count = Math.min(packages.length, LyricUiSettings.MAX_PLAYER_TRANSLATION_PACKAGES);
+            for (int i = 0; i < count; i++) {
+                String packageName = nullToEmpty(packages[i]);
+                if (!PlayerTranslationSettings.isTranslationSettingsTarget(packageName)) continue;
+                editor.putBoolean(
+                        LyricUiSettings.translationDefaultKeyForPackage(packageName),
+                        defaults[i]);
+                affectedPackages.add(packageName);
+            }
+        }
+
+        String[] buttonPackages = intent.getStringArrayExtra(
+                LyricUiSettings.EXTRA_TRANSLATION_BUTTON_PACKAGES);
+        boolean[] buttonValues = intent.getBooleanArrayExtra(
+                LyricUiSettings.EXTRA_TRANSLATION_BUTTON_VALUES);
+        if (buttonPackages != null && buttonValues != null
+                && buttonPackages.length == buttonValues.length) {
+            int count = Math.min(buttonPackages.length, LyricUiSettings.MAX_PLAYER_TRANSLATION_PACKAGES);
+            for (int i = 0; i < count; i++) {
+                String packageName = nullToEmpty(buttonPackages[i]);
+                if (!PlayerTranslationSettings.isTranslationSettingsTarget(packageName)) continue;
+                editor.putBoolean(
+                        LyricUiSettings.translationButtonKeyForPackage(packageName),
+                        buttonValues[i]);
+                translationButtonEnabledByPackage.put(packageName, buttonValues[i]);
+            }
+        }
+
+        String[] clearPackages = intent.getStringArrayExtra(
+                LyricUiSettings.EXTRA_CLEAR_TRANSLATION_PACKAGES);
+        if (clearPackages != null) {
+            int count = Math.min(clearPackages.length, LyricUiSettings.MAX_PLAYER_TRANSLATION_PACKAGES);
+            for (int i = 0; i < count; i++) {
+                String packageName = nullToEmpty(clearPackages[i]);
+                if (!PlayerTranslationSettings.isTranslationSettingsTarget(packageName)) continue;
+                editor.remove(translationPreferenceKeyForPackage(packageName));
+                affectedPackages.add(packageName);
+            }
+        }
+        editor.apply();
+        reapplyCurrentTranslationButtonSetting();
+        if (globalDefaultChanged) {
+            affectedPackages.add(currentPackage);
+        }
+        for (String packageName : affectedPackages) {
+            lyricInfoTranslationEnabledByPackage.remove(packageName);
+            loadedTranslationPreferencePackages.remove(packageName);
+        }
+
+        if (affectedPackages.contains(currentPackage)) {
+            boolean defaultValue = defaultTranslationPreferenceValue(
+                    preferences,
+                    currentPackage);
+            boolean enabled = preferences.getBoolean(
+                    translationPreferenceKeyForPackage(currentPackage),
+                    defaultValue);
+            lyricInfoTranslationEnabledByPackage.put(currentPackage, enabled);
+            loadedTranslationPreferencePackages.add(currentPackage);
+            if (previousCurrentValue != enabled) {
+                officialLyricTextRenderer.setTranslationEnabled(enabled);
+                int generation = ++translationLayoutGeneration;
+                mainHandler.post(() -> refreshLyricViewsAfterTranslationToggle(generation));
+            }
+        }
+        requestOplusTranslationActionRebind(currentTranslationPreferencePackage());
+        infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SETTINGS_APPLIED, "Updated player translation settings, players=" + affectedPackages.size()
+                + ", cleared=" + (clearPackages == null ? 0 : clearPackages.length)
+                + " | source=" + source
+                + ", revision=" + revision
+                + ", alignment=" + updatedConfig.alignment);
+        sendSettingsApplyResult(intent, true, updatedConfig, "applied");
+    }
+
+    private void reapplyCurrentTranslationButtonSetting() {
+        String packageName = currentTranslationPreferencePackage();
+        WeakReference<Object> reference = latestTranslationMediaButtons.get(packageName);
+        Object mediaButton = reference == null ? null : reference.get();
+        if (reference != null && mediaButton == null) {
+            latestTranslationMediaButtons.remove(packageName, reference);
+        }
+        if (mediaButton != null) {
+            boolean wantsButton = isDeviceKeyguardLocked(currentApplicationContext())
+                    && userWantsTranslationButton(packageName);
+            boolean canOverride = PlayerTranslationTogglePolicy
+                    .canOverrideFavoriteActionWithTranslation(
+                            packageName, providerDeclaredTranslationTogglePackages);
+            int translationCount = currentTranslationCountForAction();
+            translationToggleActionBinder.applyTranslationToggle(
+                    packageName, mediaButton,
+                    wantsButton && PlayerTranslationTogglePolicy.shouldReplaceFavoriteActionWithTranslation(
+                            canOverride, isCurrentLyricProviderPackage(packageName), translationCount, null),
+                    wantsButton, currentLyricProviderPackage, translationCount, -1);
+        }
+        mainHandler.post(() -> {
+            refreshTranslationActionViewVisibility();
+            scheduleTranslationActionViewRecovery();
+        });
+    }
+
+    @SuppressWarnings("deprecation")
+    private void sendSettingsApplyResult(
+            Intent intent,
+            boolean applied,
+            LyricUiConfig config,
+            String reason) {
+        if (intent == null) return;
+        ResultReceiver receiver = intent.getParcelableExtra(LyricUiSettings.EXTRA_RESULT_RECEIVER);
+        if (receiver == null) return;
+        Bundle result = new Bundle();
+        result.putBoolean(LyricUiSettings.RESULT_APPLIED, applied);
+        result.putLong(
+                LyricUiSettings.RESULT_CONFIG_REVISION,
+                intent.getLongExtra(LyricUiSettings.EXTRA_CONFIG_REVISION, -1L));
+        result.putInt(
+                LyricUiSettings.RESULT_ALIGNMENT,
+                config == null ? -1 : config.alignment);
+        result.putString(LyricUiSettings.RESULT_PROCESS, logProcessName);
+        result.putString(LyricUiSettings.RESULT_REASON, nullToEmpty(reason));
+        try {
+            receiver.send(
+                    applied
+                            ? LyricUiSettings.RESULT_SETTINGS_APPLIED
+                            : LyricUiSettings.RESULT_SETTINGS_REJECTED,
+                    result);
+        } catch (Throwable throwable) {
+            warn(
+                    LyricLogFormatter.Area.SETTINGS,
+                    "settings-ack-failed",
+                    "Could not return settings acknowledgement"
+                            + " | revision=" + result.getLong(
+                            LyricUiSettings.RESULT_CONFIG_REVISION,
+                            -1L)
+                            + ", applied=" + applied
+                            + ", error=" + throwable.getClass().getSimpleName());
+        }
+    }
+
+    private void clearTranslationPreferenceOverrides(Context context, boolean enabled) {
+        SharedPreferences preferences = context.getSharedPreferences(
+                TRANSLATION_PREFERENCES_NAME,
+                Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = preferences.edit();
+        for (String key : preferences.getAll().keySet()) {
+            if (LyricUiSettings.isTranslationOverrideKey(key)) {
+                editor.remove(key);
+            }
+        }
+        editor.apply();
+        lyricInfoTranslationEnabledByPackage.clear();
+        loadedTranslationPreferencePackages.clear();
+        String currentPackage = currentTranslationPreferencePackage();
+        boolean currentEnabled = defaultTranslationPreferenceValue(preferences, currentPackage);
+        lyricInfoTranslationEnabledByPackage.put(currentPackage, currentEnabled);
+        loadedTranslationPreferencePackages.add(currentPackage);
+        officialLyricTextRenderer.setTranslationEnabled(currentEnabled);
+        int generation = ++translationLayoutGeneration;
+        mainHandler.post(() -> refreshLyricViewsAfterTranslationToggle(generation));
+        info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL, "Cleared player-specific translation preferences, defaultEnabled=" + enabled);
+    }
+
+    private void refreshLyricViewsAfterTranslationToggle(int generation) {
+        refreshLyricViewsAfterTranslationToggle(generation, true);
+    }
+
+    private void requestSecondaryLyricLayoutRefresh() {
+        synchronized (this) {
+            if (secondaryLayoutRefreshPosted) return;
+            secondaryLayoutRefreshPosted = true;
+        }
+        mainHandler.post(() -> {
+            synchronized (LockscreenLyricsModule.this) {
+                secondaryLayoutRefreshPosted = false;
+            }
+            refreshPendingNativeOverlapHandoffs();
+            WordLyricModel model = currentWordLyricModel;
+            if (model == null) return;
+            long position = estimatePlaybackPositionMillis();
+            int focusedIndex = resolveSecondaryLayoutFocusIndex(model, position);
+            int overlapIndex = model.overlapIndexAt(position);
+            if (secondaryLayoutModel == model && secondaryLayoutFocusIndex == focusedIndex
+                    && secondaryLayoutVocalReady == isSecondaryVocalReady(model, focusedIndex, position)
+                    && secondaryLayoutOverlapIndex == overlapIndex
+                    && secondaryLayoutOverlapVocalReady == isSecondaryVocalReady(model, overlapIndex, position)
+                    && secondaryLayoutPlaybackAdvancing == isSecondaryPlaybackAdvancing()
+                    && secondaryLayoutMotionEnabled == shouldAnimateSecondaryLyricLayout()) return;
+            // Focus progression keeps native scroll ownership; only explicit translation toggles
+            // preserve the current center while changing all row heights.
+            refreshLyricViewsAfterTranslationToggle(++translationLayoutGeneration, false);
+        });
+    }
+
+    private int resolveSecondaryLayoutFocusIndex(WordLyricModel model, long position) {
+        View focusRecycler = null;
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (focusRecycler == null) focusRecycler = recycler;
+            if (isEffectivelyVisible(recycler)) {
+                focusRecycler = recycler;
+                break;
+            }
+        }
+        int officialIndex = focusRecycler == null
+                ? lastLyricsRecyclerIndex : readLyricsRecyclerCurrentIndex(focusRecycler);
+        WordLine activeLine = resolveRecyclerVisualActiveLyricLine(model, position, officialIndex);
+        return resolveOfficialScaleActiveIndex(model, activeLine, position, officialIndex);
+    }
+
+    private boolean prepareCurrentSecondaryLyricLayout(WordLyricModel model, boolean animate) {
+        if (model == null) return false;
+        officialLyricTextRenderer.setTranslationEnabled(isCurrentPlayerTranslationEnabled());
+        long position = estimatePlaybackPositionMillis();
+        officialLyricTextRenderer.prepareIntroLayout(model, position);
+        int focusedIndex = resolveSecondaryLayoutFocusIndex(model, position);
+        secondaryLayoutModel = model;
+        secondaryLayoutFocusIndex = focusedIndex;
+        secondaryLayoutVocalReady = isSecondaryVocalReady(model, focusedIndex, position);
+        secondaryLayoutOverlapIndex = model.overlapIndexAt(position);
+        secondaryLayoutOverlapVocalReady = isSecondaryVocalReady(
+                model, secondaryLayoutOverlapIndex, position);
+        secondaryLayoutPlaybackAdvancing = isSecondaryPlaybackAdvancing();
+        secondaryLayoutMotionEnabled = animate;
+        return officialLyricTextRenderer.prepareSecondaryLayout(
+                model, focusedIndex, position, animate, secondaryLayoutPlaybackAdvancing);
+    }
+
+    private static boolean isSecondaryVocalReady(WordLyricModel model, int focusedIndex, long position) {
+        WordLine line = model == null ? null : model.lineAt(focusedIndex);
+        WordLine vocal = line == null ? null : line.secondaryLine;
+        if (vocal == null) return false;
+        long threshold = vocal.firstProgressStartMillis()
+                - (vocal.timingMode == LyricTimingMode.WORD_TIMED ? 300L : 0L);
+        return position >= threshold;
+    }
+
+    private boolean isSecondaryPlaybackAdvancing() {
+        LyricInfoContract.Payload payload = currentLyricProviderPayload;
+        return lastPlaybackIsPlaying && (payload == null || payload.snapshotPositionMillis < 0L);
+    }
+
+    private boolean shouldAnimateSecondaryLyricLayout() {
+        if (!useLyricMotion()
+                || SystemClock.elapsedRealtime() <= officialLyricDrawSuppressedUntilElapsedMs) return false;
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (isEffectivelyVisible(recycler)) return true;
+        }
+        return false;
+    }
+
+    private void refreshLyricViewsAfterTranslationToggle(int generation, boolean preserveAnchor) {
+        if (generation != translationLayoutGeneration) {
+            return;
+        }
+        boolean aod = isAodLowFrameRateLyricMode();
+        if (aod) {
+            officialLyricTextRenderer.finishTranslationLayoutChange();
+        }
+        boolean running = officialLyricTextRenderer.advanceTranslationLayoutAnimation();
+        running |= prepareCurrentSecondaryLyricLayout(
+                currentWordLyricModel, shouldAnimateSecondaryLyricLayout());
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            int targetIndex = readLyricsRecyclerCurrentIndex(recycler);
+            LyricsRecyclerGeometry before = targetIndex >= 0
+                    ? captureLyricsRecyclerGeometry(recycler, targetIndex)
+                    : null;
+            applyVisibleLyricBlockHeights(recycler);
+            invalidateLyricsRecyclerDescendants(recycler);
+            if (preserveAnchor && !aod
+                    && before != null
+                    && before.targetCenter != Integer.MIN_VALUE) {
+                scheduleTranslationToggleAnchorRestore(
+                        generation,
+                        recycler,
+                        targetIndex,
+                        before.targetCenter);
+            }
+        }
+        if (running && !aod && generation == translationLayoutGeneration) {
+            lyricFrameScheduler.post(
+                    () -> refreshLyricViewsAfterTranslationToggle(generation, preserveAnchor));
+        }
+    }
+
+    private void scheduleTranslationToggleAnchorRestore(
+            int generation,
+            View recycler,
+            int targetIndex,
+            int desiredCenter) {
+        WordLyricModel expectedModel = currentWordLyricModel;
+        ViewTreeObserver observer = recycler.getViewTreeObserver();
+        if (!observer.isAlive()) {
+            return;
+        }
+        observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                ViewTreeObserver current = recycler.getViewTreeObserver();
+                if (current.isAlive()) {
+                    current.removeOnPreDrawListener(this);
+                }
+                if (currentWordLyricModel != expectedModel) return true;
+                restoreTranslationToggleAnchor(
+                        generation,
+                        recycler,
+                        targetIndex,
+                        desiredCenter);
+                return true;
+            }
+        });
+    }
+
+    private void restoreTranslationToggleAnchor(
+            int generation,
+            View recycler,
+            int targetIndex,
+            int desiredCenter) {
+        if (generation != translationLayoutGeneration
+                || recycler == null
+                || !recycler.isAttachedToWindow()
+                || isAodLowFrameRateLyricMode()) {
+            return;
+        }
+        LyricsRecyclerGeometry after = captureLyricsRecyclerGeometry(recycler, targetIndex);
+        if (after.targetCenter == Integer.MIN_VALUE) {
+            return;
+        }
+        int correction = after.targetCenter - desiredCenter;
+        int tolerance = dp(recycler.getContext(), 1f);
+        int maximumCorrection = dp(recycler.getContext(), 48f);
+        if (Math.abs(correction) <= tolerance || Math.abs(correction) > maximumCorrection) {
+            return;
+        }
+        recycler.scrollBy(0, correction);
+    }
+
+    private void redrawLyricRenderTargets(boolean requestLayout, boolean syncRecyclerHeights) {
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            configureOfficialLyricScaleOwnership(recycler);
+            if (syncRecyclerHeights) {
+                applyVisibleLyricBlockHeights(recycler);
+            }
+            if (requestLayout) {
+                recycler.requestLayout();
+            }
+            invalidateLyricsRecyclerDescendants(recycler);
+            requestLyricAnimationFrame(recycler);
+        }
+        for (TextView textView : snapshotActiveTextViews()) {
+            if (requestLayout) {
+                textView.requestLayout();
+            }
+            textView.invalidate();
+            requestLyricAnimationFrame(textView);
+        }
+        for (View root : snapshotLyricRootViews()) {
+            if (requestLayout) {
+                root.requestLayout();
+            }
+            root.invalidate();
+            requestLyricAnimationFrame(root);
+        }
+    }
+
+    private void installSystemUiWordLyricHooks(
+            ClassLoader classLoader,
+            SystemUiDexKitAdapter.Targets targets) {
+        try {
+            Method loadLyricInBg = targets.loadLyricInBg;
+            loadLyricInBg.setAccessible(true);
+            resolveOplusPlaybackStateRefreshMethod(loadLyricInBg.getDeclaringClass());
+            hook(loadLyricInBg)
+                    .setId(HOOK_ID_SYSTEMUI_LOAD_LYRIC)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(this::onSystemUiLoadLyricInBg);
+            installKuWoArtworkSnapshotHook(loadLyricInBg.getDeclaringClass());
+            installKuWoSeedlingArtworkHook(classLoader);
+            installSystemUiArtworkDiagnosticsHook(classLoader);
+            installKuWoCarLyricMetadataHook(loadLyricInBg.getDeclaringClass());
+            installKuWoCarLyricLoadMetadataHook(
+                    classLoader,
+                    "com.android.systemui.media.controls.domain.pipeline.LegacyMediaDataManagerImpl");
+
+            Method mediaDataToBundle = targets.mediaDataToBundle;
+            mediaDataToBundle.setAccessible(true);
+            hook(mediaDataToBundle)
+                    .setId(HOOK_ID_SEEDLING_MEDIA_BUNDLE)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onSeedlingMediaBundle, "onSeedlingMediaBundle"));
+
+            Method onDraw = TextView.class.getDeclaredMethod("onDraw", Canvas.class);
+            onDraw.setAccessible(true);
+            hook(onDraw)
+                    .setId(HOOK_ID_TEXTVIEW_ON_DRAW)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onTextViewOnDraw, "onTextViewOnDraw"));
+
+            Method setText = TextView.class.getDeclaredMethod(
+                    "setText",
+                    CharSequence.class,
+                    TextView.BufferType.class);
+            setText.setAccessible(true);
+            hook(setText)
+                    .setId(HOOK_ID_TEXTVIEW_SET_TEXT)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onTextViewSetText, "onTextViewSetText"));
+
+            Method onAttachedToWindow = View.class.getDeclaredMethod("onAttachedToWindow");
+            onAttachedToWindow.setAccessible(true);
+            hook(onAttachedToWindow)
+                    .setId(HOOK_ID_VIEW_ON_ATTACHED)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onViewAttachedToWindow, "onViewAttachedToWindow"));
+
+            Method onDetachedFromWindow = View.class.getDeclaredMethod("onDetachedFromWindow");
+            onDetachedFromWindow.setAccessible(true);
+            hook(onDetachedFromWindow)
+                    .setId(HOOK_ID_VIEW_ON_DETACHED)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onViewDetachedFromWindow, "onViewDetachedFromWindow"));
+
+            Method setVisibility = View.class.getDeclaredMethod("setVisibility", int.class);
+            setVisibility.setAccessible(true);
+            hook(setVisibility)
+                    .setId(HOOK_ID_VIEW_SET_VISIBILITY)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onViewSetVisibility, "onViewSetVisibility"));
+
+            Method dispatchWindowVisibility = View.class.getDeclaredMethod(
+                    "dispatchWindowVisibilityChanged", int.class);
+            dispatchWindowVisibility.setAccessible(true);
+            hook(dispatchWindowVisibility)
+                    .setId(HOOK_ID_VIEW_WINDOW_VISIBILITY)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onViewWindowVisibilityChanged,
+                            "onViewWindowVisibilityChanged"));
+
+            Method setContentDescription = View.class.getDeclaredMethod(
+                    "setContentDescription",
+                    CharSequence.class);
+            setContentDescription.setAccessible(true);
+            hook(setContentDescription)
+                    .setId(HOOK_ID_VIEW_SET_CONTENT_DESCRIPTION)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onViewSetContentDescription, "onViewSetContentDescription"));
+
+            Method setImageDrawable = ImageView.class.getDeclaredMethod(
+                    "setImageDrawable",
+                    Drawable.class);
+            setImageDrawable.setAccessible(true);
+            hook(setImageDrawable)
+                    .setId(HOOK_ID_IMAGE_VIEW_SET_IMAGE_DRAWABLE)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onImageViewSetImage, "onImageViewSetImage"));
+
+            Method setImageBitmap = ImageView.class.getDeclaredMethod(
+                    "setImageBitmap",
+                    Bitmap.class);
+            setImageBitmap.setAccessible(true);
+            hook(setImageBitmap)
+                    .setId(HOOK_ID_IMAGE_VIEW_SET_IMAGE_BITMAP)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onImageViewSetImage, "onImageViewSetImage"));
+
+            tryInstallPluginClassLoaderConstructorHook(classLoader);
+            tryInstallLyricsRecyclerViewHook(classLoader);
+            ensureScreenTimeoutReceiver(currentApplicationContext());
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked SystemUI official lyric hooks"
+                    + (targets.resolvedByDexKit ? " via DexKit" : " via legacy fallback"));
+        } catch (Throwable t) {
+            error("Failed to hook SystemUI official lyric TextView draw hooks", t);
+        }
+    }
+
+    /**
+     * KuWo publishes its cover through an http artwork URI that ColorOS refuses to load and
+     * a Bitmap lane that does not survive the MediaSession binder crossing, so every
+     * metadata-driven MediaData rebuild resolves the artwork to null and the immersive card
+     * falls back to the default solid-color art. Capture the last non-null same-track icon
+     * seen at the common lookup point and hand it back when the metadata-derived lookup is
+     * empty again. Real track changes miss the snapshot and keep native behavior.
+     */
+    private void installKuWoArtworkSnapshotHook(Class<?> ownerClass) {
+        try {
+            Method getArtwork = null;
+            Class<?> current = ownerClass;
+            while (current != null && getArtwork == null) {
+                for (Method candidate : current.getDeclaredMethods()) {
+                    if ("getArtWorkIconByMediaMetaData".equals(candidate.getName())
+                            && (candidate.getParameterCount() == 2
+                            || (candidate.getParameterCount() == 4
+                            && candidate.getParameterTypes()[2] == android.os.UserHandle.class
+                            && "kotlin.coroutines.Continuation".equals(candidate.getParameterTypes()[3].getName())))
+                            && candidate.getParameterTypes()[0] == MediaMetadata.class
+                            && candidate.getParameterTypes()[1] == String.class) {
+                        getArtwork = candidate;
+                        break;
+                    }
+                }
+                current = current.getSuperclass();
+            }
+            if (getArtwork == null) {
+                warn(
+                        LyricLogFormatter.Area.SYSTEM_UI,
+                        "lyric-policy",
+                        "Skipped KuWo artwork snapshot hook:"
+                                + " getArtWorkIconByMediaMetaData not found");
+                return;
+            }
+            getArtwork.setAccessible(true);
+            hook(getArtwork)
+                    .setId(HOOK_ID_SYSTEMUI_ARTWORK_ICON)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onSystemUiKuWoArtworkLookup, "onSystemUiKuWoArtworkLookup"));
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked SystemUI media-metadata artwork lookup for KuWo cover snapshot: "
+                    + getArtwork.getDeclaringClass().getName());
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "Failed to hook KuWo artwork snapshot: " + t);
+        }
+    }
+
+    private void installKuWoSeedlingArtworkHook(ClassLoader classLoader) {
+        try {
+            Class<?> dataClass = classLoader.loadClass(
+                    "com.oplus.systemui.seedlingservice.mediaControl.SeedlingMediaData");
+            Method setArtwork = dataClass.getDeclaredMethod(
+                    "setArtworkIcon",
+                    Icon.class);
+            setArtwork.setAccessible(true);
+            hook(setArtwork)
+                    .setId(HOOK_ID_SYSTEMUI_SEEDLING_ARTWORK)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onKuWoSeedlingArtworkChanged, "onKuWoSeedlingArtworkChanged"));
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked Seedling artwork for KuWo same-track cover repair");
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "Failed to hook Seedling artwork: " + t);
+        }
+    }
+
+    private Object onKuWoSeedlingArtworkChanged(XposedInterface.Chain chain)
+            throws Throwable {
+        Object data = null;
+        boolean traceLxArtwork = false;
+        Object[] proceedArgs = null;
+        try {
+            data = chain.getThisObject();
+            if (data != null && isLxSeedlingData(data)) {
+                Object traceData = data;
+                Icon incoming = chain.getArg(0) instanceof Icon ? (Icon) chain.getArg(0) : null;
+                artworkProbe("SEEDLING_SET_IN", () -> ArtworkDiagnostics.describeSeedling(traceData)
+                        + " | incoming=" + ArtworkDiagnostics.describeIcon(incoming));
+                traceLxArtwork = true;
+            } else if (data != null && isKuwoSeedlingData(data)) {
+                String title = invokeStringGetter(data, "getSong");
+                String artist = invokeStringGetter(data, "getArtist");
+                String trackKey = buildTrackKey(title, artist);
+                Icon incoming = chain.getArg(0) instanceof Icon ? (Icon) chain.getArg(0) : null;
+                Icon snapshot = peekKuWoArtworkSnapshot(trackKey);
+                if (KuWoCoverPolicy.shouldRepairSeedlingArtwork(
+                        isPlausibleKuWoCoverIcon(incoming),
+                        trackKey,
+                        buildTrackKey(lastSystemUiSongName, lastSystemUiArtistName),
+                        snapshot != null)) {
+                    long now = SystemClock.elapsedRealtime();
+                    if (kuWoRuntime.takeSeedlingLog(now)) {
+                        info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED,
+                                "Repaired Seedling album artwork from the same-track snapshot;"
+                                        + " incoming=" + describeSeedlingIcon(incoming)
+                                        + ", repaired=" + describeSeedlingIcon(snapshot));
+                    }
+                    proceedArgs = chain.getArgs().toArray(new Object[0]);
+                    proceedArgs[0] = snapshot;
+                }
+            }
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "KuWo Seedling artwork repair failed: " + t);
+        }
+        Object result = HookProceed.once(chain, proceedArgs);
+        if (traceLxArtwork && data != null) {
+            Object tracedData = data;
+            try {
+                artworkProbe("SEEDLING_SET_OUT", () -> ArtworkDiagnostics.describeSeedling(tracedData));
+            } catch (Throwable ignored) {
+                // Diagnostics never own the host result.
+            }
+        }
+        return result;
+    }
+
+    private static boolean isKuwoSeedlingData(Object data) {
+        try {
+            return KuWoMediaIdentityPolicy.isPlayerPackage(
+                    invokeStringGetter(data, "getPackageName"));
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isLxSeedlingData(Object data) {
+        return data != null && isLxPlayerPackage(invokeStringGetter(data, "getPackageName"));
+    }
+
+    private void installSystemUiArtworkDiagnosticsHook(ClassLoader classLoader) {
+        try {
+            Class<?> loaderClass = classLoader.loadClass(
+                    "com.oplus.systemui.media.seedling.client.loader.album.artwrok.UriArtworkLoader");
+            Method load = null;
+            for (Method candidate : loaderClass.getDeclaredMethods()) {
+                if ("load".equals(candidate.getName()) && candidate.getParameterCount() == 3) {
+                    load = candidate;
+                    break;
+                }
+            }
+            if (load == null) return;
+            load.setAccessible(true);
+            hook(load)
+                    .setId(HOOK_ID_SYSTEMUI_ARTWORK_LOADER_PROBE)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onSystemUiArtworkLoaderProbe, "onSystemUiArtworkLoaderProbe"));
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED,
+                    "Hooked Seedling artwork loader diagnostics");
+        } catch (Throwable t) {
+            warn(LyricLogFormatter.Area.SYSTEM_UI, "artwork-probe",
+                    "Failed to hook Seedling artwork loader diagnostics: " + t);
+        }
+    }
+
+    private Object onSystemUiArtworkLoaderProbe(XposedInterface.Chain chain) throws Throwable {
+        Object data = chain.getArg(2);
+        String packageName = chain.getArg(0) instanceof String ? (String) chain.getArg(0) : "";
+        if (!isLxPlayerPackage(packageName) && !isLxSeedlingData(data)) {
+            return chain.proceed();
+        }
+        artworkProbe("LOADER_IN", () -> ArtworkDiagnostics.describeSeedling(data));
+        Object result = chain.proceed();
+        artworkProbe("LOADER_OUT", () -> ArtworkDiagnostics.describeLoaderResult(result)
+                + " | " + ArtworkDiagnostics.describeSeedling(data));
+        return result;
+    }
+
+    private static String invokeStringGetter(Object owner, String methodName) {
+        if (owner == null) {
+            return "";
+        }
+        try {
+            Object value = owner.getClass()
+                    .getMethod(methodName)
+                    .invoke(owner);
+            return value instanceof CharSequence ? value.toString() : "";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static String describeSeedlingIcon(Icon icon) {
+        if (icon == null) {
+            return "null";
+        }
+        Bitmap bitmap = extractIconBitmap(icon);
+        return bitmap == null
+                ? "icon"
+                : bitmap.getWidth() + "x" + bitmap.getHeight()
+                        + ":generation-" + bitmap.getGenerationId()
+                        + ":identity-" + System.identityHashCode(bitmap);
+    }
+
+    private void installKuWoCarLyricMetadataHook(Class<?> ownerClass) {
+        try {
+            Method changed = null;
+            Class<?> current = ownerClass;
+            while (current != null && changed == null) {
+                for (Method method : current.getDeclaredMethods()) {
+                    if ("onMetaDataChanged".equals(method.getName())
+                            && method.getParameterCount() == 2
+                            && method.getParameterTypes()[0] == String.class
+                            && method.getParameterTypes()[1] == MediaMetadata.class) {
+                        changed = method;
+                        break;
+                    }
+                }
+                current = current.getSuperclass();
+            }
+            if (changed == null) {
+                warn(
+                        LyricLogFormatter.Area.SYSTEM_UI,
+                        "lyric-policy",
+                        "Skipped KuWo car-lyric metadata hook: onMetaDataChanged not found");
+                return;
+            }
+            changed.setAccessible(true);
+            hook(changed)
+                    .setId(HOOK_ID_MEDIA_DATA_METADATA_CHANGED)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onOplusMediaDataMetadataChanged, "onOplusMediaDataMetadataChanged"));
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus media metadata changed for KuWo car-lyric identity: "
+                    + changed.getDeclaringClass().getName());
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "Failed to hook KuWo car-lyric metadata identity: " + t);
+        }
+    }
+
+    private Object onOplusMediaDataMetadataChanged(XposedInterface.Chain chain)
+            throws Throwable {
+        rememberOplusMediaDataManager(chain.getThisObject());
+        Object metadataArg = chain.getArg(1);
+        if (!(metadataArg instanceof MediaMetadata)) {
+            return chain.proceed();
+        }
+        MediaMetadata metadata = (MediaMetadata) metadataArg;
+        String incomingTitle = firstNonEmpty(
+                getText(metadata, MediaMetadata.METADATA_KEY_TITLE),
+                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
+        String incomingArtist = firstNonEmpty(
+                getText(metadata, MediaMetadata.METADATA_KEY_ARTIST),
+                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+        if (!KuWoMediaIdentityPolicy.isCarLyricMetadataMutation(
+                lastSystemUiSongName,
+                lastSystemUiArtistName,
+                incomingTitle,
+                incomingArtist)) {
+            return chain.proceed();
+        }
+        MediaMetadata stable = buildMetadataWithStableSystemUiIdentity(
+                metadata,
+                lastSystemUiSongName,
+                lastSystemUiArtistName);
+        Object[] args = chain.getArgs().toArray(new Object[0]);
+        args[1] = stable;
+        if (kuWoRuntime.takeCarLyricNormalizedLogOnce()) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Normalized KuWo car-lyric identity before media data update");
+        }
+        return chain.proceed(args);
+    }
+
+    private void installKuWoCarLyricLoadMetadataHook(
+            ClassLoader classLoader,
+            String className) {
+        try {
+            Context context = currentApplicationContext();
+            Class<?> managerClass = classLoader.loadClass(className);
+            Method loadMediaDataInBg = null;
+            for (Method method : managerClass.getDeclaredMethods()) {
+                if ((("loadMediaDataInBg".equals(method.getName()) && method.getParameterCount() == 4)
+                        || ("loadMediaData".equals(method.getName()) && method.getParameterCount() == 5
+                        && method.getParameterTypes()[4] == boolean.class))
+                        && method.getParameterTypes()[0] == String.class
+                        && method.getParameterTypes()[1] == StatusBarNotification.class
+                        && method.getParameterTypes()[2] == String.class
+                        && method.getParameterTypes()[3] == boolean.class) {
+                    loadMediaDataInBg = method;
+                    break;
+                }
+            }
+            if (loadMediaDataInBg == null) {
+                warn(
+                        LyricLogFormatter.Area.SYSTEM_UI,
+                        "lyric-policy",
+                        "Skipped KuWo car-lyric load hook: loadMediaDataInBg not found");
+                return;
+            }
+            loadMediaDataInBg.setAccessible(true);
+            hook(loadMediaDataInBg)
+                    .setId(HOOK_ID_MEDIA_DATA_LOAD_METADATA)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onLegacyMediaDataLoad, "onLegacyMediaDataLoad"));
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked legacy media data loader for KuWo car-lyric identity: "
+                    + managerClass.getName());
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "Failed to hook legacy media data loader: " + t);
+        }
+    }
+
+    private Object onLegacyMediaDataLoad(XposedInterface.Chain chain) throws Throwable {
+        Object notificationArg = chain.getArg(1);
+        if (!(notificationArg instanceof android.service.notification.StatusBarNotification)) {
+            return chain.proceed();
+        }
+        android.service.notification.StatusBarNotification notification =
+                (android.service.notification.StatusBarNotification) notificationArg;
+        if (!KuWoMediaIdentityPolicy.isPlayerPackage(notification.getPackageName())) {
+            return chain.proceed();
+        }
+        Notification nativeNotification = notification.getNotification();
+        Bundle extras = nativeNotification.extras;
+        MediaMetadata metadata = extras == null
+                ? null
+                : extras.getParcelable("android.mediaSession.metadata");
+        Icon notificationCover = nativeNotification.getLargeIcon();
+        if (notificationCover != null && isPlausibleKuWoCoverIcon(notificationCover)) {
+            rememberKuWoArtworkSnapshots(metadata, notificationCover);
+        }
+        String title = firstNonEmpty(
+                getText(metadata, MediaMetadata.METADATA_KEY_TITLE),
+                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
+        String artist = firstNonEmpty(
+                getText(metadata, MediaMetadata.METADATA_KEY_ARTIST),
+                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+        if (!KuWoMediaIdentityPolicy.isCarLyricMetadataMutation(
+                lastSystemUiSongName,
+                lastSystemUiArtistName,
+                title,
+                artist)) {
+            return chain.proceed();
+        }
+        extras.putParcelable(
+                "android.mediaSession.metadata",
+                buildMetadataWithStableSystemUiIdentity(
+                        metadata,
+                        lastSystemUiSongName,
+                        lastSystemUiArtistName));
+        nativeNotification.extras = extras;
+        if (kuWoRuntime.takeCarLyricNormalizedLogOnce()) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Normalized KuWo car-lyric identity before legacy media data load");
+        }
+        return chain.proceed();
+    }
+
+    private Object onSystemUiKuWoArtworkLookup(XposedInterface.Chain chain) throws Throwable {
+        boolean kuwoLookup = false;
+        MediaMetadata effectiveMetadata = null;
+        Object[] proceedArgs = null;
+        try {
+            Object packageNameArg = chain.getArg(1);
+            kuwoLookup = packageNameArg instanceof String
+                    && KuWoMediaIdentityPolicy.isPlayerPackage((String) packageNameArg);
+            if (kuwoLookup && chain.getArg(0) instanceof MediaMetadata) {
+                effectiveMetadata = (MediaMetadata) chain.getArg(0);
+            }
+            if (kuwoLookup && effectiveMetadata != null
+                    && KuWoMediaIdentityPolicy.isCarLyricMetadataMutation(
+                    lastSystemUiSongName,
+                    lastSystemUiArtistName,
+                    firstNonEmpty(
+                            getText(effectiveMetadata, MediaMetadata.METADATA_KEY_TITLE),
+                            getText(effectiveMetadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE)),
+                    firstNonEmpty(
+                            getText(effectiveMetadata, MediaMetadata.METADATA_KEY_ARTIST),
+                            getText(effectiveMetadata, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)))) {
+                effectiveMetadata = buildMetadataWithStableSystemUiIdentity(
+                        effectiveMetadata,
+                        lastSystemUiSongName,
+                        lastSystemUiArtistName);
+                proceedArgs = chain.getArgs().toArray(new Object[0]);
+                proceedArgs[0] = effectiveMetadata;
+            }
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "KuWo artwork snapshot preprocessing failed: " + t);
+        }
+
+        Object result = HookProceed.once(chain, proceedArgs);
+        // A suspend getter's sentinel is owned by its continuation. Artwork publication is
+        // also observed at Seedling.setArtworkIcon after asynchronous completion.
+        if (chain.getExecutable().getParameterCount() == 4
+                && result != null && !(result instanceof Icon)) return result;
+        if (!kuwoLookup) {
+            return result;
+        }
+        try {
+            String trackKey = kuWoArtworkSnapshotKey(effectiveMetadata);
+            if (TextUtils.isEmpty(trackKey)) {
+                return result;
+            }
+            if (result instanceof Icon && isPlausibleKuWoCoverIcon((Icon) result)) {
+                rememberKuWoArtworkSnapshots(effectiveMetadata, (Icon) result);
+                return result;
+            }
+            Icon snapshot = peekKuWoArtworkSnapshot(trackKey);
+            if (snapshot != null) {
+                if (kuWoRuntime.takeArtworkRestoreLogOnce()) {
+                    info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED, "Restored KuWo album artwork from same-track snapshot after"
+                            + (result == null ? " empty" : " implausible")
+                            + " metadata lookup");
+                }
+                return snapshot;
+            }
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "KuWo artwork snapshot handling failed: " + t);
+        }
+        return result;
+    }
+
+    private static String kuWoArtworkSnapshotKey(MediaMetadata metadata) {
+        if (metadata == null) {
+            return "";
+        }
+        return KuWoCoverPolicy.artworkSnapshotKey(
+                metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+                buildTrackKey(
+                        firstNonEmpty(
+                                getText(metadata, MediaMetadata.METADATA_KEY_TITLE),
+                                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE)),
+                        firstNonEmpty(
+                                getText(metadata, MediaMetadata.METADATA_KEY_ARTIST),
+                                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE))));
+    }
+
+    private static boolean isPlausibleKuWoCoverIcon(Icon icon) {
+        try {
+            return KuWoCoverPolicy.isPlausibleCoverIconBitmap(extractIconBitmap(icon));
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private static Bitmap extractIconBitmap(Icon icon) {
+        try {
+            android.content.Context context = currentApplicationContext();
+            if (context != null) {
+                Drawable drawable = icon.loadDrawable(context);
+                if (drawable instanceof BitmapDrawable) {
+                    return ((BitmapDrawable) drawable).getBitmap();
+                }
+            }
+        } catch (Throwable ignored) {
+            // Fall through to the framework-internal accessor below.
+        }
+        try {
+            return (Bitmap) icon.getClass().getMethod("getBitmap").invoke(icon);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void rememberKuWoArtworkSnapshots(MediaMetadata metadata, Icon icon) {
+        if (metadata == null || icon == null) {
+            return;
+        }
+        kuWoRuntime.artwork().rememberKeys(
+                kuWoArtworkSnapshotKey(metadata),
+                buildTrackKey(
+                        firstNonEmpty(
+                                getText(metadata, MediaMetadata.METADATA_KEY_TITLE),
+                                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE)),
+                        firstNonEmpty(
+                                getText(metadata, MediaMetadata.METADATA_KEY_ARTIST),
+                                getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE))),
+                icon);
+    }
+
+    private Icon peekKuWoArtworkSnapshot(String trackKey) {
+        return kuWoRuntime.artwork().peek(trackKey);
+    }
+
+    private void refreshLyricRenderingAfterModeChange(boolean active) {
+        int generation = ++lyricModeRebindGeneration;
+        cancelActiveLyricRefreshCallbacks(!active);
+        if (lyricModeRebindRunnable != null) {
+            mainHandler.removeCallbacks(lyricModeRebindRunnable);
+        }
+
+        Runnable refresh = () -> {
+            if (generation != lyricModeRebindGeneration) {
+                return;
+            }
+            // Mode changes only invalidate custom pixels. SystemUI owns the RecyclerView
+            // transaction and its geometry; repeated requestLayout/height passes here used to
+            // race the hidden-surface preparation performed during immersive-page cross-fades.
+            for (View recycler : snapshotLyricsRecyclerViews()) {
+                invalidateLyricsRecyclerDescendants(recycler);
+                requestLyricAnimationFrame(recycler);
+            }
+            for (TextView textView : snapshotActiveTextViews()) {
+                requestLyricAnimationFrame(textView);
+            }
+            for (View root : snapshotLyricRootViews()) {
+                requestLyricAnimationFrame(root);
+            }
+            if (active) {
+                scheduleActiveLyricRefresh(ACTIVE_LYRIC_FRAME_DELAY_MS);
+            }
+        };
+        lyricModeRebindRunnable = refresh;
+        mainHandler.post(refresh);
+    }
+
+    private static long resolveLyricGlowPosition(long position) {
+        // The glow and revealed glyphs must use the same playback snapshot. Freezing only
+        // the glow during lockscreen/AOD visibility changes makes the two layers resume
+        // hundreds of milliseconds apart in both transition directions.
+        return position;
+    }
+
+    private boolean activateSystemUiLyricModeFromSurface(String reason) {
+        return activateSystemUiLyricModeFromSurface(reason, false, true);
+    }
+
+    private boolean activateSystemUiLyricModeFromVisibleTextView(
+            TextView textView,
+            View recycler,
+            String reason) {
+        if (textView == null
+                || recycler == null
+                || recycler.getVisibility() != View.VISIBLE
+                || !isEffectivelyVisible(textView)) {
+            return false;
+        }
+        rememberActiveTextViewReference(textView);
+        return activateSystemUiLyricModeFromSurface(reason, true, true);
+    }
+
+    private boolean activateSystemUiLyricModeFromPendingDraw(
+            TextView textView,
+            View recycler,
+            String reason) {
+        if (!lyricSurfaceReactivationPending
+                || textView == null
+                || recycler == null
+                || !textView.isAttachedToWindow()
+                || !recycler.isAttachedToWindow()
+                || recycler.getVisibility() != View.VISIBLE) {
+            return false;
+        }
+        rememberActiveTextViewReference(textView);
+        prepareLyricSurfaceFromPendingDraw(recycler, "pending-draw");
+        View provisionalRecycler = lyricSurfaceProvisionalRecyclerView.get();
+        long now = SystemClock.elapsedRealtime();
+        if (provisionalRecycler != recycler
+                || now >= lyricSurfaceProvisionalDrawUntilElapsedMs) {
+            lyricSurfaceProvisionalRecyclerView = new WeakReference<>(recycler);
+            lyricSurfaceProvisionalDrawUntilElapsedMs =
+                    now + LYRIC_SURFACE_PROVISIONAL_DRAW_GRACE_MS;
+        }
+        return activateSystemUiLyricModeFromSurface(reason, true, false);
+    }
+
+    private boolean activateSystemUiLyricModeFromSurface(
+            String reason,
+            boolean confirmedLyricTextView,
+            boolean settleSurfaceReactivation) {
+        if ((currentWordLyricModel == null && !systemUiHasOfficialLyric)
+                || (!confirmedLyricTextView && !hasStableActiveLyricRefreshSurface())) {
+            return false;
+        }
+        if (settleSurfaceReactivation && lyricSurfaceReactivationPending) {
+            cancelLyricSurfaceReactivationCallbacks();
+        }
+        boolean changed = !systemUiLyricModeKeepAwakeActive;
+        systemUiLyricModeKeepAwakeActive = true;
+        screenTimeoutPausedByUserPresent = false;
+        lastSystemUiLyricModeLogAt = SystemClock.elapsedRealtime();
+        if (changed) {
+            // Entering the page is not proof that every rebound row has a custom display list.
+            // Keep any in-flight handoff until the bound surface is complete (or its existing
+            // timeout expires) instead of exposing the first successfully drawn active row.
+            maybeLogLyricModeKeepAwake(true);
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Observed active lyric surface from " + reason);
+            refreshLyricRenderingAfterModeChange(true);
+            mainHandler.post(this::refreshTranslationActionViewVisibility);
+            mainHandler.postDelayed(() -> {
+                discoverTranslationActionViewsNearRememberedLyrics();
+                refreshTranslationActionViewVisibility();
+            }, 960L);
+        } else {
+            scheduleActiveLyricRefresh(ACTIVE_LYRIC_FRAME_DELAY_MS);
+        }
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+        return true;
+    }
+
+    private void deactivateSystemUiLyricModeAfterSurfaceHidden() {
+        pauseLyricWakeTransitionIfHidden(null);
+        boolean changed = systemUiLyricModeKeepAwakeActive;
+        systemUiLyricModeKeepAwakeActive = false;
+        lyricModeRebindGeneration++;
+        if (lyricModeRebindRunnable != null) {
+            mainHandler.removeCallbacks(lyricModeRebindRunnable);
+            lyricModeRebindRunnable = null;
+        }
+        lastSystemUiLyricModeLogAt = SystemClock.elapsedRealtime();
+        cancelActiveLyricRefreshCallbacks(true);
+        if ((currentWordLyricModel == null && !systemUiHasOfficialLyric)
+                || !hasAttachedLyricsRecyclerView()) {
+            cancelLyricSurfaceReactivationCallbacks();
+        }
+        clearTrackedTranslationActionViews();
+        clearScreenTimeoutLyricEvidence();
+        if (changed) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Observed hidden lyric surface; stopping active lyric refresh");
+            mainHandler.post(this::refreshTranslationActionViewVisibility);
+        }
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+    }
+
+    private boolean retainLyricModeForTransientSurfaceMiss(String reason) {
+        long now = SystemClock.elapsedRealtime();
+        long elapsedSinceSurfaceSignal = lastSystemUiLyricModeLogAt <= 0L
+                ? -1L
+                : now - lastSystemUiLyricModeLogAt;
+        boolean retain = LockscreenIntegrationPolicy
+                .shouldRetainLyricModeForTransientSurfaceMiss(
+                        systemUiLyricModeKeepAwakeActive,
+                        currentWordLyricModel != null,
+                        lyricSurfaceReactivationPending,
+                        elapsedSinceSurfaceSignal,
+                        LYRIC_SURFACE_PROVISIONAL_DRAW_GRACE_MS);
+        if (!retain) {
+            return false;
+        }
+        scheduleActiveLyricRefresh(ACTIVE_LYRIC_RETRY_DELAY_MS);
+        if (now - lastTransientLyricSurfaceMissLogAt >= 500L) {
+            lastTransientLyricSurfaceMissLogAt = now;
+            info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Deferred lyric surface deactivation during transient visibility miss"
+                    + ", reason=" + reason
+                    + ", recyclerAttached=" + hasAttachedLyricsRecyclerView()
+                    + ", reactivationPending=" + lyricSurfaceReactivationPending
+                    + ", elapsedSinceSurfaceSignal=" + elapsedSinceSurfaceSignal);
+        }
+        return true;
+    }
+
+    private void maybeLogLyricModeKeepAwake(boolean active) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastSystemUiLyricModeStateLogAt < 1_500L) {
+            return;
+        }
+        lastSystemUiLyricModeStateLogAt = now;
+        info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Lockscreen lyric UI keep-awake " + (active ? "ON" : "OFF"));
+    }
+
+    @SuppressLint("WrongConstant")
+    private Object onSystemUiLoadLyricInBg(XposedInterface.Chain chain) throws Throwable {
+        String zhiPackage=findPlayerPackageInArgs(chain.getArgs());
+        if(!ZhiBridgeRuntime.enabledFor(zhiPackage)) return chain.proceed();
+        long loadEpoch = systemUiLyricPublicationGate.beginLoad();
+        rememberOplusMediaDataManager(chain.getThisObject());
+        Object[] normalizedArgs = null;
+        try {
+            Object metadataArg = chain.getArg(1);
+            if (metadataArg instanceof MediaMetadata) {
+                MediaMetadata metadata = (MediaMetadata) metadataArg;
+                String title = firstNonEmpty(
+                        getText(metadata, MediaMetadata.METADATA_KEY_TITLE),
+                        getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE));
+                String artist = firstNonEmpty(
+                        getText(metadata, MediaMetadata.METADATA_KEY_ARTIST),
+                        getText(metadata, MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
+                        getText(metadata, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE));
+                String album = getText(metadata, MediaMetadata.METADATA_KEY_ALBUM);
+                String packageName = findPlayerPackageInArgs(chain.getArgs());
+                String artworkPackage = firstNonEmpty(packageName, currentLyricProviderPackage);
+                if (isLxPlayerPackage(artworkPackage)) {
+                    MediaMetadata artworkMetadata = metadata;
+                    artworkProbe("SYSTEMUI_METADATA", () -> "package=" + artworkPackage
+                            + " | " + ArtworkDiagnostics.describeMetadata(artworkMetadata));
+                }
+                if (SystemUiLoadLyricPolicy.shouldNormalizeKuWoCarLyricIdentity(
+                        packageName,
+                        lastSystemUiSongName,
+                        lastSystemUiArtistName,
+                        title,
+                        artist)) {
+                    metadata = buildMetadataWithStableSystemUiIdentity(
+                            metadata,
+                            lastSystemUiSongName,
+                            lastSystemUiArtistName);
+                    title = lastSystemUiSongName;
+                    artist = lastSystemUiArtistName;
+                    normalizedArgs = chain.getArgs().toArray(new Object[0]);
+                    normalizedArgs[1] = metadata;
+                    info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED,
+                            "Normalized KuWo car-lyric metadata identity for SystemUI load");
+                }
+                String lyricInfo = ZhiBridgeRuntime.decorate(metadata, packageName);
+                LyricInfoContract.NormalizedPayload originalPayload =
+                        LyricInfoContract.parseLyricInfo(lyricInfo);
+                LyricInfoContract.NormalizedPayload normalizedPayload = applyModuleContentCleanup(
+                        originalPayload,
+                        title,
+                        artist,
+                        false);
+                normalizedPayload = LyricInfoContract.normalizeOfficialLyricInfo(
+                        normalizedPayload.lyricInfo);
+                LyricInfoContract.Payload payload = normalizedPayload.payload;
+                SystemUiLoadLyricPolicy.Action loadAction =
+                        SystemUiLoadLyricPolicy.decide(payload != null);
+                if (loadAction == SystemUiLoadLyricPolicy.Action.ACCEPT_PAYLOAD) {
+                    MediaMetadata effectiveMetadata = metadata;
+                    if (SystemUiLoadLyricPolicy.shouldRewriteMetadataLyricInfo(
+                            lyricInfo,
+                            normalizedPayload.lyricInfo)) {
+                        MediaMetadata normalizedMetadata =
+                                buildMetadataWithLyricInfoPreservingArtwork(
+                                        metadata,
+                                        normalizedPayload.lyricInfo,
+                                        title,
+                                        artist);
+                        ZhiBridgeRuntime.trackClone(metadata, normalizedMetadata);
+                        normalizedArgs = chain.getArgs().toArray(new Object[0]);
+                        normalizedArgs[1] = normalizedMetadata;
+                        effectiveMetadata = normalizedMetadata;
+                    }
+                    boolean committed;
+                    synchronized (wordLyricModelCacheLock) {
+                        committed = cacheSystemUiLyricModelLocked(
+                                chain,
+                                payload,
+                                originalPayload == null ? null : originalPayload.payload,
+                                loadEpoch,
+                                packageName,
+                                title,
+                                artist);
+                        if (committed) {
+                            lastSystemUiSongName = title;
+                            lastSystemUiArtistName = artist;
+                            lastSystemUiAlbumName = album;
+                            rememberSystemUiLyricLoadContext(
+                                    chain.getThisObject(),
+                                    chain.getArg(0),
+                                    effectiveMetadata,
+                                    packageName,
+                                    title,
+                                    artist);
+                        }
+                    }
+                    if (committed) {
+                        maybeLogOfficialLyricPayload(
+                                payload,
+                                normalizedPayload.changed,
+                                effectiveMetadata);
+                    }
+                } else {
+                    synchronized (wordLyricModelCacheLock) {
+                        if (systemUiLyricPublicationGate.canCommit(loadEpoch)) {
+                            lastSystemUiSongName = title;
+                            lastSystemUiArtistName = artist;
+                            lastSystemUiAlbumName = album;
+                            rememberSystemUiLyricLoadContext(
+                                    chain.getThisObject(),
+                                    chain.getArg(0),
+                                    metadata,
+                                    packageName,
+                                    title,
+                                    artist);
+                            clearCurrentLyricProvider(title, artist);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            error("Failed to read SystemUI lyricInfo", t);
+        }
+        return normalizedArgs == null ? chain.proceed() : chain.proceed(normalizedArgs);
+    }
+    private LyricInfoContract.NormalizedPayload applyModuleContentCleanup(
+            LyricInfoContract.NormalizedPayload normalized,
+            String fallbackTitle,
+            String fallbackArtist,
+            boolean rememberSnapshot) {
+        return applyModuleContentCleanup(
+                normalized,
+                fallbackTitle,
+                fallbackArtist,
+                rememberSnapshot,
+                lyricContentCleanupConfig);
+    }
+
+    private LyricInfoContract.NormalizedPayload applyModuleContentCleanup(
+            LyricInfoContract.NormalizedPayload normalized,
+            String fallbackTitle,
+            String fallbackArtist,
+            boolean rememberSnapshot,
+            LyricContentCleanupConfig cleanupConfig) {
+        if (normalized == null || normalized.payload == null
+                || normalized.payload.snapshotPositionMillis >= 0L) {
+            // Event-driven row indices must survive content cleanup unchanged.
+            return normalized;
+        }
+        try {
+            LyricContentCleanupConfig effectiveConfig = cleanupConfig == null
+                    ? LyricContentCleanupConfig.defaults()
+                    : cleanupConfig;
+            LyricInfoContract.Payload payload = normalized.payload;
+            String trackKey = firstNonEmpty(
+                    payload.trackKey,
+                    buildTrackKey(
+                            firstNonEmpty(payload.songName, fallbackTitle),
+                            firstNonEmpty(payload.artist, fallbackArtist)));
+            String originalDisplay = payload.lyric;
+            String originalRaw = payload.rawLyric;
+            if (rememberSnapshot) {
+                currentCleanupSnapshotTrackKey = trackKey;
+                currentCleanupSnapshotDisplayLyric = originalDisplay;
+                currentCleanupSnapshotRawLyric = firstNonEmpty(originalRaw, originalDisplay);
+                currentCleanupSnapshotTitle = firstNonEmpty(fallbackTitle, payload.songName);
+                currentCleanupSnapshotArtist = firstNonEmpty(fallbackArtist, payload.artist);
+            }
+            LyricOpeningCleanup.Result display = LyricOpeningCleanup.clean(
+                    originalDisplay,
+                    originalRaw,
+                    trackKey,
+                    effectiveConfig);
+            LyricOpeningCleanup.Result raw = LyricInfoContract.containsTimedLrc(originalRaw)
+                    ? LyricOpeningCleanup.clean(
+                    originalRaw,
+                    trackKey,
+                    effectiveConfig)
+                    : new LyricOpeningCleanup.Result(originalRaw, new ArrayList<>());
+            LyricOpeningCleanup.Result translation = LyricOpeningCleanup.clean(
+                    payload.translationLyric,
+                    originalRaw,
+                    trackKey,
+                    effectiveConfig);
+            if (TextUtils.equals(display.timedText, payload.lyric)
+                    && TextUtils.equals(raw.timedText, payload.rawLyric)
+                    && TextUtils.equals(translation.timedText, payload.translationLyric)) {
+                return normalized;
+            }
+            JSONObject object = new JSONObject(normalized.lyricInfo);
+            if (LyricInfoContract.containsTimedLrc(display.timedText)) {
+                object.put(LyricInfoContract.JSON_LYRIC, display.timedText);
+            }
+            if (LyricInfoContract.containsTimedLrc(raw.timedText)) {
+                object.put(LyricInfoContract.JSON_RAW_LYRIC, raw.timedText);
+            }
+            LyricInfoContract.replaceTranslationLyric(object, translation.timedText);
+            return LyricInfoContract.parseLyricInfo(object.toString());
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SETTINGS,
+                    "opening-cleanup-invalid",
+                    "Kept original timed lyrics because opening cleanup failed");
+            return normalized;
+        }
+    }
+
+    private void acceptCurrentLyricProvider(
+            XposedInterface.Chain chain,
+            LyricInfoContract.Payload payload,
+            String observedPackage,
+            String observedTitle,
+            String observedArtist) {
+        LyricInfoContract.Payload previousPayload = currentLyricProviderPayload;
+        String nextClockTrackKey = payloadTrackKey(payload);
+        boolean nativeClockTrackChanged = LockscreenIntegrationPolicy
+                .shouldResetNativePlaybackClock(
+                        isNativeV5Payload(payload),
+                        playbackClockTrackKey,
+                        nextClockTrackKey);
+        if (nativeClockTrackChanged || isLyricPayloadTrackChanged(previousPayload, payload)) {
+            resetSystemUiPlaybackPositionForLyricTrackChange(payload);
+        }
+        currentLyricProviderPayload = payload;
+        if (payload.snapshotPositionMillis >= 0L) {
+            info(BridgeDebugArea.LYRIC, BridgeEvents.DETAIL,
+                    "Snapshot accepted; current=" + payload.snapshotPositionMillis / 1000L);
+        }
+        currentLyricObservedTrackKey = buildTrackKey(observedTitle, observedArtist);
+        trackRevealPolicy.observe(currentLyricObservedTrackKey);
+        if (isNativeV5Payload(payload) && !TextUtils.isEmpty(nextClockTrackKey)) {
+            playbackClockTrackKey = nextClockTrackKey;
+        }
+        String packageName = !TextUtils.isEmpty(observedPackage)
+                ? observedPackage
+                : chain == null ? "" : findPlayerPackageInArgs(chain.getArgs());
+        if (!TextUtils.isEmpty(packageName)) {
+            bindCurrentLyricProviderPackage(packageName, "lyricInfo metadata");
+            scheduleSystemUiPlaybackControllerDiscovery(packageName);
+        } else if (isLyricPayloadTrackChanged(previousPayload, payload)) {
+            currentLyricProviderPackage = "";
+        }
+        requestSecondaryLyricLayoutRefresh();
+    }
+
+    private void restoreProviderWordLyricSurfaceAfterOfficialSuppression(String reason) {
+        screenTimeoutLyricEvidenceGraceUntilElapsedMs =
+                SystemClock.elapsedRealtime() + SCREEN_TIMEOUT_MODEL_EVIDENCE_GRACE_MS;
+        mainHandler.post(() -> {
+            restoreSuppressedLyricsRecyclerViews(false);
+            primeRememberedLyricsRecyclerViews(reason);
+            for (View recycler : snapshotLyricsRecyclerViews()) {
+                scheduleLyricSurfaceRenderPass(
+                        recycler,
+                        reason);
+            }
+            invalidateRememberedLyricViews();
+            refreshTranslationActionViewVisibility();
+        });
+    }
+
+    private void beginScreenStateLyricSettleWindow() {
+        suppressOfficialRowScaleAnimations(LYRIC_RECYCLER_SCREEN_STATE_SETTLE_MS);
+        beginLyricRecyclerSettleWindow(
+                lastLyricsRecyclerIndex,
+                LYRIC_RECYCLER_SCREEN_STATE_SETTLE_MS);
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (shouldModulePositionLyricsRecycler()) {
+                // Preserve the known-good one-shot AOD stabilization. On the bright lock screen,
+                // the official controller owns its SmoothScroller and child transforms.
+                stabilizeLyricsRecyclerScroll(recycler, "screen-state");
+            }
+            invalidateLyricsRecyclerDescendants(recycler);
+            requestLyricAnimationFrame(recycler);
+        }
+        // Screen transitions replace the previous cadence, including a queued AOD callback.
+        cancelActiveLyricRefreshCallbacks(false);
+        if (systemUiLyricModeKeepAwakeActive) {
+            long refreshDelayMillis = isAodLowFrameRateLyricMode()
+                    ? ACTIVE_LYRIC_RETRY_DELAY_MS : ACTIVE_LYRIC_FRAME_DELAY_MS;
+            TextView activeView = firstActiveLyricTextView();
+            if (activeView != null) {
+                scheduleActiveLyricRefresh(activeView, refreshDelayMillis);
+            } else {
+                scheduleActiveLyricRefresh(refreshDelayMillis);
+            }
+        }
+    }
+
+    private void beginLyricRecyclerSettleWindow(int officialIndex, long durationMs) {
+        long now = SystemClock.elapsedRealtime();
+        lyricRecyclerSettleUntilElapsedMs = Math.max(
+                lyricRecyclerSettleUntilElapsedMs,
+                now + Math.max(ACTIVE_LYRIC_RETRY_DELAY_MS, durationMs));
+        if (officialIndex >= 0) {
+            lyricRecyclerSettleOfficialIndex = officialIndex;
+        }
+    }
+
+    private boolean isLyricRecyclerSettleWindowActive() {
+        return SystemClock.elapsedRealtime() < lyricRecyclerSettleUntilElapsedMs;
+    }
+
+    private void suppressOfficialRowScaleAnimations(long durationMs) {
+        long now = SystemClock.elapsedRealtime();
+        officialRowScaleAnimationSuppressUntilElapsedMs = Math.max(
+                officialRowScaleAnimationSuppressUntilElapsedMs,
+                now + Math.max(0L, durationMs));
+    }
+
+    private boolean shouldAnimateOfficialRowScale(TextView textView) {
+        return textView != null
+                && textView.isAttachedToWindow()
+                && textView.getWindowVisibility() == View.VISIBLE
+                && SystemClock.elapsedRealtime() >= officialRowScaleAnimationSuppressUntilElapsedMs
+                && !isAodLowFrameRateLyricMode();
+    }
+
+    private boolean isAodLowFrameRateLyricMode() {
+        if (aodLowFrameRateLyricMode || screenTimeoutPausedByScreenOff) {
+            return true;
+        }
+        PowerManager powerManager = screenTimeoutPowerManager;
+        return powerManager != null && !powerManager.isInteractive();
+    }
+
+    private int lyricTextLengthLimit() {
+        // 1600 Unicode code points plus normalization spaces and surrogate pairs.
+        return hasSentenceWindow() ? 4800 : 240;
+    }
+
+    private boolean hasSentenceWindow() {
+        LyricInfoContract.Payload payload = currentLyricProviderPayload;
+        return payload != null && payload.snapshotPositionMillis >= 0L;
+    }
+
+    private boolean shouldModulePositionLyricsRecycler() {
+        if (hasSentenceWindow()) return true;
+        return LyricsRecyclerPolicy.shouldModulePosition(
+                aodLowFrameRateLyricMode,
+                isScreenInteractiveForWakeLock(),
+                systemUiOwnsNativeLyricsRecycler());
+    }
+
+    private boolean systemUiOwnsNativeLyricsRecycler() {
+        if (hasSentenceWindow()) return false;
+        LyricInfoContract.Payload payload = currentLyricProviderPayload;
+        if (payload != null) {
+            return isNativeV5Payload(payload);
+        }
+        return currentWordLyricModel != null;
+    }
+
+    private static boolean isNativeV5Payload(LyricInfoContract.Payload payload) {
+        return payload != null;
+    }
+
+    private void setAodLowFrameRateLyricMode(boolean enabled) {
+        aodLowFrameRateLyricMode = enabled;
+        officialLyricTextRenderer.setAodLowFrameRateMode(enabled);
+    }
+
+    private boolean isLyricPayloadTrackChanged(
+            LyricInfoContract.Payload previous,
+            LyricInfoContract.Payload next) {
+        if (previous == null || next == null) {
+            return false;
+        }
+        String previousKey = payloadTrackKey(previous);
+        String nextKey = payloadTrackKey(next);
+        return !TextUtils.isEmpty(previousKey)
+                && !TextUtils.isEmpty(nextKey)
+                && !previousKey.equals(nextKey);
+    }
+
+    private void resetSystemUiPlaybackPositionForLyricTrackChange(
+            LyricInfoContract.Payload payload) {
+        resetSystemUiPlaybackPositionForTrackChange(
+                payload == null ? "" : payload.songName,
+                payload == null ? "" : payload.artist,
+                "payload track change");
+    }
+
+    private void resetSystemUiPlaybackPositionForTrackChange(
+            String title,
+            String artist,
+            String reason) {
+        // A no-lyric intermediate track has no payload that could advance the native
+        // session generation. Invalidate the previous payload binding here so returning
+        // to the same cached song starts a fresh visual clock instead of inheriting the
+        // intermediate track's elapsed offset.
+        playbackClockTrackKey = "";
+        clearSeedlingActiveLyricHint();
+        clearActiveRendererTargets();
+        activeRendererWordLine = null;
+        activeLyricLine = "";
+        activeLyricLineTimeMs = -1L;
+        long now = SystemClock.elapsedRealtime();
+        lastComputedPositionMs = 0L;
+        lastComputedPositionElapsedMs = lastPlaybackIsPlaying
+                ? now
+                : -1L;
+        lastLyricsRecyclerIndex = 0;
+        resetAdaptiveLineTimedRecyclerFollow();
+        lastPrimedLyricsRecyclerView = new WeakReference<>(null);
+        lastPrimedLyricsRecyclerIndex = -1;
+        lyricTrackPositionResetGuardStartedAtElapsedMs = now;
+        lastOfficialLyricIndexObservedAtElapsedMs = -1L;
+        lyricTrackPositionResetGuardUntilElapsedMs =
+                now + SYSTEMUI_TRACK_RESET_POSITION_GUARD_MS;
+        if (now - lastLyricTrackPositionResetLogAt >= 1_500L) {
+            lastLyricTrackPositionResetLogAt = now;
+            info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED,
+                    "Reset SystemUI lyric playback position after " + reason
+                            + ", track=" + SensitiveFieldRedactor.trackHash(
+                            buildTrackKey(title, artist)));
+        }
+    }
+
+    private void extendLyricTrackPositionResetGuard() {
+        long now = SystemClock.elapsedRealtime();
+        if (lyricTrackPositionResetGuardStartedAtElapsedMs < 0L
+                || now > lyricTrackPositionResetGuardUntilElapsedMs) {
+            lyricTrackPositionResetGuardStartedAtElapsedMs = now;
+        }
+        lyricTrackPositionResetGuardUntilElapsedMs = Math.max(
+                lyricTrackPositionResetGuardUntilElapsedMs,
+                now + SYSTEMUI_TRACK_RESET_POSITION_GUARD_MS);
+    }
+
+    private static String findPlayerPackageInArgs(List<Object> args) {
+        for (int i = 0; i < args.size(); i++) {
+            Object arg = args.get(i);
+            if (arg instanceof String && looksLikePackageName((String) arg)) {
+                return (String) arg;
+            }
+        }
+        return "";
+    }
+
+    private static boolean looksLikePackageName(String value) {
+        if (TextUtils.isEmpty(value) || !value.equals(value.toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        int dots = 0;
+        boolean segmentHasCharacter = false;
+        for (int i = 0; i < value.length(); i++) {
+            char character = value.charAt(i);
+            if (character == '.') {
+                if (!segmentHasCharacter) {
+                    return false;
+                }
+                dots++;
+                segmentHasCharacter = false;
+            } else if (Character.isLetterOrDigit(character) || character == '_') {
+                segmentHasCharacter = true;
+            } else {
+                return false;
+            }
+        }
+        return dots >= 1 && segmentHasCharacter;
+    }
+
+    private void bindCurrentLyricProviderPackage(String packageName, String source) {
+        if (TextUtils.isEmpty(packageName) || packageName.equals(currentLyricProviderPackage)) {
+            return;
+        }
+        currentLyricProviderPackage = packageName;
+        lastSystemUiPackageSupported = true;
+        applyTranslationPreferenceForPackage(packageName);
+        info(BridgeDebugArea.LYRIC, BridgeEvents.DETAIL, "Accepted " + moduleManagedPlayerKind(packageName)
+                + " lyricInfo provider " + packageName + " from " + source);
+    }
+
+    private boolean tryBindCurrentLyricProvider(String packageName, String songName) {
+        LyricInfoContract.Payload payload = currentLyricProviderPayload;
+        if (payload == null || TextUtils.isEmpty(packageName)) {
+            return false;
+        }
+        if (!TextUtils.isEmpty(currentLyricProviderPackage)) {
+            return packageName.equals(currentLyricProviderPackage);
+        }
+        if (TextUtils.isEmpty(payload.songName)
+                || !WordLyricRenderSupport.normalizeLine(payload.songName).equals(WordLyricRenderSupport.normalizeLine(songName))) {
+            return false;
+        }
+        bindCurrentLyricProviderPackage(packageName, "matching SystemUI media data");
+        return true;
+    }
+
+    private boolean shouldRetainLyricModelDuringTransientLyricInfoMiss(
+            String title,
+            String artist) {
+        LyricInfoContract.Payload payload = currentLyricProviderPayload;
+        String boundTrackKey = currentLyricObservedTrackKey;
+        if (payload == null || TextUtils.isEmpty(boundTrackKey)) {
+            return false;
+        }
+        if (!LockscreenIntegrationPolicy.canRetainIdentityBoundPayload(
+                boundTrackKey,
+                TextUtils.isEmpty(title) ? "" : buildTrackKey(title, artist),
+                TextUtils.isEmpty(lastSystemUiSongName)
+                        ? ""
+                        : buildTrackKey(lastSystemUiSongName, lastSystemUiArtistName))) {
+            return false;
+        }
+        return currentWordLyricModel != null
+                && lastSystemUiPackageSupported
+                && payload != null;
+    }
+
+    private void clearCurrentLyricProvider() {
+        clearCurrentLyricProvider("", "");
+    }
+
+    private void clearCurrentLyricProvider(String title, String artist) {
+        if (ZhiBridgeRuntime.hasPendingLyricHandoff()) {
+            if (!TextUtils.isEmpty(title) && currentLyricProviderPayload != null
+                    && !payloadMatchesTrack(currentLyricProviderPayload, title, artist)) {
+                clearSystemUiLyricModelForTrackChange(title, artist);
+            } else {
+                clearPendingLyricRenderState();
+            }
+            return;
+        }
+        if (shouldRetainLyricModelDuringTransientLyricInfoMiss(title, artist)) {
+            screenTimeoutLyricEvidenceGraceUntilElapsedMs =
+                    SystemClock.elapsedRealtime() + SCREEN_TIMEOUT_MODEL_EVIDENCE_GRACE_MS;
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastTransientLyricInfoMissLogAt >= 1_500L) {
+                lastTransientLyricInfoMissLogAt = now;
+                info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Retained current SystemUI word lyric model during transient lyricInfo miss");
+            }
+            updateScreenTimeoutWakeLock(currentApplicationContext());
+            requestSecondaryLyricLayoutRefresh();
+            return;
+        }
+        if (!TextUtils.isEmpty(title)
+                && currentLyricProviderPayload != null
+                && !payloadMatchesTrack(currentLyricProviderPayload, title, artist)) {
+            clearSystemUiLyricModelForTrackChange(title, artist);
+            currentLyricProviderPackage = "";
+            lastSystemUiPackageSupported = false;
+            return;
+        }
+        if (currentWordLyricModel != null && hasAttachedLyricsRecyclerView()) {
+            beginOfficialLyricTrackHandoff("lyricInfo temporarily unavailable");
+        }
+        currentLyricProviderPayload = null;
+        currentLyricObservedTrackKey = "";
+        currentLyricProviderPackage = "";
+        lastSystemUiPackageSupported = false;
+        systemUiHasOfficialLyric = false;
+        cancelBrightLyricGeometryCommit();
+        currentWordLyricModel = null;
+        currentWordLyricModelSignature = "";
+        currentWordLyricModelTrackKey = "";
+        currentCleanupSnapshotTrackKey = "";
+        currentCleanupSnapshotRawLyric = "";
+        currentCleanupSnapshotDisplayLyric = "";
+        currentCleanupSnapshotTitle = "";
+        currentCleanupSnapshotArtist = "";
+        clearSeedlingActiveLyricHint();
+        deactivateSystemUiLyricModeAfterSurfaceHidden();
+        mainHandler.post(this::clearSystemUiPlaybackControllerBinding);
+        mainHandler.post(this::refreshTranslationActionViewVisibility);
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+    }
+
+    private void clearPendingLyricRenderState() {
+        ZhiBridgeRuntime.beginLyricHandoff("");
+        systemUiLyricPublicationGate.invalidate();
+        if (currentWordLyricModel != null || !pendingCustomLyricTakeoverFade) {
+            beginOfficialLyricTrackHandoff("provider lyrics pending");
+        }
+        currentLyricProviderPayload = null;
+        currentLyricObservedTrackKey = "";
+        systemUiHasOfficialLyric = false;
+        cancelBrightLyricGeometryCommit();
+        currentWordLyricModel = null;
+        currentWordLyricModelSignature = "";
+        currentWordLyricModelTrackKey = "";
+        resetAdaptiveLineTimedRecyclerFollow();
+        clearSeedlingActiveLyricHint();
+        clearActiveRendererTargets();
+        activeRendererWordLine = null;
+        officialLyricTextRenderer.clearGlowCache();
+        // Keep the native session clock and cover bound while the provider catches up.
+        mainHandler.post(this::refreshTranslationActionViewVisibility);
+    }
+
+    private Object onSeedlingMediaBundle(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        if (!(result instanceof Bundle)) {
+            return result;
+        }
+        try {
+            Bundle root = (Bundle) result;
+            ArrayList<?> mediaList = root.getParcelableArrayList("mediaList");
+            if (mediaList == null) {
+                readSeedlingMediaBundle(root);
+            } else {
+                for (Object item : mediaList) {
+                    if (item instanceof Bundle && readSeedlingMediaBundle((Bundle) item)) {
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            error("Failed to read Seedling media bundle playback state", t);
+        }
+        return result;
+    }
+
+    private boolean readSeedlingMediaBundle(Bundle mediaData) {
+        String packageName = mediaData.getString("packageName", "");
+        if (isLxPlayerPackage(packageName)) {
+            artworkProbe("SEEDLING_BUNDLE", () -> ArtworkDiagnostics.describeSeedlingBundle(mediaData));
+        }
+        String songName = charSequenceToString(mediaData.getCharSequence("songName"));
+        if (!isCurrentLyricProviderPackage(packageName)
+                && !tryBindCurrentLyricProvider(packageName, songName)) {
+            return false;
+        }
+
+        String artistName = charSequenceToString(mediaData.getCharSequence("artist"));
+        boolean hasSystemUiTrackTitle = !TextUtils.isEmpty(songName);
+        int state = mediaData.getInt("state", -1);
+        long storedPosition = mediaData.getLong("position", -1L);
+        long lastPositionUpdateTime =
+                mediaData.getLong("lastPositionUpdateTime", -1L);
+        float speed = mediaData.getFloat("playbackSpeed", 1f);
+        long computedPosition = computeSeedlingPosition(
+                state,
+                storedPosition,
+                lastPositionUpdateTime,
+                speed);
+        String previousTrackKey = buildTrackKey(
+                lastSystemUiSongName,
+                lastSystemUiArtistName);
+        String nextTrackKey = buildTrackKey(songName, artistName);
+        boolean systemUiTrackIdentityChanged = hasSystemUiTrackTitle
+                && !TextUtils.isEmpty(nextTrackKey)
+                && !nextTrackKey.equals(previousTrackKey);
+        if (systemUiTrackIdentityChanged) {
+            lastSystemUiTrackIdentityChangedAtElapsedMs = SystemClock.elapsedRealtime();
+            trackRevealPolicy.observe(nextTrackKey);
+        }
+        boolean systemUiTrackChanged = hasSystemUiTrackTitle
+                && lastSystemUiPackageSupported
+                && !TextUtils.isEmpty(lastSystemUiSongName)
+                && !previousTrackKey.equals(nextTrackKey);
+        if (systemUiTrackChanged
+                && !payloadMatchesTrack(currentLyricProviderPayload, songName, artistName)) {
+            clearSystemUiLyricModelForTrackChange(songName, artistName);
+        }
+        if (systemUiTrackChanged) {
+            resetSystemUiPlaybackPositionForTrackChange(
+                    songName,
+                    artistName,
+                    "media track change");
+            if (isPlaybackStateInMotion(state) && storedPosition > 3_000L) {
+                storedPosition = 0L;
+                computedPosition = 0L;
+            }
+        }
+        rememberSeedlingActiveLyric(
+                charSequenceToString(mediaData.getCharSequence("currentLyric")),
+                computedPosition);
+        lastSystemUiPackageSupported = true;
+        if (hasSystemUiTrackTitle) {
+            lastSystemUiSongName = songName;
+            lastSystemUiArtistName = artistName;
+        }
+
+        rememberSystemUiPlaybackState(
+                state,
+                storedPosition,
+                computedPosition,
+                speed,
+                lastPositionUpdateTime);
+        return true;
+    }
+
+    private void rememberMediaControllerPlaybackState(
+            String packageName,
+            Object controllerObject) {
+        if (!(controllerObject instanceof MediaController)
+                || TextUtils.isEmpty(packageName)) {
+            return;
+        }
+        if (!TextUtils.isEmpty(currentLyricProviderPackage)) {
+            if (!packageName.equals(currentLyricProviderPackage)) {
+                return;
+            }
+        } else if (!isModuleManagedPlayerPackage(packageName)) {
+            return;
+        }
+
+        MediaController controller = (MediaController) controllerObject;
+        ensureSystemUiPlaybackControllerCallback(packageName, controller);
+        PlaybackState playbackState = controller.getPlaybackState();
+        if (playbackState == null) {
+            return;
+        }
+        rememberSystemUiPlaybackState(playbackState);
+    }
+
+    private final class PlaybackControllerBinding {
+        final MediaController controller;
+        final Object token;
+        final String packageName;
+        final long epoch;
+        final MediaController.Callback callback;
+
+        PlaybackControllerBinding(
+                MediaController controller,
+                Object token,
+                String packageName,
+                long epoch) {
+            this.controller = controller;
+            this.token = token;
+            this.packageName = packageName;
+            this.epoch = epoch;
+            this.callback = new MediaController.Callback() {
+                @Override
+                public void onPlaybackStateChanged(PlaybackState state) {
+                    onBoundPlaybackStateChanged(
+                            PlaybackControllerBinding.this,
+                            state);
+                }
+
+                @Override
+                public void onSessionDestroyed() {
+                    onBoundPlaybackSessionDestroyed(PlaybackControllerBinding.this);
+                }
+            };
+        }
+
+        boolean matches(MediaController candidate, Object candidateToken, String candidatePackage) {
+            return packageName.equals(candidatePackage)
+                    && (controller == candidate || sameSessionToken(token, candidateToken));
+        }
+    }
+
+    private void onBoundPlaybackStateChanged(
+            PlaybackControllerBinding source,
+            PlaybackState state) {
+        if (state == null || !isCurrentPlaybackControllerBinding(source)) {
+            return;
+        }
+        if (!TextUtils.isEmpty(currentLyricProviderPackage)
+                && !source.packageName.equals(currentLyricProviderPackage)) {
+            return;
+        }
+        rememberSystemUiPlaybackState(state);
+        invalidateRememberedLyricViews();
+        TextView activeView = firstActiveLyricTextView();
+        if (activeView != null) {
+            scheduleActiveLyricRefresh(activeView, ACTIVE_LYRIC_FRAME_DELAY_MS);
+        }
+    }
+
+    private void onBoundPlaybackSessionDestroyed(PlaybackControllerBinding source) {
+        synchronized (systemUiPlaybackControllerLock) {
+            if (systemUiPlaybackControllerBinding == source) {
+                systemUiPlaybackControllerBinding = null;
+            }
+        }
+    }
+
+    private boolean isCurrentPlaybackControllerBinding(PlaybackControllerBinding source) {
+        synchronized (systemUiPlaybackControllerLock) {
+            return source != null
+                    && systemUiPlaybackControllerBinding == source
+                    && LockscreenIntegrationPolicy.isCurrentPlaybackControllerEvent(
+                    source.epoch,
+                    nextSystemUiPlaybackControllerEpoch,
+                    source.packageName,
+                    systemUiPlaybackControllerBinding == null
+                            ? ""
+                            : systemUiPlaybackControllerBinding.packageName,
+                    systemUiPlaybackControllerBinding != null
+                            && sameSessionToken(
+                            source.token,
+                            systemUiPlaybackControllerBinding.token));
+        }
+    }
+
+    private static boolean sameSessionToken(Object left, Object right) {
+        return left == right || (left != null && left.equals(right));
+    }
+
+    private void scheduleSystemUiPlaybackControllerDiscovery(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return;
+        }
+        PlaybackControllerBinding existing;
+        synchronized (systemUiPlaybackControllerLock) {
+            existing = systemUiPlaybackControllerBinding;
+        }
+        if (existing != null && packageName.equals(existing.packageName)) {
+            rememberSystemUiPlaybackState(existing.controller.getPlaybackState());
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (packageName.equals(lastPlaybackControllerDiscoveryPackage)
+                && lastPlaybackControllerDiscoveryElapsedMs >= 0L
+                && now - lastPlaybackControllerDiscoveryElapsedMs < 750L) {
+            return;
+        }
+        lastPlaybackControllerDiscoveryPackage = packageName;
+        lastPlaybackControllerDiscoveryElapsedMs = now;
+        mainHandler.post(() -> discoverSystemUiPlaybackController(packageName));
+    }
+
+    @SuppressLint("MissingPermission")
+    private void discoverSystemUiPlaybackController(String packageName) {
+        try {
+            PlaybackControllerBinding existing;
+            synchronized (systemUiPlaybackControllerLock) {
+                existing = systemUiPlaybackControllerBinding;
+            }
+            if (existing != null && packageName.equals(existing.packageName)) {
+                rememberSystemUiPlaybackState(existing.controller.getPlaybackState());
+                return;
+            }
+            Context context = currentApplicationContext();
+            if (context == null) {
+                return;
+            }
+            MediaSessionManager manager = (MediaSessionManager) context.getSystemService(
+                    Context.MEDIA_SESSION_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            List<MediaController> controllers = manager.getActiveSessions(null);
+            ArrayList<String> packages = new ArrayList<>(controllers.size());
+            for (MediaController controller : controllers) {
+                packages.add(controller == null ? "" : controller.getPackageName());
+            }
+            int selectedIndex = LockscreenIntegrationPolicy.uniquePackageMatchIndex(
+                    packages,
+                    packageName);
+            if (selectedIndex < 0 || selectedIndex >= controllers.size()) {
+                info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL,
+                        "Skipped playback controller discovery for package="
+                                + packageName
+                                + ", candidates=" + packages.size());
+                return;
+            }
+            rememberMediaControllerPlaybackState(packageName, controllers.get(selectedIndex));
+        } catch (Throwable t) {
+            error("Failed to discover active MediaController for " + packageName, t);
+        }
+    }
+
+    private void ensureSystemUiPlaybackControllerCallback(
+            String packageName,
+            MediaController controller) {
+        if (TextUtils.isEmpty(packageName) || controller == null) {
+            return;
+        }
+        Object token;
+        try {
+            token = controller.getSessionToken();
+        } catch (Throwable t) {
+            error("Failed to read MediaController session token", t);
+            return;
+        }
+        PlaybackControllerBinding previous;
+        PlaybackControllerBinding candidate;
+        synchronized (systemUiPlaybackControllerLock) {
+            previous = systemUiPlaybackControllerBinding;
+            if (previous != null && previous.matches(controller, token, packageName)) {
+                return;
+            }
+            candidate = new PlaybackControllerBinding(
+                    controller,
+                    token,
+                    packageName,
+                    ++nextSystemUiPlaybackControllerEpoch);
+            systemUiPlaybackControllerBinding = candidate;
+        }
+
+        if (previous != null) {
+            try {
+                previous.controller.unregisterCallback(previous.callback);
+            } catch (Throwable ignored) {
+                // A released/remote session may already have removed the callback.
+            }
+        }
+        try {
+            controller.registerCallback(candidate.callback, mainHandler);
+        } catch (Throwable t) {
+            synchronized (systemUiPlaybackControllerLock) {
+                if (systemUiPlaybackControllerBinding == candidate) {
+                    systemUiPlaybackControllerBinding = null;
+                }
+            }
+            error("Failed to register MediaController playback callback", t);
+            return;
+        }
+        if (!isCurrentPlaybackControllerBinding(candidate)) {
+            try {
+                controller.unregisterCallback(candidate.callback);
+            } catch (Throwable ignored) {
+                // A newer binding already owns playback events.
+            }
+            return;
+        }
+        info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED,
+                "Registered MediaController playback callback for package=" + packageName
+                        + ", epoch=" + candidate.epoch
+                        + ", token=" + SensitiveFieldRedactor.trackHash(String.valueOf(token)));
+    }
+
+    private void clearSystemUiPlaybackControllerBinding() {
+        PlaybackControllerBinding previous;
+        synchronized (systemUiPlaybackControllerLock) {
+            previous = systemUiPlaybackControllerBinding;
+            if (previous == null) {
+                return;
+            }
+            systemUiPlaybackControllerBinding = null;
+            nextSystemUiPlaybackControllerEpoch++;
+        }
+        try {
+            previous.controller.unregisterCallback(previous.callback);
+        } catch (Throwable ignored) {
+            // Released sessions may already have removed the callback.
+        }
+    }
+
+    private void rememberSystemUiPlaybackState(PlaybackState playbackState) {
+        if (playbackState == null) {
+            return;
+        }
+        int state = playbackState.getState();
+        long storedPosition = playbackState.getPosition();
+        float speed = playbackState.getPlaybackSpeed();
+        long computedPosition = LockscreenIntegrationPolicy.extrapolatePlaybackPosition(
+                isPlaybackStateInMotion(state),
+                storedPosition,
+                playbackState.getLastPositionUpdateTime(),
+                speed,
+                SystemClock.elapsedRealtime());
+        rememberSystemUiPlaybackState(
+                state,
+                storedPosition,
+                computedPosition,
+                speed,
+                playbackState.getLastPositionUpdateTime());
+    }
+
+    private void rememberSystemUiPlaybackState(
+            int state,
+            long storedPosition,
+            long computedPosition,
+            float speed,
+            long lastPositionUpdateTime) {
+        long previousPosition = estimatePlaybackPositionMillis();
+        long now = SystemClock.elapsedRealtime();
+        if (shouldIgnoreStalePlaybackPositionAfterTrackReset(
+                state,
+                previousPosition,
+                storedPosition,
+                computedPosition,
+                lastPositionUpdateTime,
+                now)) {
+            lastPlaybackIsPlaying = isPlaybackStateInMotion(state) && isFiniteNonZero(speed);
+            lastPlaybackSpeed = isFiniteNonZero(speed) ? speed : 0f;
+            lastComputedPositionMs = 0L;
+            lastComputedPositionElapsedMs = now;
+            lastSystemUiPlaybackState = state;
+            maybeLogIgnoredStalePlaybackPositionAfterTrackReset(
+                    storedPosition,
+                    computedPosition,
+                    previousPosition);
+            updateScreenTimeoutWakeLock(currentApplicationContext());
+            requestSecondaryLyricLayoutRefresh();
+            return;
+        }
+        boolean likelyTrackRestart = isPlaybackStateInMotion(state)
+                && LockscreenIntegrationPolicy.isLikelyPlaybackTrackRestart(
+                previousPosition,
+                computedPosition);
+        if (likelyTrackRestart) {
+            clearSeedlingActiveLyricHint();
+            clearActiveRendererTargets();
+            activeRendererWordLine = null;
+            beginOfficialLyricTrackHandoff("playback position reset");
+        }
+        long rawComputedPosition = computedPosition;
+        computedPosition = LockscreenIntegrationPolicy.smoothPlayingPosition(
+                lastSystemUiPlaybackState,
+                state,
+                previousPosition,
+                computedPosition,
+                LyricTimingTuningConstants.LyricGeneral.PLAYBACK_SMALL_CORRECTION_MS);
+        if (computedPosition != rawComputedPosition) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL,
+                    "Smoothed small playback clock correction, previousPosition="
+                            + previousPosition
+                            + ", rawPosition=" + rawComputedPosition
+                            + ", acceptedPosition=" + computedPosition);
+        }
+        long nextPosition = storedPosition >= 0 ? storedPosition : computedPosition;
+        if (isPlaybackStateInMotion(state) && isFiniteNonZero(speed) && computedPosition >= 0) {
+            lastPlaybackIsPlaying = true;
+            lastPlaybackSpeed = speed;
+            lastComputedPositionMs = computedPosition;
+            lastComputedPositionElapsedMs = SystemClock.elapsedRealtime();
+        } else if (state >= 0) {
+            lastPlaybackIsPlaying = false;
+            lastPlaybackSpeed = speed;
+            lastComputedPositionMs = nextPosition;
+            lastComputedPositionElapsedMs = -1L;
+        } else if (computedPosition >= 0) {
+            lastComputedPositionMs = computedPosition;
+            lastComputedPositionElapsedMs = SystemClock.elapsedRealtime();
+        }
+        lastSystemUiPlaybackState = state;
+        maybeLogSeedlingPlaybackState(state, nextPosition, computedPosition, speed);
+        long activePosition = resolvePlaybackStateActivePosition(
+                state,
+                nextPosition,
+                computedPosition);
+        boolean playbackPositionJump = shouldObserveLyricsPlaybackPositionJump(
+                state,
+                previousPosition,
+                activePosition);
+        if (playbackPositionJump) {
+            observeLyricsPlaybackPositionJump(previousPosition, activePosition);
+        }
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+        requestSecondaryLyricLayoutRefresh();
+    }
+
+    private static long resolvePlaybackStateActivePosition(
+            int state,
+            long nextPosition,
+            long computedPosition) {
+        if (isPlaybackStateInMotion(state) && computedPosition >= 0L) {
+            return computedPosition;
+        }
+        return nextPosition;
+    }
+
+    private boolean shouldObserveLyricsPlaybackPositionJump(
+            int state,
+            long previousPosition,
+            long nextPosition) {
+        if (currentWordLyricModel == null
+                || !systemUiLyricModeKeepAwakeActive
+                || previousPosition < 0L
+                || nextPosition < 0L) {
+            return false;
+        }
+        return LockscreenIntegrationPolicy.isPlaybackPositionJump(
+                state,
+                previousPosition,
+                nextPosition,
+                LYRIC_PLAYBACK_POSITION_JUMP_MS);
+    }
+
+    private boolean shouldIgnoreStalePlaybackPositionAfterTrackReset(
+            int state,
+            long previousPosition,
+            long storedPosition,
+            long computedPosition,
+            long lastPositionUpdateTime,
+            long now) {
+        if (!isPlaybackStateInMotion(state)
+                || now > lyricTrackPositionResetGuardUntilElapsedMs
+                || previousPosition < 0
+                || previousPosition > 1_000L) {
+            return false;
+        }
+        if (LockscreenIntegrationPolicy.isFreshPlaybackPositionAfterTrackReset(
+                lastPositionUpdateTime,
+                lyricTrackPositionResetGuardStartedAtElapsedMs)) {
+            return false;
+        }
+        long candidatePosition = Math.max(storedPosition, computedPosition);
+        return candidatePosition >= SYSTEMUI_TRACK_RESET_STALE_POSITION_MS;
+    }
+
+    private static boolean isPlaybackStateInMotion(int state) {
+        return state == 3 || state == 4 || state == 5;
+    }
+
+    private static boolean isFiniteNonZero(float speed) {
+        return speed != 0f && !Float.isNaN(speed) && !Float.isInfinite(speed);
+    }
+
+    private static long computeSeedlingPosition(
+            int state,
+            long storedPosition,
+            long lastPositionUpdateTime,
+            float speed) {
+        return LockscreenIntegrationPolicy.extrapolatePlaybackPosition(
+                isPlaybackStateInMotion(state),
+                storedPosition,
+                lastPositionUpdateTime,
+                speed,
+                SystemClock.elapsedRealtime());
+    }
+
+    private void rememberSeedlingActiveLyric(String currentLyric, long position) {
+        WordLyricModel model = currentWordLyricModel;
+        String normalized = WordLyricRenderSupport.normalizeLine(currentLyric);
+        if (model == null || TextUtils.isEmpty(normalized)) {
+            return;
+        }
+
+        WordLine line = model.findLineByText(normalized, position);
+        if (line == null) {
+            line = model.findLineByTranslation(normalized, position);
+        }
+        if (line == null) {
+            return;
+        }
+        lastSeedlingActiveLineTimeMs = line.timeMillis;
+        lastSeedlingActiveLineObservedAtMs = SystemClock.elapsedRealtime();
+    }
+
+    private void clearSeedlingActiveLyricHint() {
+        lastSeedlingActiveLineTimeMs = -1L;
+        lastSeedlingActiveLineObservedAtMs = -1L;
+    }
+
+    private void observeLyricsPlaybackPositionJump(
+            long previousPosition,
+            long requestedPosition) {
+        if (!systemUiLyricModeKeepAwakeActive || requestedPosition < 0L) {
+            return;
+        }
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null || model.lines.isEmpty()) {
+            return;
+        }
+        long position = estimatePlaybackPositionMillis();
+        if (position < 0L) {
+            position = requestedPosition;
+        }
+        if (position < 0L) {
+            return;
+        }
+        int targetLineIndex = model.displayIndexAt(position);
+        WordLine line = model.lineAt(targetLineIndex);
+        if (targetLineIndex < 0 || line == null) {
+            return;
+        }
+        activeLyricLine = line.normalizedText;
+        activeLyricLineTimeMs = line.timeMillis;
+        clearSeedlingActiveLyricHint();
+        clearActiveRendererTargets();
+        activeRendererWordLine = null;
+        int targetAdapterIndex = model.adapterIndexOfLine(line);
+        if (targetAdapterIndex < 0) {
+            targetAdapterIndex = targetLineIndex;
+        }
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (recycler == null || !recycler.isAttachedToWindow()) {
+                continue;
+            }
+            invalidateLyricsRecyclerDescendants(recycler);
+            requestLyricAnimationFrame(recycler);
+            scheduleLyricsRecyclerOwnershipSnapshots(
+                    recycler,
+                    "playback-jump-observed",
+                    targetAdapterIndex);
+        }
+        TextView activeView = firstActiveLyricTextView();
+        if (activeView != null) {
+            scheduleActiveLyricRefresh(activeView, ACTIVE_LYRIC_FRAME_DELAY_MS);
+        } else {
+            scheduleActiveLyricRefresh(ACTIVE_LYRIC_FRAME_DELAY_MS);
+        }
+        if (isLyricLayoutDiagnosticsEnabled()) {
+            info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Observed playback jump; SystemUI retains RecyclerView positioning"
+                    + ", previousPosition=" + previousPosition
+                    + ", targetPosition=" + position
+                    + ", targetLineIndex=" + targetLineIndex
+                    + ", targetAdapterIndex=" + targetAdapterIndex
+                    + ", line=" + shortenForLog(line.normalizedText));
+        }
+    }
+
+    private Object onTextViewOnDraw(XposedInterface.Chain chain) throws Throwable {
+        long performanceStartedAt = performanceSampler.begin();
+        try {
+            return drawOfficialLyricTextView(chain);
+        } finally {
+            performanceSampler.end(
+                    BridgePerformanceSampler.Metric.TEXT_VIEW_DRAW,
+                    performanceStartedAt);
+        }
+    }
+
+    private Object drawOfficialLyricTextView(XposedInterface.Chain chain) throws Throwable {
+        if (!officialLyricDrawCoordinator.shouldHandleDraw()) {
+            return chain.proceed();
+        }
+        Object thisObject = chain.getThisObject();
+        Object canvasArg = chain.getArg(0);
+        if (!(thisObject instanceof TextView) || !(canvasArg instanceof Canvas)) {
+            return chain.proceed();
+        }
+        return officialLyricDrawCoordinator.draw(
+                (TextView) thisObject,
+                (Canvas) canvasArg,
+                chain::proceed);
+    }
+
+    private Object onTextViewSetText(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        Object thisObject = chain.getThisObject();
+        if (thisObject instanceof TextView) {
+            TextView textView = (TextView) thisObject;
+            // An attached non-lyric TextView keeps its negative parent-chain result until the
+            // next attach. Clearing it on every setText made every SystemUI text bind rescan up
+            // to twelve ancestors. onViewAttachedToWindow already invalidates the sentinel after
+            // a real reparent, while pre-attach lookups are never negatively cached.
+            boolean lyricRow = hasCachedLyricTextView(textView)
+                    || isInLyricsRecyclerView(textView);
+            if (!lyricRow) {
+                return result;
+            }
+            // RecyclerView rebinds the same TextView without detaching it. Every text mutation is
+            // therefore a new bind epoch and must discard normalized/frame/parent cache state.
+            forgetLyricTextViewCaches(textView);
+            beginLyricTextBindEpoch(textView);
+            if (currentWordLyricModel != null) {
+                scheduleOfficialLyricSlotPrebind(textView);
+            }
+        }
+        return result;
+    }
+
+    private Object onViewAttachedToWindow(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        Object thisObject = chain.getThisObject();
+        if (!(thisObject instanceof View)) {
+            return result;
+        }
+
+        View view = (View) thisObject;
+        boolean textView = view instanceof TextView;
+        if (textView
+                && LYRICS_RECYCLER_MATCH_CACHE.get((TextView) view)
+                == NO_LYRICS_RECYCLER_MATCH) {
+            LYRICS_RECYCLER_MATCH_CACHE.remove((TextView) view);
+        }
+        boolean lyricsRecyclerView = !textView && isLyricsRecyclerView(view);
+        if (!textView && !lyricsRecyclerView) {
+            return result;
+        }
+        if (lyricsRecyclerView) {
+            View recyclerView = view;
+            suppressOfficialRowScaleAnimations(OFFICIAL_LYRIC_ROW_SCALE_ATTACH_SUPPRESS_MS);
+            configureOfficialLyricLineSpacing(recyclerView);
+            configureOfficialLyricScaleOwnership(recyclerView);
+            tryInstallLyricsRecyclerViewHook(recyclerView.getClass());
+            rememberLyricsRecyclerView(recyclerView);
+            scheduleLyricsRecyclerPrime(recyclerView);
+            scheduleLyricSurfaceRenderPass(recyclerView, "attached");
+            requestSecondaryLyricLayoutRefresh();
+            scheduleLyricsRecyclerOwnershipSnapshots(
+                    recyclerView,
+                    "attached",
+                    readLyricsRecyclerCurrentIndex(recyclerView));
+            if (recyclerView.getVisibility() == View.VISIBLE && recyclerView.isShown()) {
+                activateSystemUiLyricModeFromSurface("LyricsRecyclerView attachment");
+            }
+            if (!systemUiLyricModeKeepAwakeActive) {
+                scheduleLyricSurfaceReactivation("LyricsRecyclerView attachment");
+            }
+            scheduleActiveLyricRefresh(ACTIVE_LYRIC_FRAME_DELAY_MS);
+        }
+        if (textView && (hasCachedLyricTextView((TextView) view)
+                || isInLyricsRecyclerView((TextView) view))) {
+            TextView lyricTextView = (TextView) view;
+            View ownerRecycler = findContainingLyricsRecyclerView(lyricTextView);
+            if (ownerRecycler != null) {
+                rememberLyricsRecyclerView(ownerRecycler);
+                ensureLyricSurfaceRenderPass(ownerRecycler, "text-attached");
+                requestSecondaryLyricLayoutRefresh();
+            }
+            // Vendor binding can prepare scale pivots before the row has a laid-out width.
+            // Re-apply once the attach traversal has supplied stable dimensions so centered
+            // inactive rows do not scale around the logical-start edge.
+            lyricTextView.post(() -> {
+                if (lyricTextView.isAttachedToWindow()
+                        && isInLyricsRecyclerView(lyricTextView)) {
+                    applyOfficialLyricScalePivot(lyricTextView);
+                }
+            });
+            lyricTextView.removeOnLayoutChangeListener(
+                    OFFICIAL_LYRIC_SCALE_PIVOT_LAYOUT_LISTENER);
+            lyricTextView.addOnLayoutChangeListener(
+                    OFFICIAL_LYRIC_SCALE_PIVOT_LAYOUT_LISTENER);
+            forgetLyricTextViewCaches(lyricTextView);
+            ensureLyricTextBindEpoch(lyricTextView);
+            if (currentWordLyricModel != null) {
+                scheduleOfficialLyricSlotPrebind(lyricTextView);
+            }
+        }
+        return result;
+    }
+
+    private static boolean payloadMatchesTrack(
+            LyricInfoContract.Payload payload, String title, String artist) {
+        return LyricInfoTrackMatcher.payloadMatchesTrack(payload, title, artist);
+    }
+
+    private static String payloadTrackKey(LyricInfoContract.Payload payload) {
+        if (payload == null) {
+            return "";
+        }
+        if (!TextUtils.isEmpty(payload.trackKey)) {
+            return payload.trackKey;
+        }
+        if (TextUtils.isEmpty(payload.songName)) {
+            return "";
+        }
+        return buildTrackKey(payload.songName, payload.artist);
+    }
+
+    private void clearSystemUiLyricModelForTrackChange(String title, String artist) {
+        ZhiBridgeRuntime.beginLyricHandoff(buildTrackKey(title, artist));
+        systemUiLyricPublicationGate.invalidate();
+        resetSystemUiPlaybackPositionForTrackChange(
+                title,
+                artist,
+                "SystemUI track changed");
+        beginOfficialLyricTrackHandoff("SystemUI track changed");
+        currentLyricProviderPayload = null;
+        currentLyricObservedTrackKey = "";
+        systemUiHasOfficialLyric = false;
+        cancelBrightLyricGeometryCommit();
+        currentWordLyricModel = null;
+        currentWordLyricModelSignature = "";
+        currentWordLyricModelTrackKey = "";
+        resetAdaptiveLineTimedRecyclerFollow();
+        clearSeedlingActiveLyricHint();
+        clearActiveRendererTargets();
+        activeRendererWordLine = null;
+        officialLyricTextRenderer.clearGlowCache();
+        activeLyricLine = "";
+        activeLyricLineTimeMs = -1L;
+        clearScreenTimeoutLyricEvidence();
+        mainHandler.post(() -> {
+            refreshTranslationActionViewVisibility();
+            for (TextView textView : snapshotActiveTextViews()) {
+                textView.requestLayout();
+                textView.invalidate();
+            }
+        });
+        info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL,
+                "Cleared previous lyric model after track change, track="
+                        + SensitiveFieldRedactor.trackHash(buildTrackKey(title, artist)));
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+    }
+
+    private Object onViewWindowVisibilityChanged(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        Object visibility = chain.getArg(0);
+        if (visibility instanceof Integer && (Integer) visibility != View.VISIBLE
+                && chain.getThisObject() instanceof View
+                && (officialLyricTextRenderer.wakeTransition.isArmed()
+                || officialLyricTextRenderer.wakeTransition.isRunning())) {
+            // A window can disappear without changing its children's visibility or detaching.
+            pauseLyricWakeTransitionIfHidden((View) chain.getThisObject());
+        }
+        return result;
+    }
+
+    private Object onViewDetachedFromWindow(XposedInterface.Chain chain) throws Throwable {
+        Object thisObject = chain.getThisObject();
+        boolean lyricsRecyclerView = thisObject instanceof View
+                && isLyricsRecyclerView((View) thisObject)
+                && isRememberedLyricsRecyclerView((View) thisObject);
+        if (thisObject instanceof TextView
+                && hasCachedLyricTextView((TextView) thisObject)) {
+            ((TextView) thisObject).removeOnLayoutChangeListener(
+                    OFFICIAL_LYRIC_SCALE_PIVOT_LAYOUT_LISTENER);
+            forgetLyricTextViewCaches((TextView) thisObject);
+            forgetActiveRendererTarget((TextView) thisObject);
+        }
+        Object result = chain.proceed();
+        if (thisObject instanceof View) {
+            pauseLyricWakeTransitionIfHidden((View) thisObject);
+        }
+        if (lyricsRecyclerView) {
+            forgetLyricWakeSurfaceVisibility((View) thisObject);
+            cancelPendingNativeOverlapHandoff((View) thisObject);
+            forgetActiveRendererTarget((View) thisObject);
+        }
+        if (lyricsRecyclerView
+                && !hasActiveLyricRefreshSurface()
+                && !retainLyricModeForTransientSurfaceMiss("recycler detached")) {
+            deactivateSystemUiLyricModeAfterSurfaceHidden();
+        }
+        if (lyricsRecyclerView && !hasAttachedLyricsRecyclerView()) {
+            cancelLyricSurfaceReactivationCallbacks();
+        }
+        return result;
+    }
+
+    private Object onViewSetContentDescription(XposedInterface.Chain chain) throws Throwable {
+        Object descriptionArg = chain.getArg(0);
+        boolean translationDescription = descriptionArg instanceof CharSequence
+                && isTranslationActionDescription((CharSequence) descriptionArg);
+        if (!translationDescription && !translationActionTrackingActive) {
+            return chain.proceed();
+        }
+        Object result = chain.proceed();
+        Object thisObject = chain.getThisObject();
+        if (!(thisObject instanceof View)) {
+            return result;
+        }
+
+        View view = (View) thisObject;
+        if (translationDescription) {
+            translationButtonDebug("contentDescription matched translation action, view="
+                    + describeViewForLog(view)
+                    + ", description=" + descriptionArg);
+            rememberTranslationActionView(view, false);
+        } else if (isRememberedTranslationActionView(view)
+                && !isIconMatchedTranslationActionView(view)) {
+            translationButtonDebug("contentDescription changed on tracked action, scheduling recheck"
+                    + ", view=" + describeViewForLog(view)
+                    + ", description=" + descriptionArg);
+            // Binding briefly replaces the accessibility label before the matching icon/label is
+            // restored. Validate after the bind settles instead of forgetting the action eagerly.
+            mainHandler.postDelayed(
+                    () -> forgetTranslationActionViewIfRebound(view),
+                    LYRIC_VISIBILITY_RECOVERY_FIRST_DELAY_MS);
+        }
+        return result;
+    }
+
+    private Object onViewSetVisibility(XposedInterface.Chain chain) throws Throwable {
+        Object thisObject = chain.getThisObject();
+        Object visibilityArg = chain.getArg(0);
+        if (!(thisObject instanceof View) || !(visibilityArg instanceof Number)) {
+            return chain.proceed();
+        }
+
+        View view = (View) thisObject;
+        int requestedVisibility = ((Number) visibilityArg).intValue();
+        boolean lyricsRecyclerView = isLyricsRecyclerView(view);
+        if (!lyricsRecyclerView && !translationActionTrackingActive) {
+            Object result = chain.proceed();
+            if (requestedVisibility != View.VISIBLE) pauseLyricWakeTransitionIfHidden(null);
+            return result;
+        }
+        Object result;
+        if (requestedVisibility == View.VISIBLE
+                && isRememberedTranslationActionView(view)
+                && stillShowsTranslationToggle(view)
+                && PlayerTranslationTogglePolicy.shouldForceHideTrackedTranslationActionView(
+                        shouldManageTranslationActionViewVisibility(),
+                        currentTranslationCountForAction(),
+                        userWantsTranslationButton(currentTranslationPreferencePackage()))) {
+            Object[] args = chain.getArgs().toArray();
+            // Keep the action slot measured so previous/play/next remain centered.
+            args[0] = View.INVISIBLE;
+            translationButtonDebug("redirect translation action visibility VISIBLE->INVISIBLE"
+                    + ", state=" + describeTranslationButtonState()
+                    + ", view=" + describeViewForLog(view));
+            result = chain.proceed(args);
+        } else {
+            result = chain.proceed();
+        }
+        if (lyricsRecyclerView) {
+            mainHandler.post(this::refreshTranslationActionViewVisibility);
+            if (requestedVisibility == View.VISIBLE) {
+                rememberLyricsRecyclerView(view);
+                configureOfficialLyricScaleOwnership(view);
+                scheduleLyricsRecyclerPrime(view);
+                scheduleLyricSurfaceRenderPass(view, "visible");
+                scheduleLyricsRecyclerOwnershipSnapshots(
+                        view,
+                        "visibility-visible",
+                        readLyricsRecyclerCurrentIndex(view));
+                activateSystemUiLyricModeFromSurface("LyricsRecyclerView visibility");
+                if (!systemUiLyricModeKeepAwakeActive) {
+                    scheduleLyricSurfaceReactivation("LyricsRecyclerView visibility");
+                }
+            } else {
+                forgetActiveRendererTarget(view);
+                if (!hasActiveLyricRefreshSurface()
+                        && !retainLyricModeForTransientSurfaceMiss(
+                        "recycler visibility changed")) {
+                    deactivateSystemUiLyricModeAfterSurfaceHidden();
+                }
+            }
+        }
+        if (requestedVisibility != View.VISIBLE) pauseLyricWakeTransitionIfHidden(null);
+        return result;
+    }
+
+    private Object onImageViewSetImage(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        Object artworkView = chain.getThisObject();
+        if (artworkView instanceof ImageView) {
+            ImageView imageView = (ImageView) artworkView;
+            synchronized (translationActionViewsLock) {
+                if (!Boolean.TRUE.equals(
+                        translationActionPresentationInFlight.get(imageView))) {
+                    translationActionPresentationStates.remove(imageView);
+                }
+            }
+        }
+        if (artworkView instanceof ImageView
+                && isLxPlayerPackage(currentLyricProviderPackage)
+                && ArtworkDiagnostics.isLikelyArtworkView((ImageView) artworkView)) {
+            ImageView imageView = (ImageView) artworkView;
+            artworkProbe("FINAL_IMAGE_VIEW", () -> ArtworkDiagnostics.describeImageView(imageView));
+        }
+        if (translationIconAlphaFingerprint == null
+                || (!systemUiLyricModeKeepAwakeActive && !translationActionTrackingActive)) {
+            return result;
+        }
+        Object thisObject = chain.getThisObject();
+        if (thisObject instanceof ImageView) {
+            detectTranslationActionImageView((ImageView) thisObject, "image binding");
+        }
+        return result;
+    }
+
+    private void detectTranslationActionImageView(ImageView imageView, String reason) {
+        if (imageView == null
+                || translationIconAlphaFingerprint == null
+                || (!isRememberedTranslationActionView(imageView)
+                && !isNearRememberedLyricsRecyclerView(imageView))) {
+            return;
+        }
+        if (!looksLikeTranslationIcon(imageView.getDrawable())) {
+            return;
+        }
+        boolean newlyDetected = !isRememberedTranslationActionView(imageView);
+        rememberTranslationActionView(imageView, true);
+        if (newlyDetected) {
+            translationButtonDebug("Detected translation action view from " + reason);
+        }
+    }
+
+    private boolean isNearRememberedLyricsRecyclerView(View candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                    continue;
+                }
+                View candidateAncestor = candidate;
+                for (int candidateDepth = 0;
+                        candidateAncestor != null && candidateDepth < 9;
+                        candidateDepth++) {
+                    View recyclerAncestor = recycler;
+                    for (int recyclerDepth = 0;
+                            recyclerAncestor != null && recyclerDepth < 9;
+                            recyclerDepth++) {
+                        if (candidateAncestor == recyclerAncestor) {
+                            return true;
+                        }
+                        Object recyclerParent = recyclerAncestor.getParent();
+                        recyclerAncestor = recyclerParent instanceof View
+                                ? (View) recyclerParent
+                                : null;
+                    }
+                    Object candidateParent = candidateAncestor.getParent();
+                    candidateAncestor = candidateParent instanceof View
+                            ? (View) candidateParent
+                            : null;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void rememberTranslationActionView(View view) {
+        rememberTranslationActionView(view, false);
+    }
+
+    private void rememberTranslationActionView(View view, boolean iconMatched) {
+        if (view == null) {
+            return;
+        }
+        boolean added;
+        synchronized (translationActionViewsLock) {
+            Boolean previous = translationActionViews.get(view);
+            added = previous == null;
+            translationActionViews.put(view, iconMatched || Boolean.TRUE.equals(previous));
+            translationActionTrackingActive = true;
+        }
+        applyTranslationActionViewVisibility(view);
+        if (!added) {
+            return;
+        }
+        translationButtonDebug("Tracked translation action view, iconMatched=" + iconMatched
+                + ", attached=" + view.isAttachedToWindow()
+                + ", visibility=" + view.getVisibility());
+        view.post(() -> applyTranslationActionViewVisibility(view));
+        mainHandler.postDelayed(() -> applyTranslationActionViewVisibility(view), 64L);
+        mainHandler.postDelayed(() -> applyTranslationActionViewVisibility(view), 240L);
+    }
+
+    private void forgetTranslationActionView(View view) {
+        if (view == null) {
+            return;
+        }
+        synchronized (translationActionViewsLock) {
+            translationActionViews.remove(view);
+            translationActionTrackingActive = !translationActionViews.isEmpty();
+        }
+    }
+
+    private void clearTrackedTranslationActionViews() {
+        synchronized (translationActionViewsLock) {
+            translationActionViews.clear();
+            translationActionTrackingActive = false;
+        }
+    }
+
+    private void forgetTranslationActionViewIfRebound(View view) {
+        if (view == null
+                || !isRememberedTranslationActionView(view)
+                || isTranslationActionDescription(view.getContentDescription())) {
+            return;
+        }
+        if (view instanceof ImageView
+                && looksLikeTranslationIcon(((ImageView) view).getDrawable())) {
+            rememberTranslationActionView(view, true);
+            return;
+        }
+        translationButtonDebug("forget translation action after rebound, view="
+                + describeViewForLog(view)
+                + ", description=" + view.getContentDescription());
+        forgetTranslationActionView(view);
+    }
+
+    private boolean isRememberedTranslationActionView(View view) {
+        synchronized (translationActionViewsLock) {
+            return translationActionViews.containsKey(view);
+        }
+    }
+
+    private boolean isIconMatchedTranslationActionView(View view) {
+        synchronized (translationActionViewsLock) {
+            return Boolean.TRUE.equals(translationActionViews.get(view));
+        }
+    }
+
+    private void refreshTranslationActionViewVisibility() {
+        ArrayList<View> views;
+        synchronized (translationActionViewsLock) {
+            views = new ArrayList<>(translationActionViews.keySet());
+        }
+        translationButtonDebug("refresh translation action views, count=" + views.size()
+                + ", state=" + describeTranslationButtonState());
+        for (View view : views) {
+            applyTranslationActionViewVisibility(view);
+        }
+    }
+
+    private void applyTranslationActionViewVisibility(View view) {
+        if (view == null || !isRememberedTranslationActionView(view)) {
+            return;
+        }
+        // The media card recycles button views across tracks. If this slot no longer shows the
+        // translation toggle (for example the player's own favorite returned for a song without
+        // translation), stop managing it so the player's button stays visible.
+        if (!stillShowsTranslationToggle(view)) {
+            forgetTranslationActionViewIfRebound(view);
+            if (!isRememberedTranslationActionView(view)) {
+                return;
+            }
+        }
+        applyTranslationActionViewPresentation(view);
+        // Before the immersive lyric surface is attached, leave the action at ColorOS' requested
+        // visibility. Hiding it during the pre-bind phase can strand a recycled view INVISIBLE.
+        if (!shouldManageTranslationActionViewVisibility()) {
+            translationButtonDebug("skip translation view visibility management"
+                    + ", state=" + describeTranslationButtonState()
+                    + ", view=" + describeViewForLog(view));
+            return;
+        }
+        int translationCount = currentTranslationCountForAction();
+        boolean userWantsButton = userWantsTranslationButton(
+                currentTranslationPreferencePackage());
+        if (!PlayerTranslationTogglePolicy.shouldForceShowTrackedTranslationActionView(
+                true, translationCount, userWantsButton)
+                && !PlayerTranslationTogglePolicy.shouldForceHideTrackedTranslationActionView(
+                true, translationCount, userWantsButton)) {
+            translationButtonDebug("leave translation view visibility during lyric-model gap"
+                    + ", state=" + describeTranslationButtonState()
+                    + ", view=" + describeViewForLog(view));
+            return;
+        }
+        int targetVisibility = PlayerTranslationTogglePolicy
+                .shouldForceShowTrackedTranslationActionView(
+                        true,
+                        translationCount,
+                        userWantsButton)
+                ? View.VISIBLE
+                : View.INVISIBLE;
+        if (view.getVisibility() != targetVisibility) {
+            view.setVisibility(targetVisibility);
+            WordLyricModel model = currentWordLyricModel;
+            translationButtonDebug("Updated translation action view visibility=" + targetVisibility
+                    + ", translations=" + (model == null ? -1 : model.translationCount())
+                    + ", attached=" + view.isAttachedToWindow());
+            translationButtonDebug("applied translation view visibility=" + targetVisibility
+                    + ", state=" + describeTranslationButtonState()
+                    + ", view=" + describeViewForLog(view));
+        }
+    }
+
+    private int currentTranslationCountForAction() {
+        // Avoid the parser lock on SystemUI's UI thread. Reject a mixed publication snapshot.
+        WordLyricModel model = currentWordLyricModel;
+        LyricInfoContract.Payload payload = currentLyricProviderPayload;
+        String modelKey = currentWordLyricModelTrackKey;
+        String providerPackage = currentLyricProviderPackage;
+        if (!ZhiBridgeRuntime.isCurrentPlayerPackage(providerPackage)
+                || !ZhiBridgeRuntime.hasCurrentPayload()
+                || (payload != null && !TextUtils.isEmpty(lastSystemUiSongName)
+                && !payloadMatchesTrack(payload, lastSystemUiSongName, lastSystemUiArtistName))) return -1;
+        int modelCount = model != null && payload != null && modelKey.equals(payloadTrackKey(payload))
+                ? model.translationCount() : -1;
+        int count = PlayerTranslationTogglePolicy.effectiveTranslationCount(modelCount,
+                payload == null ? null : payload.translationLyric);
+        return payload == currentLyricProviderPayload && model == currentWordLyricModel
+                && modelKey.equals(currentWordLyricModelTrackKey)
+                && providerPackage.equals(currentLyricProviderPackage) ? count : -1;
+    }
+
+    private void applyTranslationActionViewPresentation(View view) {
+        if (view == null) return;
+        boolean enabled = isLyricInfoTranslationEnabled(
+                currentTranslationPreferencePackage());
+        String description = TranslationActionPresentationPolicy.contentDescription(enabled);
+        CharSequence currentDescription = view.getContentDescription();
+        if (!TextUtils.equals(currentDescription, description)) {
+            view.setContentDescription(description);
+        }
+        ImageView imageView = findTranslationActionImageView(
+                view,
+                0,
+                isTranslationActionDescription(view.getContentDescription())
+                        || isRememberedTranslationActionView(view));
+        if (imageView == null) return;
+        synchronized (translationActionViewsLock) {
+            if (Boolean.TRUE.equals(translationActionPresentationInFlight.get(imageView))) {
+                return;
+            }
+            Boolean applied = translationActionPresentationStates.get(imageView);
+            if (applied != null && applied == enabled) return;
+            translationActionPresentationStates.put(imageView, enabled);
+            translationActionPresentationInFlight.put(imageView, true);
+        }
+        try {
+            if (!TextUtils.equals(imageView.getContentDescription(), description)) {
+                imageView.setContentDescription(description);
+            }
+            Drawable drawable = translationToggleActionBinder
+                    .createTranslationActionPresentationDrawable(
+                            currentTranslationPreferencePackage(),
+                            enabled);
+            if (drawable != null) {
+                // Match the official heart path: swap the bound action icon immediately instead
+                // of waiting for the next MediaData/PlaybackState rebuild.
+                imageView.setImageAlpha(255);
+                imageView.setImageDrawable(drawable);
+            } else {
+                imageView.setImageAlpha(
+                        TranslationActionPresentationPolicy.imageAlpha(enabled));
+            }
+            imageView.invalidate();
+            translationButtonDebug("Rebound translation action icon immediately"
+                    + ", drawable=" + (drawable != null)
+                    + ", alpha=" + TranslationActionPresentationPolicy.imageAlpha(enabled)
+                    + ", enabled=" + enabled
+                    + ", view=" + describeViewForLog(imageView));
+        } finally {
+            synchronized (translationActionViewsLock) {
+                translationActionPresentationInFlight.remove(imageView);
+            }
+        }
+    }
+
+    private ImageView findTranslationActionImageView(
+            View view,
+            int depth,
+            boolean trustedActionContainer) {
+        if (view == null || depth > 3) return null;
+        boolean trusted = trustedActionContainer
+                || isTranslationActionDescription(view.getContentDescription());
+        if (view instanceof ImageView) {
+            ImageView imageView = (ImageView) view;
+            return trusted
+                    || looksLikeTranslationIcon(imageView.getDrawable())
+                    || isRememberedTranslationActionView(imageView)
+                    ? imageView
+                    : null;
+        }
+        if (!(view instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup) view;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            ImageView match = findTranslationActionImageView(
+                    group.getChildAt(index),
+                    depth + 1,
+                    trusted);
+            if (match != null) return match;
+        }
+        return null;
+    }
+
+    private boolean stillShowsTranslationToggle(View view) {
+        if (isTranslationActionDescription(view.getContentDescription())) {
+            return true;
+        }
+        return view instanceof ImageView
+                && looksLikeTranslationIcon(((ImageView) view).getDrawable());
+    }
+
+    private boolean shouldManageTranslationActionViewVisibility() {
+        return systemUiLyricModeKeepAwakeActive && hasAttachedLyricsRecyclerView();
+    }
+
+    private String describeTranslationButtonState() {
+        WordLyricModel model = currentWordLyricModel;
+        return "package=" + nullToEmpty(currentTranslationPreferencePackage())
+                + ", provider=" + nullToEmpty(currentLyricProviderPackage)
+                + ", modeActive=" + systemUiLyricModeKeepAwakeActive
+                + ", recyclerAttached=" + hasAttachedLyricsRecyclerView()
+                + ", model=" + (model != null)
+                + ", translations=" + (model == null ? -1 : model.translationCount())
+                + ", trackedViews=" + rememberedTranslationActionViewCount()
+                + ", enabled=" + isLyricInfoTranslationEnabledFromCache(
+                currentTranslationPreferencePackage());
+    }
+
+    private int rememberedTranslationActionViewCount() {
+        synchronized (translationActionViewsLock) {
+            return translationActionViews.size();
+        }
+    }
+
+    private static boolean isTranslationActionDescription(CharSequence description) {
+        return description != null
+                && description.toString().startsWith(
+                TRANSLATION_ACTION_DESCRIPTION_PREFIX);
+    }
+
+    private void rememberTranslationIconFingerprint(Drawable drawable) {
+        if (translationIconAlphaFingerprint != null) {
+            return;
+        }
+        byte[] fingerprint = renderDrawableAlphaFingerprint(drawable);
+        if (fingerprint == null) {
+            return;
+        }
+        translationIconAlphaFingerprint = fingerprint;
+    }
+
+    private void discoverTranslationActionViewsNearRememberedLyrics() {
+        if (!systemUiLyricModeKeepAwakeActive) {
+            return;
+        }
+        ArrayList<View> recyclers = new ArrayList<>();
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else if (recycler.isAttachedToWindow()) {
+                    recyclers.add(recycler);
+                }
+            }
+        }
+        for (View recycler : recyclers) {
+            discoverTranslationActionViewsNear(recycler);
+        }
+    }
+
+    private void scheduleTranslationActionViewRecovery() {
+        if (translationActionViewRecoveryPosted || !systemUiLyricModeKeepAwakeActive) {
+            return;
+        }
+        translationActionViewRecoveryPosted = true;
+        mainHandler.postDelayed(() -> {
+            translationActionViewRecoveryPosted = false;
+            discoverTranslationActionViewsNearRememberedLyrics();
+            refreshTranslationActionViewVisibility();
+        }, LYRIC_VISIBILITY_RECOVERY_FIRST_DELAY_MS);
+    }
+
+    private void discoverTranslationActionViewsNear(View anchor) {
+        if (anchor == null) {
+            return;
+        }
+        View root = anchor;
+        for (int i = 0; i < 32; i++) {
+            Object parent = root.getParent();
+            if (!(parent instanceof View)) {
+                break;
+            }
+            root = (View) parent;
+        }
+        long now = SystemClock.elapsedRealtime();
+        synchronized (translationRootLastScanAt) {
+            Long lastScanAt = translationRootLastScanAt.get(root);
+            if (lastScanAt != null && now - lastScanAt < 50L) {
+                return;
+            }
+            translationRootLastScanAt.put(root, now);
+        }
+
+        ArrayList<View> pending = new ArrayList<>();
+        pending.add(root);
+        int visited = 0;
+        while (!pending.isEmpty() && visited < 6_000) {
+            View view = pending.remove(pending.size() - 1);
+            visited++;
+            boolean descriptionMatched = isTranslationActionDescription(
+                    view.getContentDescription());
+            if (descriptionMatched) {
+                rememberTranslationActionView(view, false);
+            }
+            if (view instanceof ImageView
+                    && (descriptionMatched
+                    || (translationIconAlphaFingerprint != null
+                    && looksLikeTranslationIcon(((ImageView) view).getDrawable())))) {
+                rememberTranslationActionView(view, true);
+            }
+            if (!(view instanceof ViewGroup)) {
+                continue;
+            }
+            ViewGroup group = (ViewGroup) view;
+            for (int i = group.getChildCount() - 1; i >= 0; i--) {
+                View child = group.getChildAt(i);
+                if (child != null) {
+                    pending.add(child);
+                }
+            }
+        }
+    }
+
+    private boolean looksLikeTranslationIcon(Drawable drawable) {
+        byte[] expected = translationIconAlphaFingerprint;
+        if (drawable == null || expected == null) {
+            return false;
+        }
+        if (drawable instanceof BitmapDrawable) {
+            Bitmap bitmap = ((BitmapDrawable) drawable).getBitmap();
+            if (bitmap == null || bitmap.isRecycled()) {
+                return false;
+            }
+            synchronized (translationBitmapMatchCache) {
+                Boolean cached = translationBitmapMatchCache.get(bitmap);
+                if (cached != null) {
+                    return cached;
+                }
+            }
+            boolean matches = alphaFingerprintsMatch(
+                    expected,
+                    renderBitmapAlphaFingerprint(bitmap));
+            synchronized (translationBitmapMatchCache) {
+                translationBitmapMatchCache.put(bitmap, matches);
+            }
+            return matches;
+        }
+
+        String drawableClassName = drawable.getClass().getName();
+        if (!drawableClassName.contains("VectorDrawable")) {
+            return false;
+        }
+        synchronized (translationDrawableMatchCache) {
+            Boolean cached = translationDrawableMatchCache.get(drawable);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        boolean matches = alphaFingerprintsMatch(
+                expected,
+                renderDrawableAlphaFingerprint(drawable));
+        synchronized (translationDrawableMatchCache) {
+            translationDrawableMatchCache.put(drawable, matches);
+        }
+        return matches;
+    }
+
+    private static boolean alphaFingerprintsMatch(byte[] expected, byte[] actual) {
+        if (expected == null || actual == null || expected.length != actual.length) {
+            return false;
+        }
+
+        int expectedMax = 0;
+        int actualMax = 0;
+        for (int i = 0; i < expected.length; i++) {
+            expectedMax = Math.max(expectedMax, expected[i] & 0xff);
+            actualMax = Math.max(actualMax, actual[i] & 0xff);
+        }
+        if (expectedMax == 0 || actualMax == 0) {
+            return false;
+        }
+
+        int expectedThreshold = Math.max(8, expectedMax / 8);
+        int actualThreshold = Math.max(8, actualMax / 8);
+        int intersection = 0;
+        int union = 0;
+        int expectedPixels = 0;
+        int actualPixels = 0;
+        for (int i = 0; i < expected.length; i++) {
+            boolean expectedOn = (expected[i] & 0xff) >= expectedThreshold;
+            boolean actualOn = (actual[i] & 0xff) >= actualThreshold;
+            if (expectedOn) {
+                expectedPixels++;
+            }
+            if (actualOn) {
+                actualPixels++;
+            }
+            if (expectedOn && actualOn) {
+                intersection++;
+            }
+            if (expectedOn || actualOn) {
+                union++;
+            }
+        }
+        if (union == 0 || expectedPixels == 0 || actualPixels == 0) {
+            return false;
+        }
+        float areaRatio = actualPixels / (float) expectedPixels;
+        float overlap = intersection / (float) union;
+        return areaRatio >= 0.72f && areaRatio <= 1.38f && overlap >= 0.68f;
+    }
+
+    private static byte[] renderBitmapAlphaFingerprint(Bitmap source) {
+        if (source == null || source.isRecycled()) {
+            return null;
+        }
+        Bitmap software = null;
+        Bitmap scaled = null;
+        try {
+            software = source.getConfig() == Bitmap.Config.HARDWARE
+                    ? source.copy(Bitmap.Config.ARGB_8888, false)
+                    : source;
+            if (software == null || software.isRecycled()) {
+                return null;
+            }
+            scaled = Bitmap.createScaledBitmap(
+                    software,
+                    TRANSLATION_ICON_FINGERPRINT_SIZE,
+                    TRANSLATION_ICON_FINGERPRINT_SIZE,
+                    true);
+            byte[] alpha = new byte[
+                    TRANSLATION_ICON_FINGERPRINT_SIZE * TRANSLATION_ICON_FINGERPRINT_SIZE];
+            int index = 0;
+            for (int y = 0; y < TRANSLATION_ICON_FINGERPRINT_SIZE; y++) {
+                for (int x = 0; x < TRANSLATION_ICON_FINGERPRINT_SIZE; x++) {
+                    alpha[index++] = (byte) (scaled.getPixel(x, y) >>> 24);
+                }
+            }
+            return alpha;
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (scaled != null && scaled != software && scaled != source) {
+                scaled.recycle();
+            }
+            if (software != null && software != source) {
+                software.recycle();
+            }
+        }
+    }
+
+    private static byte[] renderDrawableAlphaFingerprint(Drawable drawable) {
+        if (drawable == null) {
+            return null;
+        }
+        Bitmap bitmap = null;
+        try {
+            bitmap = Bitmap.createBitmap(
+                    TRANSLATION_ICON_FINGERPRINT_SIZE,
+                    TRANSLATION_ICON_FINGERPRINT_SIZE,
+                    Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            android.graphics.Rect oldBounds = new android.graphics.Rect(drawable.getBounds());
+            int oldAlpha = drawable.getAlpha();
+            drawable.setBounds(
+                    0,
+                    0,
+                    TRANSLATION_ICON_FINGERPRINT_SIZE,
+                    TRANSLATION_ICON_FINGERPRINT_SIZE);
+            drawable.setAlpha(255);
+            drawable.draw(canvas);
+            drawable.setAlpha(oldAlpha);
+            drawable.setBounds(oldBounds);
+
+            byte[] alpha = new byte[
+                    TRANSLATION_ICON_FINGERPRINT_SIZE * TRANSLATION_ICON_FINGERPRINT_SIZE];
+            int index = 0;
+            for (int y = 0; y < TRANSLATION_ICON_FINGERPRINT_SIZE; y++) {
+                for (int x = 0; x < TRANSLATION_ICON_FINGERPRINT_SIZE; x++) {
+                    alpha[index++] = (byte) (bitmap.getPixel(x, y) >>> 24);
+                }
+            }
+            return alpha;
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+        }
+    }
+
+    private static String charSequenceToString(CharSequence value) {
+        return value == null ? "" : value.toString();
+    }
+
+    private String normalizedTextOf(TextView textView) {
+        if (textView == null) {
+            return "";
+        }
+        CharSequence value = textView.getText();
+        if (value == null) {
+            return "";
+        }
+        NormalizedTextSnapshot cached = normalizedLyricTextCache.get(textView);
+        if (cached != null
+                && cached.source == value
+                && cached.length == value.length()
+                && value instanceof String) {
+            return cached.normalized;
+        }
+        int contentHash = charSequenceContentHash(value);
+        if (cached != null
+                && cached.source == value
+                && cached.length == value.length()
+                && cached.contentHash == contentHash) {
+            return cached.normalized;
+        }
+        String text = value instanceof String ? (String) value : value.toString();
+        String normalized = WordLyricRenderSupport.normalizeLine(text);
+        normalizedLyricTextCache.put(
+                textView,
+                new NormalizedTextSnapshot(value, value.length(), contentHash, normalized));
+        return normalized;
+    }
+
+    private static int charSequenceContentHash(CharSequence value) {
+        if (value == null) {
+            return 0;
+        }
+        int hash = 0;
+        for (int i = 0; i < value.length(); i++) {
+            hash = 31 * hash + value.charAt(i);
+        }
+        return hash;
+    }
+
+    private Object onLyricsRecyclerSetCurrentLyric(XposedInterface.Chain chain) throws Throwable {
+        if (LyricsRecyclerPolicy.shouldSkipSetCurrentLyricHook(
+                Boolean.TRUE.equals(suppressLyricsRecyclerHook.get()))) {
+            return chain.proceed();
+        }
+        Object recycler = chain.getThisObject();
+        View recyclerView = recycler instanceof View ? (View) recycler : null;
+        LyricInfoContract.Payload snapshot = currentLyricProviderPayload;
+        if (snapshot != null && snapshot.snapshotPositionMillis >= 0L
+                && isOfficialTimedCurrentLyricExecutable(chain.getExecutable())) {
+            Object[] args = chain.getArgs().toArray(new Object[0]);
+            args[1] = TimedLyricMethodPolicy.position(snapshot.snapshotPositionMillis, (Long) args[1]);
+            syncNativeLyricsAnchor(recyclerView, resolveLyricsRecyclerTargetIndex(
+                    chain, recycler, args[1]));
+            Object result = chain.proceed(args);
+            if (recyclerView != null) {
+                rememberLyricsRecyclerView(recyclerView);
+                requestSecondaryLyricLayoutRefresh();
+            }
+            info(BridgeDebugArea.RENDERER, BridgeEvents.DETAIL,
+                    "Pinned native lyric clock; current=" + snapshot.snapshotPositionMillis / 1000L);
+            return result;
+        }
+        if (recyclerView != null) {
+            rememberLyricsRecyclerView(recyclerView);
+        }
+        boolean officialTimedCurrentLyric =
+                isOfficialTimedCurrentLyricExecutable(chain.getExecutable());
+        // Position only: the animate flag and the index/scroll transaction remain the vendor's.
+        Object[] guardedArgs = officialTimedCurrentLyric
+                ? guardTimedLyricArgs(chain, recyclerView)
+                : null;
+        int requestedTargetIndex = -1;
+        int previousOfficialIndex = -1;
+        LyricsRecyclerGeometry beforeGeometry = null;
+        try {
+            requestedTargetIndex = resolveLyricsRecyclerTargetIndex(
+                    chain,
+                    recycler,
+                    guardedArgs == null ? null : guardedArgs[1]);
+            if (recyclerView != null) {
+                previousOfficialIndex = readLyricsRecyclerCurrentIndex(recyclerView);
+                if (recyclerView.isShown()) {
+                    activateSystemUiLyricModeFromSurface("setCurrentLyric");
+                }
+                int geometryTarget = requestedTargetIndex >= 0
+                        ? requestedTargetIndex
+                        : previousOfficialIndex;
+                beforeGeometry = captureLyricsRecyclerGeometry(recyclerView, geometryTarget);
+            }
+        } catch (Throwable t) {
+            error("Failed while reading LyricsRecyclerView#setCurrentLyric", t);
+        }
+        // The vendor controller deliberately uses l(false, position) while the immersive page is
+        // alpha=0, and l(true, position) for ordinary progression. Do not rewrite that transaction:
+        // it is the single owner of n, SmoothScroller cancellation, adapter notifications and row
+        // transforms. Earlier seek/re-entry patches changed the boolean and raced those four pieces.
+        // Only the position may change: the controller entry aligns it, this call only guards it.
+        syncNativeLyricsAnchor(recyclerView, requestedTargetIndex);
+        Object result = guardedArgs != null ? chain.proceed(guardedArgs) : chain.proceed();
+        if (recyclerView != null) {
+            int officialIndex = readLyricsRecyclerCurrentIndex(recyclerView);
+            int observedTargetIndex = officialIndex >= 0
+                    ? officialIndex
+                    : requestedTargetIndex;
+            if (observedTargetIndex >= 0) {
+                rememberLyricsRecyclerTargetIndex(observedTargetIndex);
+            }
+            maybeLogLyricsRecyclerSetCurrentGeometry(
+                    observedTargetIndex,
+                    beforeGeometry,
+                    captureLyricsRecyclerGeometry(recyclerView, observedTargetIndex));
+            scheduleLyricsRecyclerOwnershipSnapshots(
+                    recyclerView,
+                    officialTimedCurrentLyric
+                            ? "official-current-timed"
+                            : "official-current-indexed",
+                    observedTargetIndex);
+            requestSecondaryLyricLayoutRefresh();
+        }
+        return result;
+    }
+
+    private int resolveLyricsRecyclerTargetIndex(
+            XposedInterface.Chain chain,
+            Object recycler,
+            Object guardedPosition) {
+        try {
+            Class<?>[] parameterTypes = chain.getExecutable().getParameterTypes();
+            if (parameterTypes.length > 0) {
+                Object first = chain.getArg(0);
+                if (first instanceof Integer) {
+                    return (Integer) first;
+                }
+            }
+            if (parameterTypes.length == 2
+                    && isBooleanParameter(parameterTypes[0])
+                    && (parameterTypes[1] == long.class || parameterTypes[1] == Long.class)) {
+                Object positionArg = guardedPosition != null ? guardedPosition : chain.getArg(1);
+                if (positionArg instanceof Number) {
+                    WordLyricModel model = currentWordLyricModel;
+                    if (model != null) {
+                        return model.adapterIndexAt(((Number) positionArg).longValue());
+                    }
+                }
+            }
+            return readLyricsRecyclerCurrentIndex(recycler);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private void rememberLyricsRecyclerTargetIndex(int targetIndex) {
+        if (targetIndex < 0) {
+            return;
+        }
+        lastLyricsRecyclerIndex = targetIndex;
+        beginLyricRecyclerSettleWindow(
+                targetIndex,
+                LYRIC_RECYCLER_SET_CURRENT_SETTLE_MS);
+        WordLyricModel model = currentWordLyricModel;
+        if (model != null) {
+            WordLine line = model.lineAtAdapterIndex(lastLyricsRecyclerIndex);
+            if (line != null) {
+                activeLyricLine = line.normalizedText;
+                activeLyricLineTimeMs = line.timeMillis;
+                long now = SystemClock.elapsedRealtime();
+                lastOfficialLyricIndexObservedAtElapsedMs = now;
+                lastSeedlingActiveLineTimeMs = line.timeMillis;
+                lastSeedlingActiveLineObservedAtMs = now;
+                TextView candidate = firstActiveLyricTextView();
+                if (candidate != null) {
+                    scheduleActiveLyricRefresh(candidate, 33L);
+                }
+            }
+        }
+        maybeLogRecyclerIndex(lastLyricsRecyclerIndex);
+    }
+
+    private static void stopLyricsRecyclerScroll(View recycler) {
+        tryInvokeNoArgByName(recycler, "stopScroll");
+    }
+
+    private void rememberLyricsRecyclerView(View recycler) {
+        if (recycler == null) {
+            return;
+        }
+        observeLyricWakeSurfaceVisibility(recycler);
+        rememberLyricsRecyclerAdapter(recycler);
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View existing = lyricsRecyclerViews.get(i).get();
+                if (existing == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else if (existing == recycler) {
+                    return;
+                }
+            }
+            if (lyricsRecyclerViews.size() >= 8) {
+                int removableIndex = -1;
+                for (int i = 0; i < lyricsRecyclerViews.size(); i++) {
+                    View existing = lyricsRecyclerViews.get(i).get();
+                    if (existing == null || !existing.isAttachedToWindow()) {
+                        removableIndex = i;
+                        break;
+                    }
+                }
+                lyricsRecyclerViews.remove(removableIndex >= 0 ? removableIndex : 0);
+            }
+            lyricsRecyclerViews.add(new WeakReference<>(recycler));
+        }
+        info(BridgeDebugArea.AOD, BridgeEvents.RECYCLER_ATTACHED, "Observed LyricsRecyclerView attachment"
+                + " | rvId=" + objectId(recycler)
+                + ", class=" + recycler.getClass().getName());
+    }
+
+    private void scheduleLyricSurfaceRenderPass(View recycler, String reason) {
+        if (recycler == null) {
+            return;
+        }
+        final int epoch;
+        final long startedAt = SystemClock.elapsedRealtime();
+        WordLyricModel model = currentWordLyricModel;
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            Integer previous = lyricSurfaceRenderEpochs.get(recycler);
+            epoch = previous == null
+                    ? 1
+                    : previous == Integer.MAX_VALUE ? 1 : previous + 1;
+            lyricSurfaceRenderEpochs.put(recycler, epoch);
+            lyricSurfaceReadinessStates.put(
+                    recycler,
+                    new LyricSurfaceReadinessState(epoch, model, startedAt));
+        }
+        invalidateLyricsRecyclerDescendants(recycler);
+        requestLyricAnimationFrame(recycler);
+        recycler.postOnAnimation(() -> continueLyricSurfaceRenderPass(
+                recycler,
+                model,
+                nullToEmpty(reason),
+                epoch,
+                1,
+                startedAt));
+    }
+
+    private int beginBrightLyricGeometryCommit(WordLyricModel model, String packageName) {
+        cancelAllPendingNativeOverlapHandoffs();
+        synchronized (brightLyricGeometryCommitLock) {
+            brightLyricGeometryCommitGeneration = brightLyricGeometryCommitGeneration
+                    == Integer.MAX_VALUE ? 1 : brightLyricGeometryCommitGeneration + 1;
+            pendingBrightLyricGeometryModel = model;
+            pendingBrightLyricGeometryPackage = packageName;
+            return brightLyricGeometryCommitGeneration;
+        }
+    }
+
+    private void cancelBrightLyricGeometryCommit() {
+        cancelAllPendingNativeOverlapHandoffs();
+        synchronized (brightLyricGeometryCommitLock) {
+            brightLyricGeometryCommitGeneration = brightLyricGeometryCommitGeneration
+                    == Integer.MAX_VALUE ? 1 : brightLyricGeometryCommitGeneration + 1;
+            pendingBrightLyricGeometryModel = null;
+            pendingBrightLyricGeometryPackage = "";
+        }
+    }
+
+    private boolean isCurrentBrightLyricGeometryCommit(
+            WordLyricModel model,
+            int generation) {
+        synchronized (brightLyricGeometryCommitLock) {
+            return generation == brightLyricGeometryCommitGeneration
+                    && pendingBrightLyricGeometryModel == model
+                    && currentWordLyricModel == model;
+        }
+    }
+
+    private void preparePublishedLyricModelGeometry(
+            WordLyricModel model,
+            int generation) {
+        if (!isCurrentBrightLyricGeometryCommit(model, generation)) {
+            return;
+        }
+        if (hasActiveLyricRefreshSurface()) {
+            activateSystemUiLyricModeFromSurface("lyric model ready");
+        }
+        refreshTranslationActionViewVisibility();
+        ArrayList<View> recyclers = snapshotLyricsRecyclerViews();
+        boolean deferBrightPixels = !isAodLowFrameRateLyricMode() && !recyclers.isEmpty();
+        prepareCurrentSecondaryLyricLayout(model, false);
+        for (View recycler : recyclers) {
+            configureOfficialLyricScaleOwnership(recycler);
+            applyVisibleLyricBlockHeights(recycler);
+            if (!deferBrightPixels) {
+                scheduleLyricSurfaceRenderPass(recycler, "model-ready");
+            }
+        }
+        // Preserve the known-good AOD position/prime order. The bright-screen barrier controls
+        // only custom pixels and never takes ownership of RecyclerView positioning.
+        primeRememberedLyricsRecyclerViews("model-ready");
+        if (!deferBrightPixels) {
+            finishBrightLyricGeometryCommit(model, generation, false);
+            invalidateRememberedLyricViews();
+            return;
+        }
+        View anchor = recyclers.get(0);
+        anchor.postOnAnimation(
+                () -> finishBrightLyricGeometryCommit(model, generation, true));
+        mainHandler.postDelayed(
+                () -> finishBrightLyricGeometryCommit(model, generation, true),
+                LYRIC_SURFACE_RENDER_PASS_MAX_MS);
+    }
+
+    private void finishBrightLyricGeometryCommit(
+            WordLyricModel model,
+            int generation,
+            boolean scheduleRenderPass) {
+        String committedPackage;
+        synchronized (brightLyricGeometryCommitLock) {
+            if (generation != brightLyricGeometryCommitGeneration
+                    || pendingBrightLyricGeometryModel != model
+                    || currentWordLyricModel != model
+                    || !ZhiBridgeRuntime.isCurrentPlayerPackage(pendingBrightLyricGeometryPackage)) {
+                return;
+            }
+            committedPackage = pendingBrightLyricGeometryPackage;
+            pendingBrightLyricGeometryModel = null;
+            pendingBrightLyricGeometryPackage = "";
+        }
+        ZhiBridgeRuntime.completeLyricHandoff(committedPackage);
+        boolean aodLowFrameRateMode = isAodLowFrameRateLyricMode();
+        boolean trackChanged = trackRevealPolicy.consumeCommittedTrack(
+                currentWordLyricModelTrackKey);
+        boolean revealCommittedModel = trackChanged &&
+                LockscreenIntegrationPolicy.shouldRevealCommittedBrightLyricModel(
+                        scheduleRenderPass,
+                        aodLowFrameRateMode,
+                        lyricUiConfig.motionMode);
+        if (revealCommittedModel) {
+            // Reveal the module-rendered lyric pixels after the new track geometry has landed.
+            // RecyclerView alpha remains owned by SystemUI, so this cannot cancel or overwrite the
+            // immersive-page/AOD surface transition that is running around the same handoff.
+            officialLyricTextRenderer.armTrackReveal();
+        }
+        refreshLyricViewsAfterTranslationToggle(++translationLayoutGeneration, false);
+        if (scheduleRenderPass) {
+            for (View recycler : snapshotLyricsRecyclerViews()) {
+                scheduleLyricSurfaceRenderPass(recycler, "model-geometry-committed");
+            }
+        }
+        invalidateRememberedLyricViews();
+        if (isLyricLayoutDiagnosticsEnabled()) {
+            info(BridgeDebugArea.AOD, BridgeEvents.AOD_TRANSITION, "Committed published lyric model geometry"
+                    + " | generation=" + generation
+                    + ", lines=" + (model == null ? 0 : model.lines.size())
+                    + ", reveal=" + revealCommittedModel
+                    + ", aod=" + aodLowFrameRateMode);
+        }
+    }
+
+    private void ensureLyricSurfaceRenderPass(View recycler, String reason) {
+        if (recycler == null) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            LyricSurfaceReadinessState state = lyricSurfaceReadinessStates.get(recycler);
+            if (state != null
+                    && state.model == currentWordLyricModel
+                    && !state.stableReady
+                    && now - state.startedAtElapsedMs <= LYRIC_SURFACE_RENDER_PASS_MAX_MS) {
+                return;
+            }
+        }
+        scheduleLyricSurfaceRenderPass(recycler, reason);
+    }
+
+    private void prepareLyricSurfaceFromPendingDraw(View recycler, String reason) {
+        if (recycler == null) {
+            return;
+        }
+        boolean prepare;
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            Integer previousGeneration = lyricSurfacePendingDrawGenerations.get(recycler);
+            prepare = previousGeneration == null
+                    || previousGeneration != lyricSurfaceReactivationGeneration;
+            if (prepare) {
+                lyricSurfacePendingDrawGenerations.put(
+                        recycler,
+                        lyricSurfaceReactivationGeneration);
+            }
+        }
+        if (!prepare) {
+            return;
+        }
+        rememberLyricsRecyclerView(recycler);
+        scheduleLyricSurfaceRenderPass(recycler, reason);
+    }
+
+    private void prepareLyricSurfaceFromVisibleSession(View recycler, String reason) {
+        if (recycler == null) {
+            return;
+        }
+        boolean prepare;
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            Integer previousGeneration = lyricSurfaceVisibleSessionGenerations.get(recycler);
+            prepare = previousGeneration == null || previousGeneration != lyricModeRebindGeneration;
+            if (prepare) {
+                lyricSurfaceVisibleSessionGenerations.put(recycler, lyricModeRebindGeneration);
+            }
+        }
+        if (!prepare) {
+            return;
+        }
+        rememberLyricsRecyclerView(recycler);
+        scheduleLyricSurfaceRenderPass(recycler, reason);
+    }
+
+    private void continueLyricSurfaceRenderPass(
+            View recycler,
+            WordLyricModel model,
+            String reason,
+            int epoch,
+            int frame,
+            long startedAt) {
+        LyricSurfaceReadinessState state;
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            Integer currentEpoch = lyricSurfaceRenderEpochs.get(recycler);
+            state = lyricSurfaceReadinessStates.get(recycler);
+            if (currentEpoch == null
+                    || currentEpoch != epoch
+                    || state == null
+                    || state.epoch != epoch
+                    || state.model != model) {
+                return;
+            }
+        }
+        if (!recycler.isAttachedToWindow() || currentWordLyricModel != model) {
+            return;
+        }
+
+        LyricSurfaceReadinessSnapshot snapshot = captureLyricSurfaceReadiness(
+                recycler,
+                model,
+                epoch);
+        boolean stableReady;
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            LyricSurfaceReadinessState currentState = lyricSurfaceReadinessStates.get(recycler);
+            if (currentState != state) {
+                return;
+            }
+            stableReady = state.observe(snapshot);
+        }
+        long elapsed = SystemClock.elapsedRealtime() - startedAt;
+        boolean exhausted = frame >= LYRIC_SURFACE_RENDER_PASS_MAX_FRAMES
+                || elapsed >= LYRIC_SURFACE_RENDER_PASS_MAX_MS;
+        if (stableReady || exhausted) {
+            if (isLyricLayoutDiagnosticsEnabled()) {
+                info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Prepared lyric surface render pass"
+                        + " | reason=" + reason
+                        + ", rvId=" + objectId(recycler)
+                        + ", epoch=" + epoch
+                        + ", frames=" + frame
+                        + ", stableReady=" + stableReady
+                        + ", required=" + snapshot.requiredFrames
+                        + ", ready=" + snapshot.readyFrames
+                        + ", children=" + snapshot.recyclerChildCount
+                        + ", itemCount=" + snapshot.adapterItemCount
+                        + ", elapsedMs=" + elapsed);
+            }
+            return;
+        }
+
+        invalidateLyricsRecyclerDescendants(recycler);
+        requestLyricAnimationFrame(recycler);
+        recycler.postOnAnimation(() -> continueLyricSurfaceRenderPass(
+                recycler,
+                model,
+                reason,
+                epoch,
+                frame + 1,
+                startedAt));
+    }
+
+    private void rememberLyricsRecyclerAdapter(View recycler) {
+        Object adapter = invokeNoArgByName(recycler, "getAdapter");
+        if (adapter == null) {
+            return;
+        }
+        synchronized (lyricsRecyclerAdaptersLock) {
+            for (int i = lyricsRecyclerAdapters.size() - 1; i >= 0; i--) {
+                Object existing = lyricsRecyclerAdapters.get(i).get();
+                if (existing == null) {
+                    lyricsRecyclerAdapters.remove(i);
+                } else if (existing == adapter) {
+                    return;
+                }
+            }
+            if (lyricsRecyclerAdapters.size() >= 8) {
+                lyricsRecyclerAdapters.remove(0);
+            }
+            lyricsRecyclerAdapters.add(new WeakReference<>(adapter));
+        }
+    }
+
+    private boolean isRememberedLyricsRecyclerAdapter(Object adapter) {
+        if (adapter == null) {
+            return false;
+        }
+        synchronized (lyricsRecyclerAdaptersLock) {
+            for (int i = lyricsRecyclerAdapters.size() - 1; i >= 0; i--) {
+                Object existing = lyricsRecyclerAdapters.get(i).get();
+                if (existing == null) {
+                    lyricsRecyclerAdapters.remove(i);
+                } else if (existing == adapter) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void scheduleLyricsRecyclerPrime(View recycler) {
+        if (recycler == null) {
+            return;
+        }
+        recycler.post(() -> {
+            primeLyricsRecyclerView(recycler, "attached");
+            if (LyricsRecyclerPolicy.shouldScheduleFollowUpPrime(
+                    hasBoundLyricsRecyclerChildren(recycler))) {
+                mainHandler.postDelayed(
+                        () -> primeLyricsRecyclerView(recycler, "attached-await-children"),
+                        180L);
+            }
+        });
+    }
+
+    private void primeRememberedLyricsRecyclerViews(String reason) {
+        ArrayList<View> recyclers = new ArrayList<>();
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else {
+                    recyclers.add(recycler);
+                }
+            }
+        }
+        for (View recycler : recyclers) {
+            primeLyricsRecyclerView(recycler, reason);
+        }
+    }
+
+    private void primeLyricsRecyclerView(View recycler, String reason) {
+        WordLyricModel model = currentWordLyricModel;
+        if (!LyricsRecyclerPolicy.hasPrimeInputs(
+                recycler != null,
+                model != null && !model.lines.isEmpty(),
+                recycler != null && recycler.isAttachedToWindow(),
+                recycler != null && recycler.getVisibility() == View.VISIBLE)
+                || recycler == null
+                || model == null) {
+            return;
+        }
+        if (!shouldModulePositionLyricsRecycler()) {
+            maybeLogLyricsRecyclerOwnershipSnapshot(
+                    recycler,
+                    "module-prime-skipped-" + nullToEmpty(reason),
+                    readLyricsRecyclerCurrentIndex(recycler));
+            return;
+        }
+        int targetIndex = resolveLyricsRecyclerPrimeTargetIndex(model);
+        WordLine targetLine = model.lineAtAdapterIndex(targetIndex);
+        stabilizeLyricsRecyclerScroll(recycler, "prime-" + reason);
+        boolean alreadyPrimed = lastPrimedLyricsRecyclerView.get() == recycler
+                && lastPrimedLyricsRecyclerIndex == targetIndex
+                && hasBoundLyricsRecyclerChildren(recycler);
+        boolean positioned = alreadyPrimed || invokeLyricsRecyclerSetCurrentLyric(recycler, targetIndex);
+        if (!positioned && hasSentenceWindow()) {
+            // Some firmware has no discoverable current-line method. Keep the same official
+            // RecyclerView geometry and use the existing layout-manager positioning fallback.
+            positioned = forceAlignLyricsRecyclerToIndex(recycler, targetIndex, "sentence-window");
+        }
+        applyVisibleLyricBlockHeights(recycler);
+        if (positioned && hasBoundLyricsRecyclerChildren(recycler)) {
+            lastPrimedLyricsRecyclerView = new WeakReference<>(recycler);
+            lastPrimedLyricsRecyclerIndex = targetIndex;
+            lastLyricsRecyclerIndex = targetIndex;
+            if (targetLine != null) {
+                activeLyricLine = targetLine.normalizedText;
+                activeLyricLineTimeMs = targetLine.timeMillis;
+            }
+            if (!alreadyPrimed) {
+                info(BridgeDebugArea.AOD, BridgeEvents.RECYCLER_PRIMED, "Primed LyricsRecyclerView at index=" + targetIndex + ", reason=" + reason);
+            }
+        }
+    }
+
+    private int resolveLyricsRecyclerPrimeTargetIndex(WordLyricModel model) {
+        if (model == null || model.lines.isEmpty()) {
+            return -1;
+        }
+        return model.adapterIndexAt(estimatePlaybackPositionMillis());
+    }
+
+    private boolean forceAlignLyricsRecyclerToIndex(
+            View recycler,
+            int targetIndex,
+            String reason) {
+        return forceAlignLyricsRecyclerToIndex(recycler, targetIndex, reason, true);
+    }
+
+    private boolean forceAlignLyricsRecyclerToIndex(
+            View recycler,
+            int targetIndex,
+            String reason,
+            boolean scheduleRetries) {
+        return forceAlignLyricsRecyclerToIndex(
+                recycler,
+                targetIndex,
+                reason,
+                scheduleRetries,
+                false);
+    }
+
+    private boolean forceAlignLyricsRecyclerToIndex(
+            View recycler,
+            int targetIndex,
+            String reason,
+            boolean scheduleRetries,
+            boolean allowNativeAdaptiveRecovery) {
+        if (recycler == null
+                || targetIndex < 0
+                || !recycler.isAttachedToWindow()
+                || (!shouldModulePositionLyricsRecycler()
+                && !allowNativeAdaptiveRecovery)) {
+            return false;
+        }
+        int generation = ++lyricRecyclerForceAlignGeneration;
+        int topOffset = computeLyricsRecyclerTopOffset(recycler, targetIndex);
+        boolean immediate = scrollLyricsRecyclerToPositionWithOffset(
+                recycler,
+                targetIndex,
+                topOffset);
+        if (immediate) {
+            maybeLogForcedLyricsRecyclerAlign(recycler, targetIndex, reason);
+        }
+        if (scheduleRetries) {
+            recycler.post(() -> alignLyricsRecyclerAfterLayout(
+                    recycler,
+                    targetIndex,
+                    generation,
+                    reason,
+                    allowNativeAdaptiveRecovery));
+            recycler.postDelayed(
+                    () -> alignLyricsRecyclerAfterLayout(
+                            recycler,
+                            targetIndex,
+                            generation,
+                            reason,
+                            allowNativeAdaptiveRecovery),
+                    64L);
+            recycler.postDelayed(
+                    () -> alignLyricsRecyclerAfterLayout(
+                            recycler,
+                            targetIndex,
+                            generation,
+                            reason,
+                            allowNativeAdaptiveRecovery),
+                    180L);
+            recycler.postDelayed(
+                    () -> alignLyricsRecyclerAfterLayout(
+                            recycler,
+                            targetIndex,
+                            generation,
+                            reason,
+                            allowNativeAdaptiveRecovery),
+                    320L);
+        }
+        return immediate;
+    }
+
+    private void alignLyricsRecyclerAfterLayout(
+            View recycler,
+            int targetIndex,
+            int generation,
+            String reason,
+            boolean allowNativeAdaptiveRecovery) {
+        boolean generationMatches = generation == lyricRecyclerForceAlignGeneration;
+        boolean attached = recycler != null && recycler.isAttachedToWindow();
+        if (!generationMatches
+                || recycler == null
+                || targetIndex < 0
+                || !attached
+                || (!shouldModulePositionLyricsRecycler()
+                && !allowNativeAdaptiveRecovery)) {
+            return;
+        }
+        stopLyricsRecyclerScroll(recycler);
+        applyVisibleLyricBlockHeights(recycler);
+        scrollLyricsRecyclerToPositionWithOffset(
+                recycler,
+                targetIndex,
+                computeLyricsRecyclerTopOffset(recycler, targetIndex));
+        offsetLyricsRecyclerCurrentLine(recycler, targetIndex);
+    }
+
+    private void followAdaptiveNativeLineTimedRecycler(
+            WordLyricModel model,
+            WordLine activeLine,
+            TextView activeView) {
+        if (model == null
+                || activeLine == null
+                || activeView == null
+                || activeLine.timingMode != LyricTimingMode.LINE_TIMED
+                || currentLyricProviderPayload == null) {
+            return;
+        }
+        int targetIndex = model.adapterIndexOfLine(activeLine);
+        View recycler = findContainingLyricsRecyclerView(activeView);
+        if (targetIndex < 0 || recycler == null || !recycler.isAttachedToWindow()) {
+            return;
+        }
+        boolean transitionSettled = isScreenInteractiveForWakeLock()
+                && !isAodLowFrameRateLyricMode()
+                && recycler.getVisibility() == View.VISIBLE
+                && recycler.getWidth() > 0
+                && recycler.getHeight() > 0
+                && recycler.getAlpha() >= 0.99f
+                && Math.abs(recycler.getTranslationY()) <= 1f;
+        LyricsRecyclerGeometry geometry = captureLyricsRecyclerGeometry(recycler, targetIndex);
+        int desiredCenter = computeActiveLyricsRecyclerDesiredCenter(recycler);
+        int officialIndex = readLyricsRecyclerCurrentIndex(recycler);
+        long now = SystemClock.elapsedRealtime();
+        boolean knownOfficialLag = transitionSettled
+                && officialIndex >= 0
+                && Math.abs(targetIndex - officialIndex) >= 2;
+        if (!adaptiveLineTimedRecyclerFollowActive) {
+            if (!knownOfficialLag) {
+                adaptiveLineTimedLagCandidateIndex = -1;
+                adaptiveLineTimedLagObservedAtElapsedMs = -1L;
+            } else if (adaptiveLineTimedLagCandidateIndex != targetIndex) {
+                adaptiveLineTimedLagCandidateIndex = targetIndex;
+                adaptiveLineTimedLagObservedAtElapsedMs = now;
+            }
+        }
+        long lagObservedMillis = adaptiveLineTimedLagObservedAtElapsedMs < 0L
+                ? -1L
+                : Math.max(0L, now - adaptiveLineTimedLagObservedAtElapsedMs);
+        if (!adaptiveLineTimedRecyclerFollowActive
+                && LyricsRecyclerPolicy.shouldActivateAdaptiveLineTimedFollow(
+                true,
+                true,
+                transitionSettled,
+                targetIndex,
+                officialIndex,
+                lagObservedMillis,
+                ADAPTIVE_LINE_TIMED_RECYCLER_MIN_LAG_MS)) {
+            adaptiveLineTimedRecyclerFollowActive = true;
+            info(BridgeDebugArea.AOD, BridgeEvents.RECYCLER_SCROLL_STABILIZED,
+                    "Activated adaptive native line-timed Recycler follow"
+                            + " | targetIndex=" + targetIndex
+                            + ", officialIndex=" + officialIndex
+                            + ", lagObservedMs=" + lagObservedMillis
+                            + ", targetCenter=" + geometry.targetCenter
+                            + ", desiredCenter=" + desiredCenter
+                            + ", rowHeight=" + activeView.getHeight());
+        }
+        if (!LyricsRecyclerPolicy.shouldFollowAdaptiveLineTimedRow(
+                adaptiveLineTimedRecyclerFollowActive,
+                transitionSettled,
+                targetIndex,
+                lastAdaptiveLineTimedRecyclerAlignedIndex)) {
+            return;
+        }
+        if (forceAlignLyricsRecyclerToIndex(
+                recycler,
+                targetIndex,
+                "adaptive-native-line-timed",
+                true,
+                true)) {
+            lastAdaptiveLineTimedRecyclerAlignedIndex = targetIndex;
+            lastLyricsRecyclerIndex = targetIndex;
+        }
+    }
+
+    private void resetAdaptiveLineTimedRecyclerFollow() {
+        adaptiveLineTimedRecyclerFollowActive = false;
+        lastAdaptiveLineTimedRecyclerAlignedIndex = -1;
+        adaptiveLineTimedLagCandidateIndex = -1;
+        adaptiveLineTimedLagObservedAtElapsedMs = -1L;
+    }
+
+    private int computeLyricsRecyclerTopOffset(View recyclerView, int targetIndex) {
+        if (recyclerView == null || recyclerView.getHeight() <= 0) {
+            return 0;
+        }
+        int desiredCenter = computeActiveLyricsRecyclerDesiredCenter(recyclerView);
+        return computeLyricsRecyclerTopOffset(recyclerView, targetIndex, desiredCenter);
+    }
+
+    private int computeActiveLyricsRecyclerDesiredCenter(View recyclerView) {
+        if (recyclerView == null || recyclerView.getHeight() <= 0) {
+            return 0;
+        }
+        float shiftedOffsetDp = ACTIVE_LYRIC_CENTER_OFFSET_DP - ACTIVE_LYRIC_POSITION_SHIFT_UP_DP;
+        return recyclerView.getHeight() / 2 + dp(recyclerView.getContext(), shiftedOffsetDp);
+    }
+
+    private int computeLyricsRecyclerTopOffset(
+            View recyclerView,
+            int targetIndex,
+            int desiredCenter) {
+        if (recyclerView == null || recyclerView.getHeight() <= 0) {
+            return 0;
+        }
+        float anchor = -1f;
+        if (recyclerView instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) recyclerView;
+            View exemplar = null;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (exemplar == null && findFirstTextView(child, new int[]{0}) != null) exemplar = child;
+                if (readRecyclerChildPosition(recyclerView, child) == targetIndex) {
+                    TextView textView = findFirstTextView(child, new int[]{0});
+                    if (OfficialLyricTextRenderer.mainGeometry(textView) != null) {
+                        anchor = lyricMainAnchorCenterInItem(child);
+                    } else {
+                        WordLyricModel model = currentWordLyricModel;
+                        anchor = officialLyricTextRenderer.estimateMainAnchor(child,
+                                model == null ? null : model.lineAtAdapterIndex(targetIndex));
+                    }
+                    break;
+                }
+            }
+            if (anchor < 0f && exemplar != null) {
+                WordLyricModel model = currentWordLyricModel;
+                WordLine target = model == null ? null : model.lineAtAdapterIndex(targetIndex);
+                anchor = officialLyricTextRenderer.estimateMainAnchor(exemplar, target);
+            }
+        }
+        if (anchor < 0f) anchor = dp(recyclerView.getContext(), WordLyricRenderConstants.LYRIC_SLOT_HEIGHT_DP) * 0.5f;
+        return Math.round(desiredCenter - recyclerView.getPaddingTop() - anchor);
+    }
+
+    /** Layout coordinates for native scrolling: the row animator's scale is deliberately excluded. */
+    private static float lyricMainAnchorCenterInItem(View row) {
+        TextView textView = findFirstTextView(row, new int[]{0});
+        OfficialLyricTextRenderer.MainRowGeometry geometry = OfficialLyricTextRenderer.mainGeometry(textView);
+        if (geometry == null) return row == null ? 0f : row.getHeight() * 0.5f;
+        float center = geometry.focusCenter();
+        View current = textView;
+        while (current != row && current.getParent() instanceof View) {
+            View parent = (View) current.getParent();
+            center += current.getTop() - parent.getScrollY();
+            current = parent;
+        }
+        return center;
+    }
+
+
+    private static boolean hasBoundLyricsRecyclerChildren(View recycler) {
+        return recycler instanceof ViewGroup && ((ViewGroup) recycler).getChildCount() > 0;
+    }
+
+    private boolean invokeLyricsRecyclerSetCurrentLyric(View recycler, int targetIndex) {
+        if (lyricsRecyclerSetCurrentUnavailable
+                || targetIndex < 0
+                || recycler == null
+                || !recycler.isAttachedToWindow()
+                || !shouldModulePositionLyricsRecycler()) {
+            return false;
+        }
+        Class<?> current = recycler.getClass();
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                Class<?>[] parameterTypes = method.getParameterTypes();
+                if (!isLyricsRecyclerCurrentLyricMethod(method)) {
+                    continue;
+                }
+                Object[] args = new Object[parameterTypes.length];
+                int integerIndex = 0;
+                WordLyricModel model = currentWordLyricModel;
+                WordLine targetLine = model == null ? null : model.lineAtAdapterIndex(targetIndex);
+                long targetTimeMillis = targetLine == null ? 0L : targetLine.timeMillis;
+                if (parameterTypes.length == 2
+                        && isBooleanParameter(parameterTypes[0])
+                        && parameterTypes[1] == long.class
+                        && targetLine == null) {
+                    continue;
+                }
+                boolean compatible = true;
+                for (int i = 0; i < parameterTypes.length; i++) {
+                    Class<?> type = parameterTypes[i];
+                    if (type == int.class || type == Integer.class) {
+                        args[i] = integerIndex++ == 0 ? targetIndex : -1;
+                    } else if (isBooleanParameter(type)) {
+                        args[i] = false;
+                    } else if (type == long.class || type == Long.class) {
+                        args[i] = targetTimeMillis;
+                    } else if (type == float.class || type == Float.class) {
+                        args[i] = 0f;
+                    } else if (!type.isPrimitive()) {
+                        args[i] = null;
+                    } else {
+                        compatible = false;
+                        break;
+                    }
+                }
+                if (!compatible) {
+                    continue;
+                }
+                try {
+                    method.setAccessible(true);
+                    if (isOfficialTimedCurrentLyricMethod(method)) {
+                        applyVisibleLyricBlockHeights(recycler);
+                    }
+                    suppressLyricsRecyclerHook.set(true);
+                    method.invoke(recycler, args);
+                    return true;
+                } catch (Throwable ignored) {
+                    // The adapter may not be ready yet; attachment retries will try again.
+                } finally {
+                    suppressLyricsRecyclerHook.remove();
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return false;
+    }
+
+    private static boolean isLyricsRecyclerView(View view) {
+        if (view == null) {
+            return false;
+        }
+        Class<?> viewClass = view.getClass();
+        synchronized (LYRICS_RECYCLER_VIEW_CLASS_MATCH_CACHE) {
+            Boolean cached = LYRICS_RECYCLER_VIEW_CLASS_MATCH_CACHE.get(viewClass);
+            if (cached != null) {
+                return cached;
+            }
+            boolean matches = hasLyricsRecyclerViewClassName(viewClass);
+            LYRICS_RECYCLER_VIEW_CLASS_MATCH_CACHE.put(viewClass, matches);
+            return matches;
+        }
+    }
+
+    private static boolean hasLyricsRecyclerViewClassName(Class<?> viewClass) {
+        Class<?> current = viewClass;
+        while (current != null) {
+            if (LYRICS_RECYCLER_VIEW_CLASS.equals(current.getName())) {
+                return true;
+            }
+            current = current.getSuperclass();
+        }
+        return false;
+    }
+
+    private void stabilizeLyricsRecyclerScroll(View recycler, String reason) {
+        if (recycler == null || !shouldModulePositionLyricsRecycler()) {
+            return;
+        }
+        stopLyricsRecyclerScroll(recycler);
+        maybeLogRecyclerScrollStabilize(recycler, reason);
+    }
+
+    private void applyVisibleLyricBlockHeights(View root) {
+        refreshLyricUiStyleSettingsIfNeeded();
+        officialLyricTextRenderer.setTranslationEnabled(isCurrentPlayerTranslationEnabled());
+        applyVisibleLyricBlockHeights(root, currentSettlingOfficialLyricIndex());
+    }
+
+    private int currentSettlingOfficialLyricIndex() {
+        return lyricRecyclerSettleOfficialIndex >= 0
+                && SystemClock.elapsedRealtime() < lyricRecyclerSettleUntilElapsedMs
+                ? lyricRecyclerSettleOfficialIndex
+                : -1;
+    }
+
+    private void applyVisibleLyricBlockHeights(View root, int activeSlotIndex) {
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null || root == null || !root.isAttachedToWindow()) {
+            return;
+        }
+        applyVisibleLyricBlockHeights(root, model, activeSlotIndex, new int[]{0});
+    }
+
+    private void offsetLyricsRecyclerCurrentLine(View recyclerView, int targetIndex) {
+        if (recyclerView == null
+                || targetIndex < 0
+                || !recyclerView.isAttachedToWindow()
+                || recyclerView.getHeight() <= 0
+                || !shouldModulePositionLyricsRecycler()) {
+            return;
+        }
+        int desiredCenter = computeActiveLyricsRecyclerDesiredCenter(recyclerView);
+        int topOffset = computeLyricsRecyclerTopOffset(recyclerView, targetIndex);
+        scrollLyricsRecyclerToPositionWithOffset(recyclerView, targetIndex, topOffset);
+        LyricsRecyclerGeometry geometry = captureLyricsRecyclerGeometry(
+                recyclerView,
+                targetIndex);
+        if (geometry.targetCenter == Integer.MIN_VALUE) {
+            return;
+        }
+        int delta = desiredCenter - geometry.targetCenter;
+        int tolerance = dp(recyclerView.getContext(), 2f);
+        if (Math.abs(delta) <= tolerance) {
+            return;
+        }
+        recyclerView.scrollBy(0, -delta);
+    }
+
+    private boolean scrollLyricsRecyclerToPositionWithOffset(
+            View recyclerView,
+            int targetIndex,
+            int topOffset) {
+        Object layoutManager = invokeNoArgByName(recyclerView, "getLayoutManager");
+        if (layoutManager == null) {
+            return false;
+        }
+        return invokeTwoIntByName(
+                layoutManager,
+                "scrollToPositionWithOffset",
+                targetIndex,
+                topOffset);
+    }
+
+    private void applyVisibleLyricBlockHeights(
+            View view,
+            WordLyricModel model,
+            int activeSlotIndex,
+            int[] visited) {
+        if (view == null || visited[0]++ > 300 || view.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        if (view instanceof TextView) {
+            TextView textView = (TextView) view;
+            CharSequence text = textView.getText();
+            if (text != null
+                    && text.length() > 0
+                    && text.length() <= lyricTextLengthLimit()
+                    && isInLyricsRecyclerView(textView)) {
+                LyricTextMatch match = findLyricTextMatch(
+                        model,
+                        textView,
+                        normalizedTextOf(textView),
+                        estimatePlaybackPositionMillis());
+                if (match.line != null) {
+                    prepareOfficialLyricTextView(textView);
+                    officialLyricTextRenderer.applySlotHeight(textView, match.line, false);
+                }
+            }
+        }
+        if (!(view instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup viewGroup = (ViewGroup) view;
+        for (int i = 0; i < viewGroup.getChildCount(); i++) {
+            applyVisibleLyricBlockHeights(
+                    viewGroup.getChildAt(i),
+                    model,
+                    activeSlotIndex,
+                    visited);
+        }
+    }
+
+    private void scheduleOfficialLyricSlotPrebind(TextView textView) {
+        if (currentWordLyricModel == null
+                || textView == null
+                || !textView.isAttachedToWindow()) {
+            return;
+        }
+        CharSequence text = textView.getText();
+        if (text == null || text.length() == 0 || text.length() > lyricTextLengthLimit()) {
+            return;
+        }
+        prebindOfficialLyricSlotAfterTextMutation(textView);
+        requestLyricAnimationFrame(textView);
+    }
+
+    private int beginLyricTextBindEpoch(TextView textView) {
+        if (textView == null) {
+            return -1;
+        }
+        synchronized (lyricTextBindEpochsLock) {
+            nextLyricTextBindEpoch = nextLyricTextBindEpoch == Integer.MAX_VALUE
+                    ? 1
+                    : nextLyricTextBindEpoch + 1;
+            int epoch = nextLyricTextBindEpoch;
+            lyricTextBindEpochs.put(textView, epoch);
+            lyricTextBindRetryPostedEpochs.remove(textView);
+            lyricTextBindRetryCounts.remove(textView);
+            boundLyricFrameStamps.remove(textView);
+            return epoch;
+        }
+    }
+
+    private int ensureLyricTextBindEpoch(TextView textView) {
+        if (textView == null) {
+            return -1;
+        }
+        synchronized (lyricTextBindEpochsLock) {
+            Integer epoch = lyricTextBindEpochs.get(textView);
+            if (epoch != null) {
+                return epoch;
+            }
+        }
+        return beginLyricTextBindEpoch(textView);
+    }
+
+    private void scheduleBoundLyricFrameRetry(TextView textView, WordLyricModel expectedModel) {
+        if (textView == null || expectedModel == null) {
+            return;
+        }
+        int epoch = ensureLyricTextBindEpoch(textView);
+        if (epoch < 0) {
+            return;
+        }
+        synchronized (lyricTextBindEpochsLock) {
+            Integer postedEpoch = lyricTextBindRetryPostedEpochs.get(textView);
+            int retryCount = lyricTextBindRetryCounts.getOrDefault(textView, 0);
+            if ((postedEpoch != null && postedEpoch == epoch)
+                    || retryCount >= LYRIC_BOUND_FRAME_RETRY_MAX) {
+                return;
+            }
+            lyricTextBindRetryPostedEpochs.put(textView, epoch);
+            lyricTextBindRetryCounts.put(textView, retryCount + 1);
+        }
+        int expectedContentHash = charSequenceContentHash(textView.getText());
+        View expectedRecycler = findContainingLyricsRecyclerView(textView);
+        textView.postOnAnimation(() -> {
+            synchronized (lyricTextBindEpochsLock) {
+                Integer postedEpoch = lyricTextBindRetryPostedEpochs.get(textView);
+                lyricTextBindRetryPostedEpochs.remove(textView);
+                Integer currentEpoch = lyricTextBindEpochs.get(textView);
+                if (postedEpoch == null
+                        || postedEpoch != epoch
+                        || currentEpoch == null
+                        || currentEpoch != epoch) {
+                    return;
+                }
+            }
+            if (currentWordLyricModel != expectedModel
+                    || !textView.isAttachedToWindow()
+                    || findContainingLyricsRecyclerView(textView) != expectedRecycler
+                    || charSequenceContentHash(textView.getText()) != expectedContentHash) {
+                return;
+            }
+            prebindOfficialLyricSlotAfterTextMutation(textView);
+            textView.invalidate();
+            requestLyricAnimationFrame(textView);
+            if (isLyricVerboseDiagnosticsEnabled()) {
+                info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Retried bound lyric frame"
+                        + " | tvId=" + objectId(textView)
+                        + ", rvId=" + objectId(expectedRecycler)
+                        + ", bindEpoch=" + epoch);
+            }
+        });
+    }
+
+    private void markBoundLyricFrameReady(TextView textView, DrawFrame frame) {
+        WordLyricModel model = frame == null ? null : frame.model;
+        if (textView == null || model == null || frame.line == null) {
+            return;
+        }
+        View recycler = findContainingLyricsRecyclerView(textView);
+        if (recycler == null) {
+            return;
+        }
+        int bindEpoch = ensureLyricTextBindEpoch(textView);
+        if (bindEpoch < 0) {
+            return;
+        }
+        int surfaceEpoch;
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            LyricSurfaceReadinessState state = lyricSurfaceReadinessStates.get(recycler);
+            if (state == null || state.model != model || state.stableReady) {
+                return;
+            }
+            surfaceEpoch = state.epoch;
+        }
+        NormalizedTextSnapshot textSnapshot = normalizedLyricTextCache.get(textView);
+        int contentHash = textSnapshot == null
+                ? charSequenceContentHash(textView.getText())
+                : textSnapshot.contentHash;
+        boolean duplicateText = model.hasDuplicateRenderableText(normalizedTextOf(textView));
+        int adapterPosition = duplicateText
+                ? findValidLyricsRecyclerAdapterPosition(textView, model)
+                : -1;
+        synchronized (lyricTextBindEpochsLock) {
+            lyricTextBindRetryCounts.remove(textView);
+            BoundLyricFrameStamp existing = boundLyricFrameStamps.get(textView);
+            if (existing != null
+                    && existing.sameIdentity(
+                    model,
+                    recycler,
+                    bindEpoch,
+                    contentHash,
+                    surfaceEpoch,
+                    adapterPosition,
+                    frame.lineIndex)) {
+                return;
+            }
+            boundLyricFrameStamps.put(
+                    textView,
+                    new BoundLyricFrameStamp(
+                            model,
+                            recycler,
+                            bindEpoch,
+                            contentHash,
+                            surfaceEpoch,
+                            adapterPosition,
+                            frame.lineIndex));
+        }
+    }
+
+    private boolean isLyricSurfaceCustomFrameReady(View recycler, WordLyricModel model) {
+        if (recycler == null || model == null || !recycler.isAttachedToWindow()) {
+            return false;
+        }
+        synchronized (lyricSurfaceRenderEpochsLock) {
+            Integer epoch = lyricSurfaceRenderEpochs.get(recycler);
+            LyricSurfaceReadinessState state = lyricSurfaceReadinessStates.get(recycler);
+            return epoch != null
+                    && state != null
+                    && state.epoch == epoch
+                    && state.model == model
+                    && state.stableReady;
+        }
+    }
+
+    private LyricSurfaceReadinessSnapshot captureLyricSurfaceReadiness(
+            View recycler,
+            WordLyricModel model,
+            int surfaceEpoch) {
+        if (model == null) {
+            return new LyricSurfaceReadinessSnapshot(
+                    0,
+                    0,
+                    0,
+                    recycler instanceof ViewGroup
+                            ? ((ViewGroup) recycler).getChildCount() : 0,
+                    readLyricsRecyclerAdapterItemCount(recycler));
+        }
+        int[] counts = {0, 0, 0, 1};
+        long position = estimatePlaybackPositionMillis();
+        collectLyricSurfaceCustomFrameReadiness(
+                recycler,
+                recycler,
+                model,
+                surfaceEpoch,
+                position,
+                counts);
+        int childCount = recycler instanceof ViewGroup
+                ? ((ViewGroup) recycler).getChildCount()
+                : 0;
+        int adapterItemCount = readLyricsRecyclerAdapterItemCount(recycler);
+        if (adapterItemCount < 0 && model != null) {
+            adapterItemCount = !model.officialLines.isEmpty()
+                    ? model.officialLines.size()
+                    : model.lines.size();
+        }
+        return new LyricSurfaceReadinessSnapshot(
+                counts[0],
+                counts[1],
+                counts[3],
+                childCount,
+                adapterItemCount);
+    }
+
+    private void collectLyricSurfaceCustomFrameReadiness(
+            View view,
+            View recycler,
+            WordLyricModel model,
+            int surfaceEpoch,
+            long position,
+            int[] counts) {
+        if (view == null || counts[2]++ > 320) {
+            return;
+        }
+        if (view instanceof TextView && view.isAttachedToWindow()) {
+            TextView textView = (TextView) view;
+            CharSequence text = textView.getText();
+            String normalizedText = text == null ? "" : normalizedTextOf(textView);
+            if (text != null
+                    && text.length() > 0
+                    && text.length() <= lyricTextLengthLimit()
+                    && model.hasRenderableText(normalizedText)
+                    && findContainingLyricsRecyclerView(textView) == recycler) {
+                counts[0]++;
+                int bindEpoch = ensureLyricTextBindEpoch(textView);
+                int contentHash = charSequenceContentHash(text);
+                int adapterPosition = findValidLyricsRecyclerAdapterPosition(textView, model);
+                boolean duplicateText = model.hasDuplicateRenderableText(normalizedText);
+                int resolvedLineIndex = -1;
+                if (duplicateText) {
+                    LyricTextMatch match = findLyricTextMatch(
+                            model,
+                            textView,
+                            normalizedText,
+                            position);
+                    WordLine resolvedLine = match.line != null
+                            ? match.line
+                            : match.translationLine;
+                    resolvedLineIndex = model.indexOfLine(resolvedLine);
+                }
+                BoundLyricFrameStamp stamp;
+                synchronized (lyricTextBindEpochsLock) {
+                    stamp = boundLyricFrameStamps.get(textView);
+                }
+                if (stamp != null
+                        && stamp.matches(
+                        model,
+                        recycler,
+                        bindEpoch,
+                        contentHash,
+                        surfaceEpoch,
+                        adapterPosition,
+                        resolvedLineIndex,
+                        duplicateText)) {
+                    counts[1]++;
+                }
+                counts[3] = 31 * counts[3] + System.identityHashCode(textView);
+                counts[3] = 31 * counts[3] + bindEpoch;
+                counts[3] = 31 * counts[3] + contentHash;
+                counts[3] = 31 * counts[3] + adapterPosition;
+            }
+        }
+        if (!(view instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            collectLyricSurfaceCustomFrameReadiness(
+                    group.getChildAt(i),
+                    recycler,
+                    model,
+                    surfaceEpoch,
+                    position,
+                    counts);
+        }
+    }
+
+    private static int readLyricsRecyclerAdapterItemCount(View recycler) {
+        Object adapter = invokeNoArgByName(recycler, "getAdapter");
+        Object itemCount = invokeNoArgByName(adapter, "getItemCount");
+        return itemCount instanceof Number ? ((Number) itemCount).intValue() : -1;
+    }
+
+    private void forgetLyricTextViewCaches(TextView textView) {
+        if (textView == null) {
+            return;
+        }
+        normalizedLyricTextCache.remove(textView);
+        OfficialLyricTextRenderer.MAIN_ROW_GEOMETRY.remove(textView);
+        recentOfficialDrawFrames.remove(textView);
+        LYRICS_RECYCLER_MATCH_CACHE.remove(textView);
+        synchronized (VIEW_VISUAL_EFFECT_CACHE_LOCK) {
+            VIEW_LYRIC_RENDER_EFFECT_MODE.remove(textView);
+            VIEW_BLUR_DISABLED.remove(textView);
+        }
+        synchronized (lyricTextBindEpochsLock) {
+            lyricTextBindEpochs.remove(textView);
+            lyricTextBindRetryPostedEpochs.remove(textView);
+            lyricTextBindRetryCounts.remove(textView);
+            boundLyricFrameStamps.remove(textView);
+        }
+    }
+
+    private boolean shouldInspectLyricTextViewHooks() {
+        // Render ownership is independent from keep-awake/visibility lifecycle. SystemUI builds
+        // the next immersive lyric surface while alpha=0; the row still needs a complete custom
+        // display list before the parent fade begins.
+        if (currentWordLyricModel != null || systemUiLyricModeKeepAwakeActive
+                || ZhiBridgeRuntime.hasPendingLyricHandoff()) {
+            return true;
+        }
+        if (officialLyricDrawSuppressedUntilElapsedMs <= 0L
+                && lyricRecyclerFadeInUntilElapsedMs <= 0L
+                && !pendingCustomLyricTakeoverFade) {
+            return false;
+        }
+        long now = SystemClock.elapsedRealtime();
+        return now < officialLyricDrawSuppressedUntilElapsedMs
+                || now < lyricRecyclerFadeInUntilElapsedMs
+                || pendingCustomLyricTakeoverFade;
+    }
+
+    private boolean hasCachedLyricTextView(TextView textView) {
+        if (textView == null) {
+            return false;
+        }
+        LyricsRecyclerMatch match = LYRICS_RECYCLER_MATCH_CACHE.get(textView);
+        return recentOfficialDrawFrames.containsKey(textView)
+                || (match != null
+                && match != NO_LYRICS_RECYCLER_MATCH
+                && match.isUsable(textView));
+    }
+
+    private void prebindOfficialLyricSlotAfterTextMutation(TextView textView) {
+        try {
+            WordLyricModel model = currentWordLyricModel;
+            if (model == null
+                    || textView == null
+                    || !textView.isAttachedToWindow()
+                    || !isInLyricsRecyclerView(textView)) {
+                return;
+            }
+            CharSequence text = textView.getText();
+            if (text == null || text.length() == 0 || text.length() > lyricTextLengthLimit()) {
+                return;
+            }
+            String normalizedText = normalizedTextOf(textView);
+            if (TextUtils.isEmpty(normalizedText)) {
+                return;
+            }
+            LyricTextMatch match = findLyricTextMatch(
+                    model,
+                    textView,
+                    normalizedText,
+                    estimatePlaybackPositionMillis());
+            if (match.line == null) {
+                return;
+            }
+            prepareOfficialLyricTextView(textView);
+            officialLyricTextRenderer.applySlotHeight(textView, match.line);
+            textView.invalidate();
+            requestLyricAnimationFrame(textView);
+        } catch (Throwable ignored) {
+            // Text mutation happens on many SystemUI labels; never let a lyric guard affect them.
+        }
+    }
+
+    private void tryInstallLyricsRecyclerViewHook(ClassLoader classLoader) {
+        if (lyricsRecyclerHookInstallAttempted || classLoader == null) {
+            return;
+        }
+        try {
+            Class<?> lyricsRecyclerViewClass =
+                    classLoader.loadClass(LYRICS_RECYCLER_VIEW_CLASS);
+            tryInstallLyricsRecyclerViewHook(lyricsRecyclerViewClass);
+        } catch (Throwable ignored) {
+            // The Seedling plugin class is loaded lazily. The targeted plugin ClassLoader
+            // constructor hook, or its first View attachment, installs the lyric-local hooks.
+        }
+    }
+
+    @SuppressLint("PrivateApi") // LSPosed hook targets the vendor plugin class loader by name.
+    private synchronized void tryInstallPluginClassLoaderConstructorHook(
+            ClassLoader classLoader) {
+        if (pluginClassLoaderConstructorHookInstalled || classLoader == null) {
+            return;
+        }
+        try {
+            Class<?> pluginClassLoaderClass =
+                    classLoader.loadClass(OPLUS_PLUGIN_CLASS_LOADER_CLASS);
+            Constructor<?>[] constructors = pluginClassLoaderClass.getDeclaredConstructors();
+            int hooked = 0;
+            for (Constructor<?> constructor : constructors) {
+                constructor.setAccessible(true);
+                hook(constructor)
+                        .setId(HOOK_ID_PLUGIN_CLASS_LOADER_CONSTRUCTOR
+                                + "-"
+                                + hooked
+                                + "-"
+                                + constructor.getParameterTypes().length)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(this::onPluginClassLoaderConstructed);
+                hooked++;
+            }
+            pluginClassLoaderConstructorHookInstalled = hooked > 0;
+            if (pluginClassLoaderConstructorHookInstalled) {
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus plugin ClassLoader constructors, methods=" + hooked);
+            }
+        } catch (Throwable t) {
+            error("Failed to hook OPlus plugin ClassLoader constructors", t);
+        }
+    }
+
+    private Object onPluginClassLoaderConstructed(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        Object thisObject = chain.getThisObject();
+        if (thisObject instanceof ClassLoader) {
+            ClassLoader pluginLoader = (ClassLoader) thisObject;
+            activatePluginHookGeneration(pluginLoader);
+            tryInstallLyricsRecyclerViewHook(pluginLoader);
+            tryInstallKuWoPluginMediaModelHook(pluginLoader);
+            tryInstallLyricPositionControllerHook(pluginLoader);
+        }
+        return result;
+    }
+
+    private void activatePluginHookGeneration(ClassLoader pluginLoader) {
+        if (pluginLoader == null) {
+            return;
+        }
+        ArrayList<XposedInterface.HookHandle> staleHandles;
+        synchronized (pluginHookGenerationLock) {
+            if (activePluginClassLoader.get() == pluginLoader) {
+                return;
+            }
+            OfficialLyricMotionController.restoreAll();
+            NativeLyricsAnchorPolicy.restoreAll();
+            staleHandles = new ArrayList<>(activePluginHookHandles);
+            activePluginHookHandles.clear();
+            activePluginClassLoader = new WeakReference<>(pluginLoader);
+            lyricsRecyclerHookInstallAttempted = false;
+            lyricsRecyclerSetCurrentUnavailable = false;
+            oplusPluginMediaModelHookInstalled = false;
+            oplusPluginKuWoTargets = null;
+            resolvedLyricPositionController = null;
+            lyricPositionControllerHooked = false;
+        }
+        synchronized (officialLyricsRecyclerCompatibilityLock) {
+            officialLyricsRecyclerBindings.clear();
+            unavailableOfficialLyricsRecyclerBindings.clear();
+        }
+        for (XposedInterface.HookHandle handle : staleHandles) {
+            try {
+                handle.unhook();
+            } catch (Throwable ignored) {
+                // The old plugin generation may already have been detached by SystemUI.
+            }
+        }
+    }
+
+    private void rememberPluginHookHandle(
+            ClassLoader pluginLoader,
+            XposedInterface.HookHandle handle) {
+        if (pluginLoader == null || handle == null) {
+            return;
+        }
+        boolean current;
+        synchronized (pluginHookGenerationLock) {
+            current = activePluginClassLoader.get() == pluginLoader;
+            if (current) {
+                activePluginHookHandles.add(handle);
+            }
+        }
+        if (!current) {
+            try {
+                handle.unhook();
+            } catch (Throwable ignored) {
+                // A newer loader already owns the plugin hooks.
+            }
+        }
+    }
+
+    private void tryInstallKuWoPluginMediaModelHook(ClassLoader pluginLoader) {
+        if (oplusPluginMediaModelHookInstalled || pluginLoader == null) {
+            return;
+        }
+        try {
+            OplusPluginDexKitAdapter.Targets targets;
+            try {
+                OplusPluginDexKitAdapter.Resolution resolution =
+                        OplusPluginDexKitAdapter.resolveAll(pluginLoader, LYRICS_RECYCLER_VIEW_CLASS);
+                // Captured before the media-model check so a model miss cannot drop it.
+                resolvedLyricPositionController = resolution.lyricPositionController;
+                if (resolution.lyricPositionController == null) {
+                    infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_FAILED,
+                            "Lyric position controller unresolved; timed lyric guard only: "
+                                    + resolution.lyricPositionControllerFailure);
+                }
+                targets = resolution.requireTargets();
+            } catch (Throwable dexKitFailure) {
+                warn(
+                        LyricLogFormatter.Area.SYSTEM_UI,
+                        "lyric-policy",
+                        "OPlus plugin DexKit resolution failed, using m6 fallback: "
+                                + dexKitFailure);
+                targets = OplusPluginDexKitAdapter.legacy(pluginLoader);
+            }
+            Class<?> modelClass = targets.mediaModelClass;
+            oplusPluginKuWoTargets = targets;
+            Constructor<?>[] constructors = modelClass.getDeclaredConstructors();
+            int hooked = 0;
+            for (Constructor<?> constructor : constructors) {
+                constructor.setAccessible(true);
+                XposedInterface.HookHandle handle = hook(constructor)
+                        .setId(HOOK_ID_PLUGIN_CLASS_LOADER_CONSTRUCTOR
+                                + "-kuwo-model-" + hooked + "-"
+                                + constructor.getParameterTypes().length)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(this::onKuWoPluginMediaModelBuilt, "onKuWoPluginMediaModelBuilt"));
+                rememberPluginHookHandle(pluginLoader, handle);
+                hooked++;
+            }
+            if (hooked > 0) {
+                oplusPluginMediaModelHookInstalled = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked OPlus KuWo plugin media model, constructors=" + hooked
+                        + ", resolver=" + (targets.resolvedByDexKit ? "dexkit" : "legacy"));
+            }
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "Skipped KuWo plugin media model hook: " + t);
+        }
+    }
+
+    private void tryInstallLyricPositionControllerHook(ClassLoader pluginLoader) {
+        Method controller = resolvedLyricPositionController;
+        if (lyricPositionControllerHooked || controller == null || pluginLoader == null) {
+            return;
+        }
+        try {
+            XposedInterface.HookHandle handle = hook(controller)
+                    .setId(HOOK_ID_LYRICS_RECYCLER + "-controller-position")
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onLyricControllerPositionUpdate, "onLyricControllerPositionUpdate"));
+            rememberPluginHookHandle(pluginLoader, handle);
+            lyricPositionControllerHooked = true;
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED,
+                    "Hooked lyric position controller, method="
+                            + controller.getDeclaringClass().getName() + "#" + controller.getName());
+        } catch (Throwable t) {
+            error("Failed to hook lyric position controller", t);
+        }
+    }
+
+    /**
+     * Aligns the position the vendor controller forwards to the timed lyric method and uses for
+     * its next row-change timer. Only the position argument changes; see
+     * {@link NativeLyricClockPolicy}.
+     */
+    private Object onLyricControllerPositionUpdate(XposedInterface.Chain chain) throws Throwable {
+        Object positionArg = chain.getArg(0);
+        if (!(positionArg instanceof Long) || !isModuleLyricClockUsable()) {
+            return chain.proceed();
+        }
+        long vendorPosition = (Long) positionArg;
+        long aligned = NativeLyricClockPolicy.controllerPosition(
+                vendorPosition,
+                estimatePlaybackPositionMillis(),
+                LyricTimingTuningConstants.LyricGeneral.PLAYBACK_SMALL_CORRECTION_MS);
+        if (aligned == vendorPosition) {
+            return chain.proceed();
+        }
+        Object[] args = chain.getArgs().toArray(new Object[0]);
+        args[0] = aligned;
+        logNativeLyricClockAlignment("controller", vendorPosition, aligned);
+        return chain.proceed(args);
+    }
+
+    /**
+     * The module clock may drive the vendor list only while it runs from a real PlaybackState
+     * anchor and the module owns the rendered model; otherwise vendor timing is untouched.
+     */
+    private boolean isModuleLyricClockUsable() {
+        return lastPlaybackIsPlaying
+                && lastComputedPositionMs >= 0L
+                && lastComputedPositionElapsedMs >= 0L
+                && currentWordLyricModel != null
+                && !hasSentenceWindow();
+    }
+
+    /**
+     * Returns replacement arguments for the vendor timed-lyric call, or null to keep them. Only
+     * the monotonic guard applies here; see {@link NativeLyricClockPolicy#timedLyricPosition}.
+     */
+    private Object[] guardTimedLyricArgs(XposedInterface.Chain chain, View recyclerView) {
+        Object positionArg = chain.getArg(1);
+        WordLyricModel model = currentWordLyricModel;
+        if (!(positionArg instanceof Number) || recyclerView == null || !isModuleLyricClockUsable()) {
+            timedLyricGuardPosition = -1L;
+            return null;
+        }
+        long now = SystemClock.elapsedRealtime();
+        long vendorPosition = ((Number) positionArg).longValue();
+        long held = timedLyricGuardRecycler.get() == recyclerView && timedLyricGuardModel.get() == model
+                ? NativeLyricClockPolicy.heldPosition(
+                timedLyricGuardPosition, timedLyricGuardElapsedMs, now, lastPlaybackSpeed)
+                : -1L;
+        long guarded = NativeLyricClockPolicy.timedLyricPosition(
+                vendorPosition,
+                held,
+                LyricTimingTuningConstants.LyricGeneral.PLAYBACK_SMALL_CORRECTION_MS);
+        timedLyricGuardRecycler = new WeakReference<>(recyclerView);
+        timedLyricGuardModel = new WeakReference<>(model);
+        timedLyricGuardPosition = guarded;
+        timedLyricGuardElapsedMs = now;
+        if (guarded == vendorPosition) {
+            return null;
+        }
+        Object[] args = chain.getArgs().toArray(new Object[0]);
+        args[1] = guarded;
+        logNativeLyricClockAlignment("guard", vendorPosition, guarded);
+        return args;
+    }
+
+    private void logNativeLyricClockAlignment(String source, long vendorPosition, long aligned) {
+        StructuredBridgeLog.debug(
+                BridgeDebugArea.RENDERER,
+                BridgeEvents.NATIVE_CLOCK_ALIGNED,
+                () -> "Aligned vendor lyric clock, source=" + source
+                        + ", vendor=" + vendorPosition
+                        + ", aligned=" + aligned
+                        + ", deltaMs=" + (aligned - vendorPosition)
+                        + ", controllerHooked=" + lyricPositionControllerHooked);
+    }
+
+    private Object onKuWoPluginMediaModelBuilt(XposedInterface.Chain chain) throws Throwable {
+        Object model = chain.proceed();
+        if (model == null) {
+            model = chain.getThisObject();
+        }
+        if (model == null || !KuWoPluginMediaModelReader.containsPlayerPackage(model)) {
+            return model;
+        }
+        try {
+            OplusPluginDexKitAdapter.Targets targets = oplusPluginKuWoTargets;
+            String title = readKuWoMediaModelText(
+                    model,
+                    "h",
+                    "f6173h",
+                    "songName=",
+                    ", artist=");
+            String artist = readKuWoMediaModelText(
+                    model,
+                    "i",
+                    "f6174i",
+                    "artist=",
+                    ", iconBeforeArtist=");
+            String trackKey = buildTrackKey(title, artist);
+            Field lyricField = targets == null
+                    ? findFieldOfType(model.getClass(), "s")
+                    : targets.lyricModelField;
+            Object lyricModel = lyricField == null ? null : readField(model, lyricField);
+            int lineCount = countLyricModelLines(lyricModel);
+            boolean albumArtRepaired = false;
+            KuWoSameTrackLyricRetention retention = kuWoRuntime.retention();
+            synchronized (retention.lock()) {
+                KuWoSameTrackLyricRetention.Result result = retention.decide(
+                        trackKey,
+                        title,
+                        artist,
+                        lyricModel,
+                        lineCount);
+                if (result.repairAlbumArt) {
+                    albumArtRepaired = repairKuWoPluginAlbumArt(
+                            model,
+                            result.repairTitle,
+                            result.repairArtist);
+                }
+                if (result.lyricToRestore != null) {
+                    if (lyricField != null) {
+                        lyricField.setAccessible(true);
+                        lyricField.set(model, result.lyricToRestore);
+                    }
+                    setKuWoPluginLyricSupported(model, targets);
+                    lineCount = countLyricModelLines(result.lyricToRestore);
+                }
+                // Commit even when repairAlbumArt returned false. Repair swallows
+                // failures; skipping commit here would drop same-track memory.
+                retention.commit(result, trackKey, title, artist, lyricModel);
+                long now = SystemClock.elapsedRealtime();
+                if (result.action == KuWoSameTrackLyricRetention.Action.RETAIN_CAR_LYRIC_MUTATION
+                        && kuWoRuntime.takeMediaModelLog(now)) {
+                    info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED, "Ignored KuWo car-lyric metadata mutation while retaining"
+                            + " same-track plugin model, lines=" + lineCount);
+                } else if (result.action
+                        == KuWoSameTrackLyricRetention.Action.CLEAR_FOR_TRACK_CHANGE
+                        && kuWoRuntime.takeMediaModelLog(now)) {
+                    info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Cleared KuWo plugin lyric retention for real track change: "
+                            + trackKey);
+                } else if (result.action
+                        == KuWoSameTrackLyricRetention.Action.RESTORE_EMPTY_MODEL
+                        && kuWoRuntime.takeMediaModelLog(now)) {
+                    info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Retained same-track KuWo plugin lyric model, lines=" + lineCount);
+                }
+            }
+            if (albumArtRepaired) {
+                long now = SystemClock.elapsedRealtime();
+                if (kuWoRuntime.takeMediaModelLog(now)) {
+                    info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Repaired KuWo plugin album art from same-track snapshot, "
+                            + "lines=" + lineCount);
+                }
+            }
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "KuWo plugin media model retention failed: " + t);
+        }
+        return model;
+    }
+
+    private boolean repairKuWoPluginAlbumArt(
+            Object model,
+            String title,
+            String artist) {
+        OplusPluginDexKitAdapter.Targets targets = oplusPluginKuWoTargets;
+        if (targets == null) {
+            logKuWoPluginAlbumArtSkip(title, artist, "missing-plugin-targets");
+            return false;
+        }
+        Field albumArtField = targets.albumArtField;
+        Object albumArt = readField(model, albumArtField);
+        if (albumArt == null) {
+            logKuWoPluginAlbumArtSkip(title, artist, "no-album-art");
+            return false;
+        }
+        try {
+            Object staticIcon = targets.readStaticIcon(albumArt);
+            if (staticIcon == null) {
+                return false;
+            }
+            Object lottie = targets.readLottieIcon(albumArt);
+            Field drawableField = targets.staticDrawableField;
+            Field bitmapField = targets.staticBitmapField;
+            Field cardModelField = targets.cardIconModelField;
+            Object cardModel = readField(staticIcon, cardModelField);
+            Bitmap cardBitmap = cardModel == null
+                    ? null
+                    : (Bitmap) targets.iconModelBitmapGetter.invoke(cardModel);
+            Object staticBitmapValue = readField(staticIcon, bitmapField);
+            Bitmap staticBitmap = staticBitmapValue instanceof Bitmap
+                    ? (Bitmap) staticBitmapValue
+                    : null;
+            Object staticDrawableValue = readField(staticIcon, drawableField);
+            Drawable staticDrawable = staticDrawableValue instanceof Drawable
+                    ? (Drawable) staticDrawableValue
+                    : null;
+            boolean cardInvalid = !KuWoCoverPolicy.isPlausibleCoverBitmap(cardBitmap);
+            boolean staticBitmapInvalid = !KuWoCoverPolicy.isPlausibleCoverBitmap(staticBitmap);
+            boolean drawableInvalid = staticDrawable != null
+                    && !KuWoCoverPolicy.isPlausibleCoverSize(
+                            staticDrawable.getIntrinsicWidth(),
+                            staticDrawable.getIntrinsicHeight());
+            if (!cardInvalid && !staticBitmapInvalid && !drawableInvalid) {
+                return false;
+            }
+            Icon snapshot = peekKuWoArtworkSnapshot(buildTrackKey(title, artist));
+            if (snapshot == null) {
+                logKuWoPluginAlbumArtSkip(title, artist, "no-snapshot");
+                return false;
+            }
+            Bitmap bitmap = extractIconBitmap(snapshot);
+            if (!KuWoCoverPolicy.isPlausibleCoverBitmap(bitmap)) {
+                logKuWoPluginAlbumArtSkip(title, artist, "bad-snapshot");
+                return false;
+            }
+            Drawable repairedDrawable = snapshot.loadDrawable(currentApplicationContext());
+            Integer primaryColor = cardModel == null
+                    ? null
+                    : (Integer) targets.iconModelColorGetter.invoke(cardModel);
+            Object repairedCardModel = targets.normalIconConstructor.newInstance(
+                    bitmap,
+                    primaryColor);
+            Object repairedMiniModel = targets.normalIconConstructor.newInstance(
+                    bitmap,
+                    primaryColor);
+            Object repairedStaticIcon = targets.createStaticIcon(
+                    snapshot,
+                    repairedDrawable,
+                    bitmap,
+                    repairedMiniModel,
+                    repairedCardModel,
+                    staticIcon);
+            Object repairedAlbumArt = targets.multiIconConstructor.newInstance(
+                    repairedStaticIcon,
+                    lottie);
+            albumArtField.setAccessible(true);
+            albumArtField.set(model, repairedAlbumArt);
+            return true;
+        } catch (Throwable t) {
+            warn(
+                    LyricLogFormatter.Area.SYSTEM_UI,
+                    "lyric-policy",
+                    "Failed to repair KuWo plugin album art: " + t);
+            return false;
+        }
+    }
+
+    private static void setKuWoPluginLyricSupported(
+            Object model,
+            OplusPluginDexKitAdapter.Targets targets) throws IllegalAccessException {
+        Field supportedField = targets == null
+                ? findBooleanSuffixField(model.getClass(), "u")
+                : targets.lyricSupportedField;
+        if (supportedField != null) {
+            supportedField.setAccessible(true);
+            supportedField.setBoolean(model, true);
+        }
+    }
+
+    private static String readKuWoMediaModelText(
+            Object model,
+            String primaryField,
+            String fallbackField,
+            String label,
+            String nextLabel) {
+        String labeled = KuWoPluginMediaModelReader.readLabeledText(
+                String.valueOf(model),
+                label,
+                nextLabel);
+        if (labeled != null) {
+            return labeled;
+        }
+        return readStringFieldByName(model, primaryField, fallbackField);
+    }
+
+    private void logKuWoPluginAlbumArtSkip(String title, String artist, String reason) {
+        if (!kuWoRuntime.takeMediaModelLog(SystemClock.elapsedRealtime())) {
+            return;
+        }
+        info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Skipped KuWo plugin album art repair; reason=" + reason
+                + ", track=" + buildTrackKey(title, artist));
+    }
+
+    private static String readStringFieldByName(
+            Object target,
+            String primaryName,
+            String fallbackName) {
+        Object value = readNamedFieldValue(target, primaryName);
+        if (!(value instanceof String)) {
+            value = readNamedFieldValue(target, fallbackName);
+        }
+        return value instanceof String ? (String) value : "";
+    }
+
+    private static Object readNamedFieldValue(Object target, String fieldName) {
+        if (target == null || TextUtils.isEmpty(fieldName)) {
+            return null;
+        }
+        try {
+            Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.get(target);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Object readField(Object target, Field field) {
+        if (target == null || field == null) {
+            return null;
+        }
+        try {
+            field.setAccessible(true);
+            return field.get(target);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Field findFieldOfType(Class<?> type, String simpleName) {
+        Class<?> current = type;
+        while (current != null) {
+            for (Field field : current.getDeclaredFields()) {
+                if (field.getType().getSimpleName().equals(simpleName)) {
+                    field.setAccessible(true);
+                    return field;
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private static Field findBooleanSuffixField(Class<?> type, String suffix) {
+        Class<?> current = type;
+        while (current != null) {
+            for (Field field : current.getDeclaredFields()) {
+                if (field.getType() == boolean.class && field.getName().endsWith(suffix)) {
+                    field.setAccessible(true);
+                    return field;
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private static int countLyricModelLines(Object lyricModel) {
+        if (lyricModel == null) {
+            return 0;
+        }
+        Class<?> current = lyricModel.getClass();
+        while (current != null) {
+            for (Field field : current.getDeclaredFields()) {
+                if (field.getType() != List.class) {
+                    continue;
+                }
+                Object value = readField(lyricModel, field);
+                if (value instanceof List) {
+                    return ((List<?>) value).size();
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return 0;
+    }
+
+    private synchronized void tryInstallLyricsRecyclerViewHook(Class<?> lyricsRecyclerViewClass) {
+        if (lyricsRecyclerHookInstallAttempted || lyricsRecyclerViewClass == null) {
+            return;
+        }
+        // A missing optional obfuscated guard method must not cause repeated hook installation.
+        // Re-entering here used to duplicate every setCurrentLyric interceptor on each attach or
+        // plugin ClassLoader construction when that method was absent on a firmware variant.
+        ClassLoader pluginLoader = lyricsRecyclerViewClass.getClassLoader();
+        activatePluginHookGeneration(pluginLoader);
+        lyricsRecyclerHookInstallAttempted = true;
+        try {
+            installOfficialLyricHolderMotionHook(lyricsRecyclerViewClass, pluginLoader);
+            installNativeLyricsAnchorHooks(lyricsRecyclerViewClass, pluginLoader);
+            int currentLyricHooks = 0;
+            int scalePivotHooks = 0;
+            Class<?> current = lyricsRecyclerViewClass;
+            while (current != null) {
+                for (Method method : current.getDeclaredMethods()) {
+                    if (isLyricsRecyclerModelUpdateMethod(method)) {
+                        method.setAccessible(true);
+                        XposedInterface.HookHandle handle = hook(method)
+                                .setId(HOOK_ID_LYRICS_RECYCLER + "-model")
+                                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                                .intercept(ZhiBridgeRuntime.guard(this::onLyricsRecyclerModelUpdate,
+                                        "onLyricsRecyclerModelUpdate"));
+                        rememberPluginHookHandle(pluginLoader, handle);
+                        currentLyricHooks++;
+                    } else if (isLyricsRecyclerCurrentLyricMethod(method)) {
+                        method.setAccessible(true);
+                        XposedInterface.HookHandle handle = hook(method)
+                                .setId(HOOK_ID_LYRICS_RECYCLER
+                                        + "-current-"
+                                        + currentLyricHooks
+                                        + "-"
+                                        + method.getParameterTypes().length)
+                                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                                .intercept(ZhiBridgeRuntime.guard(this::onLyricsRecyclerSetCurrentLyric, "onLyricsRecyclerSetCurrentLyric"));
+                        rememberPluginHookHandle(pluginLoader, handle);
+                        currentLyricHooks++;
+                    } else if (isLyricsRecyclerScalePivotMethod(method)) {
+                        method.setAccessible(true);
+                        XposedInterface.HookHandle handle = hook(method)
+                                .setId(HOOK_ID_LYRICS_RECYCLER
+                                        + "-pivot-"
+                                        + scalePivotHooks)
+                                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                                .intercept(ZhiBridgeRuntime.guard(this::onLyricsRecyclerPrepareScalePivot, "onLyricsRecyclerPrepareScalePivot"));
+                        rememberPluginHookHandle(pluginLoader, handle);
+                        scalePivotHooks++;
+                    }
+                }
+                current = current.getSuperclass();
+            }
+            if (currentLyricHooks > 0 || scalePivotHooks > 0) {
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked LyricsRecyclerView runtime methods, currentMethods="
+                        + currentLyricHooks
+                        + ", pivotMethods=" + scalePivotHooks);
+            }
+            if (currentLyricHooks == 0) {
+                lyricsRecyclerSetCurrentUnavailable = true;
+                info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "No LyricsRecyclerView current lyric hook target found on "
+                        + lyricsRecyclerViewClass.getName());
+            }
+        } catch (Throwable t) {
+            error("Failed to hook LyricsRecyclerView current lyric updates", t);
+        }
+    }
+
+    private boolean useLyricMotion() {
+        return LyricMotionPolicy.animate(runtimeLyricUiConfig.motionMode,
+                isAodLowFrameRateLyricMode(), android.animation.ValueAnimator.areAnimatorsEnabled());
+    }
+
+    private void installNativeLyricsAnchorHooks(Class<?> recyclerClass, ClassLoader loader) {
+        try {
+            Method immediate = NativeLyricsAnchorPolicy.immediatePositionMethod(recyclerClass);
+            if (immediate != null) {
+                XposedInterface.HookHandle handle = hook(immediate)
+                        .setId(HOOK_ID_LYRICS_RECYCLER + "-anchor-immediate")
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(chain -> {
+                            Object owner = chain.getThisObject();
+                            if (owner instanceof View) {
+                                syncNativeLyricsAnchor((View) owner, (Integer) chain.getArg(0));
+                            }
+                            return chain.proceed();
+                        }, "onNativeLyricsAnchorImmediate"));
+                rememberPluginHookHandle(loader, handle);
+            }
+        } catch (Throwable failure) {
+            error("Could not install immediate lyric anchor hook", failure);
+        }
+        try {
+            Method smooth = NativeLyricsAnchorPolicy.smoothFitMethod(recyclerClass);
+            if (smooth != null) {
+                XposedInterface.HookHandle handle = hook(smooth)
+                        .setId(HOOK_ID_LYRICS_RECYCLER + "-anchor-smooth")
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(chain -> {
+                            Object scroller = chain.getThisObject();
+                            Object owner = NativeLyricsAnchorPolicy.recyclerFromScroller(scroller);
+                            Object target = invokeNoArgByName(scroller, "getTargetPosition");
+                            if (owner instanceof View && target instanceof Number) {
+                                syncNativeLyricsAnchor((View) owner, ((Number) target).intValue());
+                            }
+                            return chain.proceed();
+                        }, "onNativeLyricsAnchorSmooth"));
+                rememberPluginHookHandle(loader, handle);
+            }
+        } catch (Throwable failure) {
+            error("Could not install smooth lyric anchor hook", failure);
+        }
+    }
+
+    private void syncNativeLyricsAnchor(View recycler, int targetIndex) {
+        if (recycler == null
+                || !LyricsRecyclerFieldAccessor.isColorOs17Layout(recycler.getClass())) return;
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null) {
+            NativeLyricsAnchorPolicy.restore(recycler);
+            return;
+        }
+        if (targetIndex < 0 || model.lineAtAdapterIndex(targetIndex) == null
+                || recycler.getHeight() <= 0) return;
+        try {
+            int top = computeLyricsRecyclerTopOffset(recycler, targetIndex,
+                    computeActiveLyricsRecyclerDesiredCenter(recycler));
+            NativeLyricsAnchorPolicy.writeTopOffset(recycler, top);
+        } catch (Throwable failure) {
+            error("Could not synchronize native lyric main anchor", failure);
+        }
+    }
+
+    private void installOfficialLyricHolderMotionHook(Class<?> recyclerClass, ClassLoader loader) {
+        if (!LyricsRecyclerFieldAccessor.isColorOs17Layout(recyclerClass)) return;
+        try {
+            Field adapterField = recyclerClass.getDeclaredField("b");
+            Class<?> adapterClass = adapterField.getType();
+            for (Method method : adapterClass.getDeclaredMethods()) {
+                Class<?>[] args = method.getParameterTypes();
+                if (method.isBridge() || method.getReturnType() != void.class || args.length != 3
+                        || args[1] != int.class || !List.class.isAssignableFrom(args[2])) continue;
+                method.setAccessible(true);
+                XposedInterface.HookHandle handle = hook(method)
+                        .setId(HOOK_ID_LYRICS_RECYCLER + "-holder-motion")
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(ZhiBridgeRuntime.guard(chain -> {
+                            Object result = chain.proceed();
+                            try {
+                                Object holder = chain.getArg(0);
+                                OfficialLyricMotionController.configureHolder(holder,
+                                        runtimeLyricUiConfig.motionMode, useLyricMotion(),
+                                        () -> runtimeLyricUiConfig.maxRefreshRateHz);
+                            } catch (ReflectiveOperationException failure) {
+                                error("Could not configure lyric holder motion", failure);
+                            }
+                            return result;
+                        }, "onLyricsRecyclerHolderMotion"));
+                rememberPluginHookHandle(loader, handle);
+            }
+        } catch (ReflectiveOperationException failure) {
+            error("Could not install lyric holder motion", failure);
+        }
+    }
+
+    private Object onLyricsRecyclerPrepareScalePivot(XposedInterface.Chain chain) throws Throwable {
+        Object result = chain.proceed();
+        boolean staticMethod = java.lang.reflect.Modifier.isStatic(chain.getExecutable().getModifiers());
+        Object textView = chain.getArg(staticMethod ? 1 : 0);
+        if (textView instanceof TextView) {
+            if (!staticMethod && LyricsRecyclerFieldAccessor.isColorOs17Layout(
+                    chain.getExecutable().getDeclaringClass())) {
+                // The native style method also replaces RenderEffect on cancellation paths.
+                // Let the next draw restore the current continuous blur sample.
+                synchronized (VIEW_VISUAL_EFFECT_CACHE_LOCK) {
+                    VIEW_LYRIC_RENDER_EFFECT_MODE.remove((TextView) textView);
+                    VIEW_BLUR_DISABLED.remove((TextView) textView);
+                }
+            }
+            applyOfficialLyricScalePivot((TextView) textView);
+        }
+        return result;
+    }
+
+    private static boolean isLyricsRecyclerModelUpdateMethod(Method method) {
+        if (method == null || method.getReturnType() != void.class
+                || !LyricsRecyclerFieldAccessor.isColorOs17Layout(method.getDeclaringClass())) return false;
+        Class<?>[] args = method.getParameterTypes();
+        if (args.length != 2 || args[1] != boolean.class) return false;
+        // The verified model contains its lyric list and current row index, with no clock scalar.
+        boolean lines = false, index = false;
+        for (Field field : args[0].getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
+            lines |= List.class.isAssignableFrom(field.getType());
+            index |= field.getType() == int.class;
+        }
+        return lines && index;
+    }
+
+    private Object onLyricsRecyclerModelUpdate(XposedInterface.Chain chain) throws Throwable {
+        View recycler = (View) chain.getThisObject();
+        configureOfficialLyricLineSpacing(recycler);
+        configureOfficialLyricScaleOwnership(recycler);
+        rememberLyricsRecyclerView(recycler);
+        Object nativeModel = chain.getArg(0);
+        WordLyricModel lyricModel = currentWordLyricModel;
+        long position = estimatePlaybackPositionMillis();
+        Object focusedModel = nativeModel;
+        try {
+            focusedModel = OfficialLyricOverlapModelAdapter.withFocusedOverlapRow(
+                    nativeModel, lyricModel, position);
+        } catch (ReflectiveOperationException failure) {
+            error("Could not align overlapping lyric focus", failure);
+        }
+        OfficialLyricMotionController.observeModelUpdate(recycler, focusedModel,
+                Boolean.TRUE.equals(chain.getArg(1)), shouldModulePositionLyricsRecycler());
+        syncNativeLyricsAnchor(recycler, NativeLyricsAnchorPolicy.modelTargetIndex(focusedModel));
+        // Keep the new vendor generation, pending-model queue and animate flag untouched.
+        Object result;
+        if (focusedModel != nativeModel) {
+            Object[] args = chain.getArgs().toArray(new Object[0]);
+            args[0] = focusedModel;
+            result = chain.proceed(args);
+        } else {
+            result = chain.proceed();
+        }
+        if (focusedModel != nativeModel && chain.getExecutable() instanceof Method) {
+            rememberNativeOverlapHandoff(recycler, lyricModel, nativeModel,
+                    (Method) chain.getExecutable(), Boolean.TRUE.equals(chain.getArg(1)), position);
+        } else {
+            cancelPendingNativeOverlapHandoff(recycler);
+        }
+        invalidateLyricsRecyclerDescendants(recycler);
+        requestSecondaryLyricLayoutRefresh();
+        return result;
+    }
+
+    private final class PendingNativeOverlapHandoff implements Runnable {
+        final WeakReference<View> recycler;
+        final WordLyricModel model;
+        final Object incomingModel;
+        final Method update;
+        final boolean animate;
+        final int focusIndex;
+        final int incomingIndex;
+
+        PendingNativeOverlapHandoff(View recycler, WordLyricModel model, Object incomingModel,
+                Method update, boolean animate, long position) {
+            this.recycler = new WeakReference<>(recycler);
+            this.model = model;
+            this.incomingModel = incomingModel;
+            this.update = update;
+            this.animate = animate;
+            focusIndex = model.focusIndexAt(position);
+            incomingIndex = model.overlapIndexAt(position);
+        }
+
+        @Override public void run() {
+            refreshPendingNativeOverlapHandoff(this);
+        }
+    }
+
+    private void rememberNativeOverlapHandoff(View recycler, WordLyricModel model,
+            Object incomingModel, Method update, boolean animate, long position) {
+        cancelPendingNativeOverlapHandoff(recycler);
+        PendingNativeOverlapHandoff pending = new PendingNativeOverlapHandoff(
+                recycler, model, incomingModel, update, animate, position);
+        synchronized (nativeOverlapHandoffs) {
+            nativeOverlapHandoffs.put(recycler, pending);
+        }
+        mainHandler.post(pending);
+    }
+
+    private void cancelPendingNativeOverlapHandoff(View recycler) {
+        PendingNativeOverlapHandoff pending;
+        synchronized (nativeOverlapHandoffs) {
+            pending = nativeOverlapHandoffs.remove(recycler);
+        }
+        if (pending != null) mainHandler.removeCallbacks(pending);
+    }
+
+    private void refreshPendingNativeOverlapHandoffs() {
+        ArrayList<PendingNativeOverlapHandoff> pending;
+        synchronized (nativeOverlapHandoffs) {
+            pending = new ArrayList<>(nativeOverlapHandoffs.values());
+        }
+        for (PendingNativeOverlapHandoff handoff : pending) handoff.run();
+    }
+
+    private void cancelAllPendingNativeOverlapHandoffs() {
+        synchronized (nativeOverlapHandoffs) {
+            for (PendingNativeOverlapHandoff handoff : nativeOverlapHandoffs.values()) {
+                mainHandler.removeCallbacks(handoff);
+            }
+            nativeOverlapHandoffs.clear();
+        }
+    }
+
+    private void refreshPendingNativeOverlapHandoff(PendingNativeOverlapHandoff pending) {
+        View recycler = pending.recycler.get();
+        synchronized (nativeOverlapHandoffs) {
+            if (nativeOverlapHandoffs.get(recycler) != pending) return;
+        }
+        mainHandler.removeCallbacks(pending);
+        if (recycler == null || !recycler.isAttachedToWindow() || currentWordLyricModel != pending.model) {
+            cancelPendingNativeOverlapHandoff(recycler);
+            return;
+        }
+        long position = estimatePlaybackPositionMillis();
+        int action = LyricOverlapHandoffPolicy.action(
+                pending.focusIndex, pending.incomingIndex,
+                pending.model.focusIndexAt(position), pending.model.overlapIndexAt(position));
+        if (action == LyricOverlapHandoffPolicy.WAIT) {
+            long delay = LyricOverlapHandoffPolicy.delayMillis(
+                    position, pending.model.lineAt(pending.focusIndex).endTimeMillis,
+                    isSecondaryPlaybackAdvancing(), lastPlaybackSpeed);
+            if (delay >= 0L) mainHandler.postDelayed(pending, delay);
+            return;
+        }
+        cancelPendingNativeOverlapHandoff(recycler);
+        if (action != LyricOverlapHandoffPolicy.RELEASE
+                || readLyricsRecyclerCurrentIndex(recycler)
+                != pending.model.adapterIndexOfLine(pending.model.lineAt(pending.focusIndex))) return;
+        try {
+            Object adapter = invokeNoArgByName(recycler, "getAdapter");
+            Object currentLines = invokeNoArgByName(adapter, "getCurrentList");
+            if (!OfficialLyricOverlapModelAdapter.hasSameLines(pending.incomingModel, currentLines)) return;
+            pending.update.invoke(recycler, pending.incomingModel, pending.animate);
+            requestSecondaryLyricLayoutRefresh();
+            invalidateLyricsRecyclerDescendants(recycler);
+        } catch (ReflectiveOperationException failure) {
+            error("Could not finish overlapping lyric focus handoff", failure);
+        }
+    }
+
+    private static boolean isLyricsRecyclerCurrentLyricMethod(Method method) {
+        if (method == null || method.getReturnType() != void.class) {
+            return false;
+        }
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        if ("setCurrentLyric".equals(method.getName())
+                && parameterTypes.length > 0
+                && parameterTypes[0] == int.class) {
+            return true;
+        }
+        return isOfficialTimedCurrentLyricMethod(method);
+    }
+
+    private static boolean isLyricsRecyclerNotifyCrashGuardMethod(Method method) {
+        return method != null
+                && "e".equals(method.getName())
+                && method.getReturnType() == void.class;
+    }
+
+    private static boolean isLyricsRecyclerScalePivotMethod(Method method) {
+        if (method == null
+                || method.getReturnType() != void.class) {
+            return false;
+        }
+        // Method names drift across same-version SystemUIPlugin binaries (verified m/k plus the
+        // current u/v/C device variant). The shape is narrow and safe: any LyricsRecyclerView
+        // void(single TextView subtype) method can only operate on the lyric row; restoring the
+        // configured pivot after it returns is idempotent even for style/binding helpers.
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        return (parameterTypes.length == 1
+                && TextView.class.isAssignableFrom(parameterTypes[0]))
+                || (LyricsRecyclerFieldAccessor.isColorOs17Layout(method.getDeclaringClass())
+                && parameterTypes.length == 2
+                && ((java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                && parameterTypes[0] == method.getDeclaringClass()
+                && TextView.class.isAssignableFrom(parameterTypes[1]))
+                || (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                && TextView.class.isAssignableFrom(parameterTypes[0])
+                && parameterTypes[1] == boolean.class)));
+    }
+
+    private static boolean isOfficialTimedCurrentLyricMethod(Method method) {
+        return method != null
+                && method.getReturnType() == void.class
+                && isOfficialTimedCurrentLyricExecutable(method);
+    }
+
+    private static boolean isOfficialTimedCurrentLyricExecutable(
+            java.lang.reflect.Executable executable) {
+        return TimedLyricMethodPolicy.matches(executable);
+    }
+
+    private void tryInstallRecyclerAdapterNotifyHook(ClassLoader classLoader) {
+        if (recyclerAdapterNotifyHookInstalled || classLoader == null) {
+            return;
+        }
+        try {
+            Class<?> adapterClass =
+                    classLoader.loadClass("androidx.recyclerview.widget.RecyclerView$Adapter");
+            tryInstallRecyclerAdapterNotifyHook(adapterClass, "class-loader");
+        } catch (Throwable t) {
+            error("Failed to hook RecyclerView.Adapter notify guards", t);
+        }
+    }
+
+    private void tryInstallRecyclerAdapterNotifyHookFromRecycler(View recycler) {
+        if (recyclerAdapterNotifyHookInstalled || recycler == null) {
+            return;
+        }
+        Object adapter = invokeNoArgByName(recycler, "getAdapter");
+        Class<?> adapterClass = findRecyclerAdapterBaseClass(adapter);
+        if (adapterClass != null) {
+            tryInstallRecyclerAdapterNotifyHook(adapterClass, "attached-adapter");
+        }
+    }
+
+    private static Class<?> findRecyclerAdapterBaseClass(Object adapter) {
+        Class<?> current = adapter == null ? null : adapter.getClass();
+        while (current != null) {
+            if ("androidx.recyclerview.widget.RecyclerView$Adapter".equals(current.getName())) {
+                return current;
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private synchronized void tryInstallRecyclerAdapterNotifyHook(
+            Class<?> adapterClass,
+            String source) {
+        if (recyclerAdapterNotifyHookInstalled || adapterClass == null) {
+            return;
+        }
+        int hooked = 0;
+        hooked += hookRecyclerAdapterNotifyMethod(adapterClass, "notifyItemChanged", int.class);
+        hooked += hookRecyclerAdapterNotifyMethod(
+                adapterClass,
+                "notifyItemChanged",
+                int.class,
+                Object.class);
+        hooked += hookRecyclerAdapterNotifyMethod(
+                adapterClass,
+                "notifyItemRangeChanged",
+                int.class,
+                int.class);
+        hooked += hookRecyclerAdapterNotifyMethod(
+                adapterClass,
+                "notifyItemRangeChanged",
+                int.class,
+                int.class,
+                Object.class);
+        recyclerAdapterNotifyHookInstalled = hooked > 0;
+        if (hooked > 0) {
+            infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.HOOK_INSTALLED, "Hooked RecyclerView.Adapter notify guards, methods=" + hooked
+                    + ", source=" + source);
+        }
+    }
+
+    private void scheduleRecyclerAdapterNotifyHook(View recycler, ClassLoader classLoader) {
+        if (recyclerAdapterNotifyHookInstalled || (recycler == null && classLoader == null)) {
+            return;
+        }
+        mainHandler.post(() -> {
+            tryInstallRecyclerAdapterNotifyHookFromRecycler(recycler);
+            if (!recyclerAdapterNotifyHookInstalled) {
+                tryInstallRecyclerAdapterNotifyHook(classLoader);
+            }
+            if (!recyclerAdapterNotifyHookInstalled) {
+                mainHandler.postDelayed(
+                        () -> {
+                            tryInstallRecyclerAdapterNotifyHookFromRecycler(recycler);
+                            if (!recyclerAdapterNotifyHookInstalled) {
+                                tryInstallRecyclerAdapterNotifyHook(classLoader);
+                            }
+                        },
+                        100L);
+            }
+        });
+    }
+
+    private int hookRecyclerAdapterNotifyMethod(
+            Class<?> adapterClass,
+            String methodName,
+            Class<?>... parameterTypes) {
+        try {
+            Method method = adapterClass.getDeclaredMethod(methodName, parameterTypes);
+            method.setAccessible(true);
+            hook(method)
+                    .setId(HOOK_ID_RECYCLER_ADAPTER_NOTIFY_CHANGED
+                            + "-"
+                            + methodName
+                            + "-"
+                            + parameterTypes.length)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(ZhiBridgeRuntime.guard(this::onRecyclerAdapterNotifyChanged, "onRecyclerAdapterNotifyChanged"));
+            return 1;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    private Object onRecyclerAdapterNotifyChanged(XposedInterface.Chain chain) throws Throwable {
+        if (!isRememberedLyricsRecyclerAdapter(chain.getThisObject())) {
+            return chain.proceed();
+        }
+        try {
+            return chain.proceed();
+        } catch (IllegalStateException e) {
+            if (!LockscreenIntegrationPolicy.isLyricsRecyclerComputingLayoutException(e)) {
+                throw e;
+            }
+            maybeLogRecyclerAdapterNotifyGuard(e);
+            return null;
+        }
+    }
+
+    private Object onLyricsRecyclerNotifyCrashGuard(XposedInterface.Chain chain) throws Throwable {
+        try {
+            return chain.proceed();
+        } catch (IllegalStateException e) {
+            Object recycler = chain.getThisObject();
+            if (!(recycler instanceof View)
+                    || !isLyricsRecyclerView((View) recycler)
+                    || !LockscreenIntegrationPolicy.isLyricsRecyclerComputingLayoutException(e)) {
+                throw e;
+            }
+            maybeLogRecyclerAdapterNotifyGuard(e);
+            return null;
+        }
+    }
+
+    private void maybeLogRecyclerAdapterNotifyGuard(Throwable throwable) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastRecyclerAdapterNotifyGuardLogAt < 1_500L) {
+            return;
+        }
+        lastRecyclerAdapterNotifyGuardLogAt = now;
+        info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Suppressed RecyclerView.Adapter notify during layout, message="
+                + (throwable == null ? "" : throwable.getMessage()));
+    }
+
+    private void rememberActiveLyricTextView(Object view, WordLine line) {
+        if (!(view instanceof TextView) || line == null || TextUtils.isEmpty(line.text)) {
+            return;
+        }
+        TextView textView = (TextView) view;
+        activeLyricLine = line.normalizedText;
+        activeLyricLineTimeMs = line.timeMillis;
+        rememberActiveTextViewReference(textView);
+        scheduleActiveLyricRefresh(textView, 80L);
+    }
+
+    private LyricTextMatch findLyricTextMatch(
+            WordLyricModel model,
+            TextView textView,
+            String normalizedText,
+            long position) {
+        if (model == null || textView == null || TextUtils.isEmpty(normalizedText)) {
+            return LyricTextMatch.EMPTY;
+        }
+
+        int adapterPosition = findValidLyricsRecyclerAdapterPosition(textView, model);
+        WordLine indexedLine = model.lineAtAdapterIndexMatchingText(
+                adapterPosition,
+                normalizedText);
+        boolean duplicateText = model.hasDuplicateRenderableText(normalizedText);
+        int officialIndex = indexedLine == null
+                ? currentOfficialIndexForTextView(textView)
+                : -1;
+        WordLine activeLine = duplicateText
+                ? resolveRecyclerVisualActiveLyricLine(model, position, textView)
+                : null;
+        officialLyricFrameResolver.resolveInto(
+                model,
+                normalizedText,
+                adapterPosition,
+                officialIndex,
+                indexedLine,
+                activeLine,
+                position,
+                duplicateText,
+                "",
+                -1L,
+                lyricTextMatchSelection);
+        return lyricTextMatchSelection.line == null
+                && lyricTextMatchSelection.translationLine == null
+                ? LyricTextMatch.EMPTY
+                : new LyricTextMatch(
+                        lyricTextMatchSelection.line,
+                        lyricTextMatchSelection.translationLine);
+    }
+
+    private DrawFrame findOfficialLyricDrawFrame(TextView textView) {
+        long performanceStartedAt = performanceSampler.begin();
+        try {
+            return resolveOfficialLyricDrawFrame(textView);
+        } finally {
+            performanceSampler.end(
+                    BridgePerformanceSampler.Metric.FRAME_RESOLVE,
+                    performanceStartedAt);
+        }
+    }
+
+    private DrawFrame resolveOfficialLyricDrawFrame(TextView textView) {
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null || !isReadyForLyricDraw(textView)) {
+            return null;
+        }
+        LyricsRecyclerMatch rowMatch = findLyricsRecyclerMatch(textView);
+        if (rowMatch == null) {
+            return null;
+        }
+        View recycler = rowMatch.recycler();
+        View itemView = rowMatch.itemView();
+        if (recycler == null || itemView == null) {
+            return null;
+        }
+        ensureScreenTimeoutReceiver(textView.getContext());
+
+        CharSequence currentText = textView.getText();
+        if (currentText == null || currentText.length() == 0 || currentText.length() > lyricTextLengthLimit()) {
+            return null;
+        }
+
+        String normalizedText = normalizedTextOf(textView);
+        if (TextUtils.isEmpty(normalizedText)) {
+            return null;
+        }
+
+        long position = estimatePlaybackPositionMillis();
+        int officialIndex = readLyricsRecyclerCurrentIndex(recycler);
+        WordLine activeLine = resolveRecyclerVisualActiveLyricLine(
+                model,
+                position,
+                officialIndex);
+        int adapterPosition = readRecyclerChildPosition(recycler, itemView);
+        if (adapterPosition < 0
+                || (adapterPosition >= model.lines.size()
+                && adapterPosition >= model.officialLines.size())) {
+            adapterPosition = -1;
+        }
+        WordLine indexedLine = model.lineAtAdapterIndexMatchingText(
+                adapterPosition,
+                normalizedText);
+        if (shouldSkipStrictOfficialAdapterSlot(model, adapterPosition, indexedLine, normalizedText)) {
+            return null;
+        }
+        boolean duplicateText = model.hasDuplicateRenderableText(normalizedText);
+        boolean rememberedLyricTextView = isRememberedActiveTextView(textView);
+        officialLyricFrameResolver.resolveInto(
+                model,
+                normalizedText,
+                adapterPosition,
+                officialIndex,
+                indexedLine,
+                activeLine,
+                position,
+                duplicateText,
+                rememberedLyricTextView ? activeLyricLine : "",
+                rememberedLyricTextView ? activeLyricLineTimeMs : -1L,
+                officialFrameSelection);
+        WordLine line = officialFrameSelection.line;
+        WordLine translationLine = officialFrameSelection.translationLine;
+        String matchReason = officialFrameSelection.matchReason;
+        WordLine boundFirst = LyricIntroDotsPolicy.boundFirstLyricLine(model, indexedLine, normalizedText, position);
+        if (boundFirst != null) {
+            line = boundFirst;
+            translationLine = null;
+            matchReason = "bound-first-main";
+        }
+        boolean knownLyricTextView = rememberedLyricTextView
+                || line != null
+                || translationLine != null;
+        if (!knownLyricTextView) {
+            return null;
+        }
+        if (line == null && translationLine != null) {
+            return null;
+        }
+        if (line == null) {
+            return null;
+        }
+        if (shouldSuppressDuplicateOfficialAdapterDraw(
+                model,
+                adapterPosition,
+                line,
+                officialIndex)) {
+            return null;
+        }
+        if (position < 0) {
+            position = line.timeMillis;
+        }
+        maybeLogOfficialFrameDecision(
+                "draw",
+                model,
+                textView,
+                normalizedText,
+                adapterPosition,
+                indexedLine,
+                model.rawOfficialLineAt(adapterPosition),
+                activeLine,
+                line,
+                null,
+                position,
+                matchReason,
+                duplicateText);
+
+        boolean active = isOfficialWordProgressActive(model, activeLine, line, position);
+        rememberActiveTextViewReference(textView);
+        boolean animatedIntro = isAnimatedIntroRow(model, line, position);
+        if (active || animatedIntro) {
+            if (!model.hasVerifiedOverlapBefore(position) || line == activeLine) {
+                activeLyricLine = line.normalizedText;
+                activeLyricLineTimeMs = line.timeMillis;
+                rememberActiveRendererTextView(textView);
+                activeRendererWordLine = line;
+            }
+            scheduleActiveLyricRefresh(
+                    textView,
+                    lastPlaybackIsPlaying ? ACTIVE_LYRIC_FRAME_DELAY_MS : 500L);
+        }
+        int lineIndex = model.indexOfLine(line);
+        WordLine focusAnchor = resolveFocusAnchorLine(model, activeLine, position);
+        int focusAnchorIndex = model.indexOfLine(focusAnchor);
+        int scaleActiveIndex = resolveOfficialScaleActiveIndex(
+                model,
+                activeLine,
+                position,
+                officialIndex);
+        boolean focused = isOfficialVisualFocusedLine(lineIndex, focusAnchorIndex, scaleActiveIndex);
+        return new DrawFrame(
+                model,
+                line,
+                lineIndex,
+                focusAnchorIndex,
+                scaleActiveIndex,
+                position,
+                resolveLyricGlowPosition(position),
+                active,
+                focused,
+                shouldAnimateOfficialRowScale(textView));
+    }
+
+    private void rememberRecentOfficialDrawFrame(TextView textView, DrawFrame frame) {
+        if (textView == null
+                || frame == null
+                || frame.model == null
+                || frame.line == null
+                || TextUtils.isEmpty(frame.line.normalizedText)) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        CachedDrawFrame cached = recentOfficialDrawFrames.get(textView);
+        if (cached != null
+                && cached.model == frame.model
+                && cached.line == frame.line
+                && cached.lineTimeMillis == frame.line.timeMillis
+                && cached.normalizedText.equals(frame.line.normalizedText)) {
+            cached.capturedAtElapsedMs = now;
+            return;
+        }
+        recentOfficialDrawFrames.put(
+                textView,
+                new CachedDrawFrame(
+                        frame.model,
+                        frame.line,
+                        frame.line.timeMillis,
+                        frame.line.normalizedText,
+                        now));
+    }
+
+    private DrawFrame findRecentOfficialDrawFrame(TextView textView) {
+        if (textView == null || !isReadyForLyricDraw(textView) || !isInLyricsRecyclerView(textView)) {
+            return null;
+        }
+        CachedDrawFrame cached = recentOfficialDrawFrames.get(textView);
+        WordLyricModel model = currentWordLyricModel;
+        long now = SystemClock.elapsedRealtime();
+        if (cached == null
+                || model == null
+                || cached.model != model
+                || cached.line == null
+                || now - cached.capturedAtElapsedMs > OFFICIAL_DRAW_FRAME_TRANSIENT_MISS_GRACE_MS) {
+            return null;
+        }
+
+        String normalizedText = normalizedTextOf(textView);
+        int adapterPosition = findValidLyricsRecyclerAdapterPosition(textView, model);
+        WordLine indexedLine = model.lineAtAdapterIndexMatchingText(
+                adapterPosition,
+                normalizedText);
+        long position = estimatePlaybackPositionMillis();
+        WordLine boundFirst = LyricIntroDotsPolicy.boundFirstLyricLine(model, indexedLine, normalizedText, position);
+        if (boundFirst != null) indexedLine = boundFirst;
+        if (!isCachedDrawFrameStillCompatible(cached, normalizedText) && boundFirst == null) {
+            recentOfficialDrawFrames.remove(textView);
+            return null;
+        }
+        if (shouldSkipStrictOfficialAdapterSlot(model, adapterPosition, indexedLine, normalizedText)
+                || shouldSuppressDuplicateOfficialAdapterDraw(
+                model,
+                adapterPosition,
+                cached.line,
+                textView)) {
+            recentOfficialDrawFrames.remove(textView);
+            return null;
+        }
+
+        if (position < 0L) {
+            position = cached.line.timeMillis;
+        }
+        WordLine activeLine = resolveRecyclerVisualActiveLyricLine(model, position, textView);
+        if (indexedLine != null && indexedLine != cached.line) {
+            recentOfficialDrawFrames.remove(textView);
+            maybeLogOfficialFrameDecision(
+                    "recent-cache-indexed",
+                    model,
+                    textView,
+                    normalizedText,
+                    adapterPosition,
+                    indexedLine,
+                    model.rawOfficialLineAt(adapterPosition),
+                    activeLine,
+                    indexedLine,
+                    cached.line,
+                    position,
+                    "cached-mismatch-indexed",
+                    model.hasDuplicateRenderableText(normalizedText));
+            return buildOfficialDrawFrame(model, indexedLine, activeLine, position, textView);
+        }
+        maybeLogOfficialFrameDecision(
+                "recent-cache",
+                model,
+                textView,
+                normalizedText,
+                adapterPosition,
+                indexedLine,
+                model.rawOfficialLineAt(adapterPosition),
+                activeLine,
+                cached.line,
+                cached.line,
+                position,
+                "cached-compatible",
+                model.hasDuplicateRenderableText(normalizedText));
+        return buildOfficialDrawFrame(model, cached.line, activeLine, position, textView);
+    }
+
+    private boolean isCachedDrawFrameStillCompatible(
+            CachedDrawFrame cached,
+            String normalizedText) {
+        if (cached == null || cached.line == null || TextUtils.isEmpty(cached.normalizedText)) {
+            return false;
+        }
+        if (TextUtils.isEmpty(normalizedText)) {
+            return false;
+        }
+        if (normalizedText.equals(cached.normalizedText)
+                || WordLyricRenderSupport.matchesWordLineText(cached.line, normalizedText)) {
+            return true;
+        }
+        return !TextUtils.isEmpty(cached.line.translation)
+                && cached.line.normalizedTranslation().equals(normalizedText);
+    }
+
+    private DrawFrame buildOfficialDrawFrame(
+            WordLyricModel model,
+            WordLine line,
+            WordLine activeLine,
+            long position,
+            TextView textView) {
+        if (model == null || line == null) {
+            return null;
+        }
+        int lineIndex = model.indexOfLine(line);
+        if (lineIndex < 0) {
+            return null;
+        }
+        WordLine focusAnchor = resolveFocusAnchorLine(model, activeLine, position);
+        int focusAnchorIndex = model.indexOfLine(focusAnchor);
+        int scaleActiveIndex = resolveOfficialScaleActiveIndex(
+                model,
+                activeLine,
+                position,
+                textView);
+        boolean active = isOfficialWordProgressActive(model, activeLine, line, position);
+        boolean focused = isOfficialVisualFocusedLine(lineIndex, focusAnchorIndex, scaleActiveIndex);
+        return new DrawFrame(
+                model,
+                line,
+                lineIndex,
+                focusAnchorIndex,
+                scaleActiveIndex,
+                position,
+                resolveLyricGlowPosition(position),
+                active,
+                focused,
+                shouldAnimateOfficialRowScale(textView));
+    }
+
+    private int resolveOfficialScaleActiveIndex(
+            WordLyricModel model,
+            WordLine activeLine,
+            long position,
+            TextView textView) {
+        return resolveOfficialScaleActiveIndex(
+                model,
+                activeLine,
+                position,
+                readLyricsRecyclerCurrentIndex(
+                        findContainingLyricsRecyclerView(textView)));
+    }
+
+    private int resolveOfficialScaleActiveIndex(
+            WordLyricModel model,
+            WordLine activeLine,
+            long position,
+            int officialIndex) {
+        if (model == null) {
+            return -1;
+        }
+        if (isBeforeFirstLyricScaleStart(model, position)) {
+            return -1;
+        }
+        if (model.hasVerifiedOverlapBefore(position)) {
+            return model.focusIndexAt(position);
+        }
+        WordLine officialLine = model.lineAtOfficialDisplayIndex(officialIndex);
+        int officialLineIndex = model.indexOfLine(officialLine);
+        int activeLineIndex = model.indexOfLine(activeLine);
+        officialLineIndex = SentenceWindowContract.visualIndex(
+                hasSentenceWindow() ? position : -1L, activeLineIndex, officialLineIndex);
+        return LockscreenIntegrationPolicy.chooseOfficialLyricVisualIndex(
+                officialLineIndex,
+                activeLineIndex,
+                model.displayIndexAt(position));
+    }
+
+    private static boolean isOfficialVisualFocusedLine(
+            int lineIndex,
+            int focusAnchorIndex,
+            int scaleActiveIndex) {
+        if (lineIndex < 0) {
+            return false;
+        }
+        if (lineIndex == scaleActiveIndex) {
+            return true;
+        }
+        return scaleActiveIndex < 0 && lineIndex == focusAnchorIndex;
+    }
+
+    private static boolean isBeforeFirstLyricScaleStart(WordLyricModel model, long position) {
+        return model != null && model.isBeforeFirstProgressStart(position);
+    }
+
+    private static boolean isOfficialWordProgressActive(
+            WordLyricModel model,
+            WordLine activeLine,
+            WordLine line,
+            long position) {
+        boolean lineMatchesPlaybackActive = activeLine != null
+                && line != null
+                && activeLine.timeMillis == line.timeMillis
+                && activeLine.normalizedText.equals(line.normalizedText);
+        if (model != null && model.hasVerifiedOverlapBefore(position)) {
+            lineMatchesPlaybackActive = model.isSingingLine(line, position);
+        }
+        return LockscreenIntegrationPolicy.shouldTreatLineAsWordProgressActive(
+                lineMatchesPlaybackActive,
+                model != null && model.isBeforeFirstProgressStart(position));
+    }
+
+    private boolean shouldSkipStrictOfficialAdapterSlot(
+            WordLyricModel model,
+            int adapterPosition,
+            WordLine indexedLine,
+            String normalizedText) {
+        // RecyclerView pre-layout can expose a new bound string with the previous adapter
+        // position for one frame. A unique model string is authoritative in that window;
+        // adapter position is only needed to disambiguate repeated lyric text.
+        if (model != null
+                && model.hasRenderableText(normalizedText)
+                && !model.hasDuplicateRenderableText(normalizedText)) {
+            return false;
+        }
+        if (!hasStrictOfficialAdapterSlot(model, adapterPosition)) {
+            return false;
+        }
+        if (indexedLine == null) {
+            maybeLogOfficialAdapterSuppression(
+                    "slot-empty",
+                    adapterPosition,
+                    -1,
+                    normalizedText,
+                    null);
+            return true;
+        }
+        boolean matchesMain = WordLyricRenderSupport.matchesWordLineText(indexedLine, normalizedText);
+        boolean matchesTranslation = !TextUtils.isEmpty(indexedLine.translation)
+                && indexedLine.normalizedTranslation().equals(normalizedText);
+        if (matchesMain || matchesTranslation) {
+            return false;
+        }
+        maybeLogOfficialAdapterSuppression(
+                "slot-mismatch",
+                adapterPosition,
+                model.indexOfLine(indexedLine),
+                normalizedText,
+                indexedLine);
+        return true;
+    }
+
+    private static boolean hasStrictOfficialAdapterSlot(
+            WordLyricModel model,
+            int adapterPosition) {
+        return model != null
+                && adapterPosition >= 0
+                && !model.officialLines.isEmpty()
+                && adapterPosition < model.officialLines.size();
+    }
+
+    private boolean shouldSuppressDuplicateOfficialAdapterDraw(
+            WordLyricModel model,
+            int adapterPosition,
+            WordLine line,
+            TextView textView) {
+        return shouldSuppressDuplicateOfficialAdapterDraw(
+                model,
+                adapterPosition,
+                line,
+                currentOfficialLyricsRecyclerAdapterIndex(model, textView));
+    }
+
+    private boolean shouldSuppressDuplicateOfficialAdapterDraw(
+            WordLyricModel model,
+            int adapterPosition,
+            WordLine line,
+            int currentIndex) {
+        if (!WordLyricRenderConstants.OFFICIAL_SLOT_ALIAS_REUSE_ENABLED) {
+            return false;
+        }
+        if (!hasStrictOfficialAdapterSlot(model, adapterPosition) || line == null) {
+            return false;
+        }
+        WordLine indexedLine = model.lineAtOfficialIndex(adapterPosition);
+        if (indexedLine != line) {
+            return false;
+        }
+        int firstIndex = -1;
+        int duplicateCount = 0;
+        for (int i = 0; i < model.officialLines.size(); i++) {
+            if (model.officialLines.get(i) != line) {
+                continue;
+            }
+            if (firstIndex < 0) {
+                firstIndex = i;
+            }
+            duplicateCount++;
+        }
+        if (duplicateCount <= 1) {
+            return false;
+        }
+        int keepIndex = firstIndex;
+        if (currentIndex >= 0
+                && currentIndex < model.officialLines.size()
+                && model.officialLines.get(currentIndex) == line) {
+            keepIndex = currentIndex;
+        }
+        boolean suppress = adapterPosition != keepIndex;
+        if (suppress) {
+            maybeLogOfficialAdapterSuppression(
+                    "duplicate-slot",
+                    adapterPosition,
+                    model.indexOfLine(line),
+                    line.normalizedText,
+                    line);
+        }
+        return suppress;
+    }
+
+    private int currentOfficialLyricsRecyclerAdapterIndex(
+            WordLyricModel model,
+            TextView textView) {
+        if (model == null) {
+            return -1;
+        }
+        int officialIndex = readLyricsRecyclerCurrentIndex(
+                findContainingLyricsRecyclerView(textView));
+        if (officialIndex >= 0) {
+            return officialIndex;
+        }
+        return model.adapterIndexAt(estimatePlaybackPositionMillis());
+    }
+
+    private void maybeLogOfficialAdapterSuppression(
+            String reason,
+            int adapterPosition,
+            int drawIndex,
+            String normalizedText,
+            WordLine line) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        String key = nullToEmpty(reason)
+                + "|" + adapterPosition
+                + "|" + drawIndex
+                + "|" + shortenForLog(normalizedText)
+                + "|" + (line == null ? -1L : line.timeMillis)
+                + "|" + shortenForLog(line == null ? "" : line.normalizedText);
+        long now = SystemClock.elapsedRealtime();
+        Long previous = officialAdapterSuppressionLogTimes.get(key);
+        if (previous != null && now - previous < OFFICIAL_ADAPTER_SUPPRESSION_LOG_INTERVAL_MS) {
+            return;
+        }
+        if (officialAdapterSuppressionLogTimes.size() >= 256) {
+            officialAdapterSuppressionLogTimes.clear();
+        }
+        officialAdapterSuppressionLogTimes.put(key, now);
+        info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Suppress official lyric custom draw"
+                        + ", reason=" + reason
+                        + ", adapterPosition=" + adapterPosition
+                        + ", drawIndex=" + drawIndex
+                        + ", text=" + shortenForLog(normalizedText)
+                        + ", line=" + LyricModelTraceSupport.describeWordLine(line, false));
+    }
+
+    private WordLine recentSeedlingActiveLine(WordLyricModel model) {
+        if (model == null
+                || lastSeedlingActiveLineTimeMs < 0L
+                || lastSeedlingActiveLineObservedAtMs < 0L
+                || SystemClock.elapsedRealtime() - lastSeedlingActiveLineObservedAtMs > 6_000L) {
+            return null;
+        }
+        return model.findLineAtTime(lastSeedlingActiveLineTimeMs);
+    }
+
+    private WordLine resolvePlaybackActiveLyricLine(WordLyricModel model, long position) {
+        if (model == null) {
+            return null;
+        }
+        WordLine activeLine = position >= 0L
+                ? model.lineAt(model.focusIndexAt(position)) : null;
+        if (activeLine == null) {
+            activeLine = firstLineBeforeDisplayStart(model, position);
+        } else {
+            WordLine firstDisplayLine = firstLineBeforeDisplayStart(model, position);
+            if (firstDisplayLine != null) {
+                int activeLineIndex = model.indexOfLine(activeLine);
+                int firstDisplayLineIndex = model.indexOfLine(firstDisplayLine);
+                if (activeLineIndex < 0
+                        || (firstDisplayLineIndex >= 0
+                        && activeLineIndex < firstDisplayLineIndex)) {
+                    activeLine = firstDisplayLine;
+                }
+            }
+        }
+        return activeLine;
+    }
+
+    private WordLine resolveRecyclerVisualActiveLyricLine(
+            WordLyricModel model,
+            long position,
+            TextView textView) {
+        return resolveRecyclerVisualActiveLyricLine(
+                model,
+                position,
+                readLyricsRecyclerCurrentIndex(
+                        findContainingLyricsRecyclerView(textView)));
+    }
+
+    private WordLine resolveRecyclerVisualActiveLyricLine(
+            WordLyricModel model,
+            long position,
+            int officialIndex) {
+        if (model == null) {
+            return null;
+        }
+        WordLine officialLine = model.lineAtOfficialDisplayIndex(officialIndex);
+        WordLine playbackLine = resolvePlaybackActiveLyricLine(model, position);
+        if (model.hasVerifiedOverlapBefore(position)) {
+            return playbackLine;
+        }
+        if (officialLine != null
+                && LockscreenIntegrationPolicy.shouldTrustOfficialRecyclerActiveLine(
+                systemUiOwnsNativeLyricsRecycler(),
+                model.indexOfLine(officialLine),
+                model.indexOfLine(playbackLine),
+                model.isBeforeFirstProgressStart(position),
+                SystemClock.elapsedRealtime() <= lyricTrackPositionResetGuardUntilElapsedMs)) {
+            return officialLine;
+        }
+        return playbackLine;
+    }
+
+    private static WordLine firstLineBeforeDisplayStart(WordLyricModel model, long position) {
+        if (model == null || position < 0L || model.lines.isEmpty()) {
+            return null;
+        }
+        WordLine firstLine = model.firstDisplayLine();
+        if (firstLine == null || firstLine.timeMillis <= position) {
+            return null;
+        }
+        return firstLine;
+    }
+
+    private static WordLine resolveFocusAnchorLine(
+            WordLyricModel model, WordLine activeLine, long position) {
+        WordLine firstDisplayLine = firstLineBeforeDisplayStart(model, position);
+        if (firstDisplayLine != null) {
+            return firstDisplayLine;
+        }
+        if (activeLine != null || model == null) {
+            return activeLine;
+        }
+        return model.lineAt(model.displayIndexAt(position));
+    }
+
+    private static boolean isReadyForLyricDraw(TextView textView) {
+        return textView != null
+                && textView.isAttachedToWindow()
+                && textView.getVisibility() == View.VISIBLE
+                && textView.getWidth() > 0
+                && textView.getHeight() > 0;
+    }
+
+    private void noteVisibleLockscreenLyricTextView(
+            TextView textView,
+            View recycler,
+            long now) {
+        if (textView == null
+                || recycler == null
+                || recycler.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        if (systemUiLyricModeKeepAwakeActive
+                && !screenTimeoutPausedByUserPresent
+                && now - lastVisibleOfficialLyricTextViewAt
+                < SCREEN_TIMEOUT_VISIBLE_LYRIC_NOTE_THROTTLE_MS) {
+            return;
+        }
+        if (!isEffectivelyVisible(textView)) {
+            return;
+        }
+        if (!hasUsableLyricText(textView)) {
+            return;
+        }
+        rememberLyricsRecyclerView(recycler);
+        lastVisibleOfficialLyricTextViewAt = now;
+        if (screenTimeoutPausedByUserPresent
+                && isKeyguardShowingForScreenTimeout(textView.getContext())) {
+            screenTimeoutPausedByUserPresent = false;
+            maybeLogScreenTimeout(
+                    "Resumed screen timeout keep-awake after visible lyric confirmed keyguard",
+                    true);
+        }
+        if (screenTimeoutPausedByScreenOff
+                || screenTimeoutPausedByUserPresent
+                || !hasSupportedSystemUiPlayer()
+                || !lastPlaybackIsPlaying) {
+            return;
+        }
+        if (!systemUiLyricModeKeepAwakeActive) {
+            prepareLyricSurfaceFromVisibleSession(recycler, "visible-session-draw");
+            activateSystemUiLyricModeFromVisibleTextView(
+                    textView,
+                    recycler,
+                    "visible lyric TextView");
+            maybeLogScreenTimeout(
+                    "Inferred lockscreen lyric UI keep-awake from visible official lyric view",
+                    false);
+        }
+        updateScreenTimeoutWakeLock(textView.getContext());
+    }
+
+    private boolean hasUsableLyricText(TextView textView) {
+        CharSequence text = textView == null ? null : textView.getText();
+        if (text == null || text.length() == 0 || text.length() > lyricTextLengthLimit()) {
+            return false;
+        }
+        return !TextUtils.isEmpty(normalizedTextOf(textView));
+    }
+
+    private static int findLyricsRecyclerAdapterPosition(TextView textView) {
+        LyricsRecyclerMatch match = findLyricsRecyclerMatch(textView);
+        return match == null
+                ? -1
+                : readRecyclerChildPosition(match.recycler(), match.itemView());
+    }
+
+    private static int readRecyclerChildPosition(View recyclerView, View child) {
+        if (recyclerView == null || child == null) {
+            return -1;
+        }
+        Method method = resolveRecyclerChildPositionMethod(recyclerView.getClass());
+        if (method == null) {
+            return -1;
+        }
+        try {
+            Object result = method.invoke(recyclerView, child);
+            return result instanceof Number ? ((Number) result).intValue() : -1;
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private static Method resolveRecyclerChildPositionMethod(Class<?> recyclerClass) {
+        synchronized (RECYCLER_POSITION_METHOD_CACHE_LOCK) {
+            WeakReference<Method> reference = RECYCLER_POSITION_METHOD_CACHE.get(recyclerClass);
+            Method cached = reference == null ? null : reference.get();
+            if (cached != null) {
+                return cached;
+            }
+            if (RECYCLER_POSITION_METHOD_MISSING.containsKey(recyclerClass)) {
+                return null;
+            }
+        }
+        Method resolved = findRecyclerChildPositionMethod(recyclerClass);
+        synchronized (RECYCLER_POSITION_METHOD_CACHE_LOCK) {
+            if (resolved == null) {
+                RECYCLER_POSITION_METHOD_MISSING.put(recyclerClass, Boolean.TRUE);
+            } else {
+                RECYCLER_POSITION_METHOD_CACHE.put(
+                        recyclerClass,
+                        new WeakReference<>(resolved));
+            }
+        }
+        return resolved;
+    }
+
+    private static Method findRecyclerChildPositionMethod(Class<?> recyclerClass) {
+        Method resolved = null;
+        String[] methodNames = {
+                "getChildBindingAdapterPosition",
+                "getChildAdapterPosition",
+                "getChildLayoutPosition"
+        };
+        for (String methodName : methodNames) {
+            try {
+                resolved = findMethod(recyclerClass, methodName, View.class);
+                resolved.setAccessible(true);
+                break;
+            } catch (Throwable ignored) {
+                // Some plugin RecyclerView builds expose only one of these helpers.
+            }
+        }
+        return resolved;
+    }
+
+    private static int findValidLyricsRecyclerAdapterPosition(TextView textView, WordLyricModel model) {
+        int position = findLyricsRecyclerAdapterPosition(textView);
+        if (model == null
+                || position < 0
+                || (position >= model.lines.size()
+                && position >= model.officialLines.size())) {
+            return -1;
+        }
+        return position;
+    }
+
+    private static int currentOfficialIndexForTextView(TextView textView) {
+        return readLyricsRecyclerCurrentIndex(findContainingLyricsRecyclerView(textView));
+    }
+
+    private static View findContainingLyricsRecyclerView(TextView textView) {
+        LyricsRecyclerMatch match = findLyricsRecyclerMatch(textView);
+        return match == null ? null : match.recycler();
+    }
+
+    private static View findLyricsRecyclerItemView(TextView textView) {
+        LyricsRecyclerMatch match = findLyricsRecyclerMatch(textView);
+        if (match != null) {
+            return match.itemView();
+        }
+        if (textView == null) {
+            return null;
+        }
+        return textView;
+    }
+
+    private static LyricsRecyclerMatch findLyricsRecyclerMatch(TextView textView) {
+        if (textView == null) {
+            return null;
+        }
+        LyricsRecyclerMatch cached = LYRICS_RECYCLER_MATCH_CACHE.get(textView);
+        if (cached == NO_LYRICS_RECYCLER_MATCH) {
+            return null;
+        }
+        if (cached != null && cached.isUsable(textView)) {
+            return cached;
+        }
+        if (cached != null) {
+            LYRICS_RECYCLER_MATCH_CACHE.remove(textView);
+        }
+        View child = textView;
+        Object parent = child.getParent();
+        for (int depth = 0; depth < 12 && parent instanceof View; depth++) {
+            View parentView = (View) parent;
+            if (isLyricsRecyclerView(parentView)) {
+                LyricsRecyclerMatch match = new LyricsRecyclerMatch(parentView, child);
+                LYRICS_RECYCLER_MATCH_CACHE.put(textView, match);
+                return match;
+            }
+            child = parentView;
+            parent = child.getParent();
+        }
+        if (textView.isAttachedToWindow()) {
+            LYRICS_RECYCLER_MATCH_CACHE.put(textView, NO_LYRICS_RECYCLER_MATCH);
+        }
+        return null;
+    }
+
+    private void configureOfficialLyricLineSpacing(View recyclerView) {
+        if (recyclerView == null) {
+            return;
+        }
+        LyricUiConfig config = runtimeLyricUiConfig == null
+                ? LyricUiConfig.defaults()
+                : runtimeLyricUiConfig;
+        // Keep one RecyclerView-owned edge mask; disabling it preserves the configured length.
+        recyclerView.setVerticalFadingEdgeEnabled(config.verticalFadeEnabled);
+        recyclerView.setFadingEdgeLength(dp(
+                recyclerView.getContext(),
+                config.verticalFadeLengthTenthsDp / 10f));
+        recyclerView.invalidate();
+        OfficialLyricsRecyclerCompatibility.Binding binding =
+                resolveOfficialLyricsRecyclerBinding(recyclerView);
+        if (binding == null) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Official lyric line spacing layout unavailable; keeping plugin default");
+            return;
+        }
+        float requestedSpacingDp = LyricUiLayoutPolicy.lineSpacingTenthsDp(config) / 10f;
+        int requestedSpacing = dp(recyclerView.getContext(), requestedSpacingDp);
+        Integer previousSpacingValue = binding.readLineSpacing(recyclerView);
+        if (previousSpacingValue == null) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Official lyric line spacing field unavailable; keeping plugin default");
+            return;
+        }
+        int previousSpacing = previousSpacingValue;
+        if (previousSpacing != requestedSpacing) {
+            if (!binding.writeLineSpacing(recyclerView, requestedSpacing)) {
+                info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Could not configure official lyric line spacing; keeping plugin default");
+                return;
+            }
+        }
+        Integer appliedSpacing = binding.readLineSpacing(recyclerView);
+        if (appliedSpacing == null || appliedSpacing != requestedSpacing) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Could not configure official lyric line spacing; keeping plugin default");
+            return;
+        }
+        int synchronizedChildren = synchronizeBoundLyricItemSpacing(
+                recyclerView,
+                previousSpacing,
+                requestedSpacing);
+        if (previousSpacing != requestedSpacing || synchronizedChildren > 0) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Configured official lyric line spacing, from=" + previousSpacing
+                    + ", to=" + requestedSpacing
+                    + ", layout=" + binding.layoutName
+                    + ", synchronizedChildren=" + synchronizedChildren);
+        }
+    }
+
+    private void configureOfficialLyricScaleOwnership(View recyclerView) {
+        if (recyclerView == null) {
+            return;
+        }
+        OfficialLyricsRecyclerCompatibility.Binding binding =
+                resolveOfficialLyricsRecyclerBinding(recyclerView);
+        if (binding == null) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Official lyric inactive scale layout unavailable; keeping plugin scale");
+            return;
+        }
+        float requestedScale = LockscreenIntegrationPolicy.officialInactiveRowScale(
+                runtimeLyricUiConfig.scaleEnabled,
+                runtimeLyricUiConfig.inactiveScalePercent);
+        Float previousScaleValue = binding.readInactiveScale(recyclerView);
+        if (previousScaleValue == null || Float.isNaN(previousScaleValue)) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Official lyric inactive scale field unavailable; keeping plugin scale");
+            return;
+        }
+        float previousScale = previousScaleValue;
+        // Keep the vendor RecyclerView as the only row-scale state machine. Its current-index
+        // transaction atomically owns child attachment, animation cancellation, pivot preparation
+        // and the active/inactive transform. The custom renderer only supplies pixels.
+        boolean scaleChanged = Math.abs(previousScale - requestedScale) > 0.001f;
+        if (scaleChanged) {
+            if (!binding.writeInactiveScale(recyclerView, requestedScale)) {
+                info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Could not configure official lyric inactive scale; keeping plugin default");
+                return;
+            }
+            Float appliedScale = binding.readInactiveScale(recyclerView);
+            if (appliedScale == null
+                    || Float.isNaN(appliedScale)
+                    || Math.abs(appliedScale - requestedScale) > 0.001f) {
+                info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Could not configure official lyric inactive scale; keeping plugin default");
+                return;
+            }
+        }
+        int synchronizedChildren = scaleChanged
+                ? synchronizeBoundLyricItemScales(recyclerView, requestedScale)
+                : 0;
+        synchronizeBoundLyricItemPivots(recyclerView);
+        OfficialLyricMotionController.configureScroll(recyclerView,
+                runtimeLyricUiConfig.motionMode, useLyricMotion(),
+                () -> runtimeLyricUiConfig.maxRefreshRateHz);
+        if (scaleChanged || synchronizedChildren > 0) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Configured official lyric scale ownership, from=" + previousScale
+                    + ", to=" + requestedScale
+                    + ", layout=" + binding.layoutName
+                    + ", synchronizedChildren=" + synchronizedChildren);
+        }
+    }
+
+    private OfficialLyricsRecyclerCompatibility.Binding resolveOfficialLyricsRecyclerBinding(
+            View recyclerView) {
+        if (recyclerView == null) {
+            return null;
+        }
+        Class<?> recyclerClass = recyclerView.getClass();
+        synchronized (officialLyricsRecyclerCompatibilityLock) {
+            OfficialLyricsRecyclerCompatibility.Binding cached =
+                    officialLyricsRecyclerBindings.get(recyclerClass);
+            if (cached != null) {
+                return cached;
+            }
+            if (unavailableOfficialLyricsRecyclerBindings.containsKey(recyclerClass)) {
+                return null;
+            }
+
+            OfficialLyricsRecyclerCompatibility.Binding resolved =
+                    OfficialLyricsRecyclerCompatibility.resolve(recyclerClass);
+            String source = "verified fingerprint";
+            if (resolved == null) {
+                source = "DexKit semantics";
+                try {
+                    resolved = OfficialLyricsRecyclerDexKitResolver.resolve(recyclerView);
+                } catch (Throwable t) {
+                    error("Failed to resolve LyricsRecyclerView fields via DexKit", t);
+                }
+            }
+            if (resolved == null) {
+                unavailableOfficialLyricsRecyclerBindings.put(recyclerClass, Boolean.TRUE);
+                info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "No unique safe LyricsRecyclerView field layout found; keeping plugin defaults");
+                return null;
+            }
+            officialLyricsRecyclerBindings.put(recyclerClass, resolved);
+            info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Resolved LyricsRecyclerView fields via " + source
+                    + ", layout=" + resolved.layoutName);
+            return resolved;
+        }
+    }
+
+    private static int synchronizeBoundLyricItemScales(
+            View recyclerView,
+            float inactiveScale) {
+        if (!(recyclerView instanceof ViewGroup)) {
+            return 0;
+        }
+        ViewGroup group = (ViewGroup) recyclerView;
+        int officialIndex = readLyricsRecyclerCurrentIndex(recyclerView);
+        int changed = 0;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            TextView lyricTextView = findFirstTextView(child, new int[]{0});
+            View scaleView = lyricTextView == null ? child : lyricTextView;
+            int adapterPosition = readRecyclerChildPosition(recyclerView, child);
+            float targetScale = adapterPosition >= 0 && adapterPosition == officialIndex
+                    ? 1f
+                    : inactiveScale;
+            if (Math.abs(scaleView.getScaleX() - targetScale) > 0.001f) {
+                scaleView.setScaleX(targetScale);
+                changed++;
+            }
+            if (Math.abs(scaleView.getScaleY() - targetScale) > 0.001f) {
+                scaleView.setScaleY(targetScale);
+            }
+        }
+        return changed;
+    }
+
+    private static void synchronizeBoundLyricItemPivots(View recyclerView) {
+        if (!(recyclerView instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup group = (ViewGroup) recyclerView;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            TextView textView = findFirstTextView(group.getChildAt(i), new int[]{0});
+            if (textView != null) {
+                applyOfficialLyricScalePivot(textView);
+            }
+        }
+    }
+
+    private static TextView findFirstTextView(View view, int[] visited) {
+        if (view == null || visited[0]++ > 24) {
+            return null;
+        }
+        if (view instanceof TextView) {
+            return (TextView) view;
+        }
+        if (!(view instanceof ViewGroup)) {
+            return null;
+        }
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            TextView match = findFirstTextView(group.getChildAt(i), visited);
+            if (match != null) {
+                return match;
+            }
+        }
+        return null;
+    }
+
+    private static void applyOfficialLyricScalePivot(TextView textView) {
+        if (textView == null) {
+            return;
+        }
+        int resolvedWidth = LyricUiLayoutPolicy.resolvedViewDimension(
+                textView.getWidth(),
+                textView.getMeasuredWidth());
+        int resolvedHeight = LyricUiLayoutPolicy.resolvedViewDimension(
+                textView.getHeight(),
+                textView.getMeasuredHeight());
+        if (resolvedWidth <= 0) {
+            // The vendor method already selected its safest available pivot. Do not replace it
+            // with paddingLeft merely because this hook ran before the first layout.
+            return;
+        }
+        float contentWidth = Math.max(
+                0f,
+                resolvedWidth - textView.getPaddingLeft() - textView.getPaddingRight());
+        int alignment = resolveOfficialLyricAlignment(textView);
+        float pivotX = LyricUiLayoutPolicy.horizontalScalePivot(
+                alignment,
+                textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL,
+                textView.getPaddingLeft(),
+                contentWidth);
+        textView.setPivotX(pivotX);
+        OfficialLyricTextRenderer.MainRowGeometry mainGeometry = OfficialLyricTextRenderer.mainGeometry(textView);
+        if (mainGeometry != null) {
+            textView.setPivotY(mainGeometry.focusCenter());
+            return;
+        }
+        if (alignment != LyricUiConfig.ALIGN_CENTER) {
+            textView.setPivotY(0f);
+            return;
+        }
+        if (resolvedHeight <= 0) {
+            return;
+        }
+        float contentHeight = Math.max(
+                0f,
+                resolvedHeight - textView.getPaddingTop() - textView.getPaddingBottom());
+        textView.setPivotY(textView.getPaddingTop() + contentHeight / 2f);
+    }
+
+    private static int resolveOfficialLyricAlignment(TextView textView) {
+        int configured = runtimeLyricUiConfig.alignment;
+        if (configured != LyricUiConfig.ALIGN_DEFAULT) return configured;
+        LockscreenLyricsModule module = zhiInstance;
+        WordLyricModel model = module == null ? null : module.currentWordLyricModel;
+        if (model == null || textView == null) return LyricUiConfig.ALIGN_CENTER;
+        LyricTextMatch match = module.findLyricTextMatch(
+                model, textView, module.normalizedTextOf(textView), module.estimatePlaybackPositionMillis());
+        return LyricSecondaryLayoutPolicy.alignment(configured,
+                match.line == null ? LyricUiConfig.ALIGN_CENTER : match.line.sourceAlignment);
+    }
+
+    private static final View.OnLayoutChangeListener
+            OFFICIAL_LYRIC_SCALE_PIVOT_LAYOUT_LISTENER =
+            (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (view instanceof TextView
+                        && (right - left != oldRight - oldLeft
+                        || bottom - top != oldBottom - oldTop)) {
+                    applyOfficialLyricScalePivot((TextView) view);
+                }
+            };
+
+    private static int synchronizeBoundLyricItemSpacing(
+            View recyclerView, int previousSpacing, int requestedSpacing) {
+        if (!(recyclerView instanceof ViewGroup) || previousSpacing == requestedSpacing) {
+            return 0;
+        }
+        ViewGroup recyclerGroup = (ViewGroup) recyclerView;
+        int synchronizedChildren = 0;
+        for (int i = 0; i < recyclerGroup.getChildCount(); i++) {
+            View child = recyclerGroup.getChildAt(i);
+            ViewGroup.LayoutParams params = child.getLayoutParams();
+            if (!(params instanceof ViewGroup.MarginLayoutParams)) {
+                continue;
+            }
+            ViewGroup.MarginLayoutParams marginParams = (ViewGroup.MarginLayoutParams) params;
+            if (marginParams.bottomMargin != previousSpacing) {
+                continue;
+            }
+            marginParams.bottomMargin = requestedSpacing;
+            child.setLayoutParams(marginParams);
+            synchronizedChildren++;
+        }
+        return synchronizedChildren;
+    }
+
+    private static void prepareOfficialLyricTextView(TextView textView) {
+        if (textView == null) {
+            return;
+        }
+        // This method is also reached from the per-frame custom draw path. TextView's
+        // height setters request a new layout even when the requested value is unchanged,
+        // so keep this preparation idempotent to avoid remeasuring the whole shade on
+        // every lyric frame.
+        if (textView.getIncludeFontPadding()) {
+            textView.setIncludeFontPadding(false);
+        }
+        if (textView.getMinHeight() != 0) {
+            textView.setMinHeight(0);
+        }
+        if (textView.getMinimumHeight() != 0) {
+            textView.setMinimumHeight(0);
+        }
+        View itemView = findLyricsRecyclerItemView(textView);
+        if (itemView != null
+                && itemView != textView
+                && itemView.getMinimumHeight() != 0) {
+            itemView.setMinimumHeight(0);
+        }
+    }
+
+    private static void clearFocusedOfficialLyricViewEffects(TextView textView) {
+        applyFocusedOfficialLyricViewEffects(textView, false, false);
+    }
+
+    private static void applyFocusedOfficialLyricViewEffects(
+            TextView textView,
+            boolean inactiveBlur) {
+        applyFocusedOfficialLyricViewEffects(textView, inactiveBlur, inactiveBlur);
+    }
+
+    private static void applyFocusedOfficialLyricViewEffects(
+            TextView textView,
+            boolean inactiveBlur,
+            boolean keepZeroBlurEffect) {
+        applyFocusedOfficialLyricViewEffects(
+                textView,
+                inactiveBlur ? runtimeLyricUiConfig.blurRadiusTenthsPx / 10f : 0f,
+                keepZeroBlurEffect);
+    }
+
+    private static void applyFocusedOfficialLyricViewEffects(
+            TextView textView,
+            float inactiveBlurRadius,
+            boolean keepZeroBlurEffect) {
+        if (textView == null) {
+            return;
+        }
+        applyViewVisualEffects(textView, inactiveBlurRadius, keepZeroBlurEffect);
+        View itemView = findLyricsRecyclerItemView(textView);
+        if (itemView != null && itemView != textView) {
+            applyViewVisualEffects(itemView, false, false);
+        }
+    }
+
+    private static void clearViewVisualEffects(View view) {
+        applyViewVisualEffects(view, false, false);
+    }
+
+    private static void applyViewVisualEffects(View view, boolean inactiveBlur) {
+        applyViewVisualEffects(view, inactiveBlur, inactiveBlur);
+    }
+
+    private static void applyViewVisualEffects(
+            View view,
+            boolean inactiveBlur,
+            boolean keepZeroBlurEffect) {
+        applyViewVisualEffects(
+                view,
+                inactiveBlur ? runtimeLyricUiConfig.blurRadiusTenthsPx / 10f : 0f,
+                keepZeroBlurEffect);
+    }
+
+    private static void applyViewVisualEffects(
+            View view,
+            float inactiveBlurRadius,
+            boolean keepZeroBlurEffect) {
+        if (view == null) {
+            return;
+        }
+        float blurRadius = Math.max(0f, inactiveBlurRadius);
+        if (blurRadius < OFFICIAL_LYRIC_BLUR_ZERO_THRESHOLD_PX) {
+            blurRadius = 0f;
+        }
+        // Do not reset alpha/scale/layer type from onDraw. Those physical View properties belong
+        // to SystemUI's RecyclerView/page transaction; overwriting them each frame caused the
+        // official row animator and the custom renderer to pull the same item in opposite ways.
+        boolean updateBlur;
+        int effectMode = blurRadius > 0f
+                ? 1000 + Math.max(1, Math.round(blurRadius * 10f))
+                : keepZeroBlurEffect ? 1 : 0;
+        synchronized (VIEW_VISUAL_EFFECT_CACHE_LOCK) {
+            Integer previousEffectMode = VIEW_LYRIC_RENDER_EFFECT_MODE.get(view);
+            updateBlur = previousEffectMode == null
+                    || previousEffectMode != effectMode
+                    || !VIEW_BLUR_DISABLED.containsKey(view);
+            if (effectMode != 0) {
+                VIEW_LYRIC_RENDER_EFFECT_MODE.put(view, effectMode);
+            } else {
+                VIEW_LYRIC_RENDER_EFFECT_MODE.remove(view);
+            }
+            if (updateBlur) {
+                VIEW_BLUR_DISABLED.put(view, Boolean.TRUE);
+            }
+        }
+        if (!updateBlur) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            RenderEffect effect = null;
+            if (effectMode > 1) {
+                float radius = (effectMode - 1000) / 10f;
+                effect = RenderEffect.createBlurEffect(
+                        radius,
+                        radius,
+                        Shader.TileMode.CLAMP);
+            } else if (effectMode == 1) {
+                effect = RenderEffect.createBlurEffect(0f, 0f, Shader.TileMode.CLAMP);
+            }
+            view.setRenderEffect(effect);
+        }
+        if (effectMode == 0) {
+            for (Method method : resolveViewBlurMethods(view.getClass())) {
+                try {
+                    method.invoke(view, false);
+                } catch (Throwable ignored) {
+                    // The standard visual properties above are sufficient when a vendor
+                    // implementation rejects its optional blur setter.
+                }
+            }
+        }
+    }
+
+    private static Method[] resolveViewBlurMethods(Class<?> viewClass) {
+        synchronized (VIEW_VISUAL_EFFECT_CACHE_LOCK) {
+            WeakReference<Method[]> reference = VIEW_BLUR_METHOD_CACHE.get(viewClass);
+            Method[] cached = reference == null ? null : reference.get();
+            if (cached != null) {
+                return cached;
+            }
+        }
+        Method[] resolved = findViewBlurMethods(viewClass);
+        synchronized (VIEW_VISUAL_EFFECT_CACHE_LOCK) {
+            VIEW_BLUR_METHOD_CACHE.put(viewClass, new WeakReference<>(resolved));
+        }
+        return resolved;
+    }
+
+    private static Method[] findViewBlurMethods(Class<?> viewClass) {
+        ArrayList<Method> resolved = new ArrayList<>(2);
+        boolean foundViewBlur = false;
+        boolean foundBlur = false;
+        Class<?> current = viewClass;
+        while (current != null && (!foundViewBlur || !foundBlur)) {
+            for (Method method : current.getDeclaredMethods()) {
+                String name = method.getName();
+                if ((foundViewBlur || !"setViewBlur".equals(name))
+                        && (foundBlur || !"setBlur".equals(name))) {
+                    continue;
+                }
+                Class<?>[] parameterTypes = method.getParameterTypes();
+                if (parameterTypes.length != 1
+                        || (parameterTypes[0] != boolean.class
+                        && parameterTypes[0] != Boolean.class)) {
+                    continue;
+                }
+                try {
+                    method.setAccessible(true);
+                    resolved.add(method);
+                    if ("setViewBlur".equals(name)) {
+                        foundViewBlur = true;
+                    } else {
+                        foundBlur = true;
+                    }
+                } catch (Throwable ignored) {
+                    // Keep looking in the superclass.
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return resolved.toArray(new Method[0]);
+    }
+
+    private static void setOfficialLyricSlotHeight(TextView textView, int height) {
+        int safeHeight = Math.max(1, height);
+        setViewHeight(textView, safeHeight);
+        View itemView = findLyricsRecyclerItemView(textView);
+        if (itemView != null && itemView != textView) {
+            if (itemView.getMinimumHeight() != 0) {
+                itemView.setMinimumHeight(0);
+            }
+            setViewHeight(itemView, safeHeight);
+        }
+    }
+
+    private static void setViewHeight(View view, int height) {
+        if (view == null) {
+            return;
+        }
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params == null || params.height == height) {
+            return;
+        }
+        int oldHeight = params.height;
+        boolean diagnosticsEnabled = isLyricLayoutDiagnosticsEnabled();
+        String before = diagnosticsEnabled ? describeViewForLog(view) : "";
+        params.height = height;
+        view.setLayoutParams(params);
+        if (diagnosticsEnabled) {
+            StructuredBridgeLog.info(
+                    BridgeDebugArea.AOD,
+                    BridgeEvents.OFFICIAL_LAYOUT_HEIGHT_CHANGED,
+                    "Official lyric layout height changed"
+                    + ", oldLayoutHeight=" + oldHeight
+                    + ", newLayoutHeight=" + height
+                    + ", before=" + before
+                    + ", after=" + describeViewForLog(view));
+        }
+    }
+
+    private boolean isRememberedActiveTextView(TextView target) {
+        synchronized (activeLyricTextViewsLock) {
+            for (int i = activeLyricTextViews.size() - 1; i >= 0; i--) {
+                TextView textView = activeLyricTextViews.get(i).get();
+                if (textView == null) {
+                    activeLyricTextViews.remove(i);
+                } else if (textView == target) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void rememberActiveTextViewReference(TextView textView) {
+        rememberLyricRootView(textView);
+        synchronized (activeLyricTextViewsLock) {
+            for (int i = activeLyricTextViews.size() - 1; i >= 0; i--) {
+                TextView existing = activeLyricTextViews.get(i).get();
+                if (existing == null) {
+                    activeLyricTextViews.remove(i);
+                } else if (existing == textView) {
+                    return;
+                }
+            }
+            if (activeLyricTextViews.size() >= 8) {
+                activeLyricTextViews.remove(0);
+            }
+            activeLyricTextViews.add(new WeakReference<>(textView));
+        }
+    }
+
+    private void rememberActiveRendererTextView(TextView textView) {
+        if (textView == null) {
+            return;
+        }
+        if (activeRendererTextView.get() != textView) {
+            activeRendererTextView = new WeakReference<>(textView);
+        }
+        View recycler = findContainingLyricsRecyclerView(textView);
+        if (recycler != null) {
+            synchronized (activeRendererTargetsLock) {
+                activeRendererTargetsByRecycler.put(recycler, new WeakReference<>(textView));
+            }
+        }
+    }
+
+    private void forgetActiveRendererTarget(TextView textView) {
+        if (textView == null) {
+            return;
+        }
+        if (activeRendererTextView.get() == textView) {
+            activeRendererTextView = new WeakReference<>(null);
+        }
+        synchronized (activeRendererTargetsLock) {
+            java.util.Iterator<Map.Entry<View, WeakReference<TextView>>> iterator =
+                    activeRendererTargetsByRecycler.entrySet().iterator();
+            while (iterator.hasNext()) {
+                WeakReference<TextView> reference = iterator.next().getValue();
+                if (reference == null || reference.get() == null || reference.get() == textView) {
+                    iterator.remove();
+                }
+            }
+        }
+    }
+
+    private void forgetActiveRendererTarget(View recycler) {
+        if (recycler == null) {
+            return;
+        }
+        TextView removed = null;
+        synchronized (activeRendererTargetsLock) {
+            WeakReference<TextView> reference = activeRendererTargetsByRecycler.remove(recycler);
+            removed = reference == null ? null : reference.get();
+        }
+        if (removed != null && activeRendererTextView.get() == removed) {
+            activeRendererTextView = new WeakReference<>(null);
+        }
+    }
+
+    private ArrayList<TextView> snapshotActiveRendererTargets() {
+        ArrayList<TextView> targets = new ArrayList<>(4);
+        synchronized (activeRendererTargetsLock) {
+            java.util.Iterator<Map.Entry<View, WeakReference<TextView>>> iterator =
+                    activeRendererTargetsByRecycler.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<View, WeakReference<TextView>> entry = iterator.next();
+                View recycler = entry.getKey();
+                WeakReference<TextView> reference = entry.getValue();
+                TextView textView = reference == null ? null : reference.get();
+                if (recycler == null
+                        || textView == null
+                        || !recycler.isAttachedToWindow()
+                        || !textView.isAttachedToWindow()
+                        || findContainingLyricsRecyclerView(textView) != recycler) {
+                    iterator.remove();
+                    continue;
+                }
+                targets.add(textView);
+            }
+        }
+        return targets;
+    }
+
+    private void clearActiveRendererTargets() {
+        activeRendererTextView = new WeakReference<>(null);
+        synchronized (activeRendererTargetsLock) {
+            activeRendererTargetsByRecycler.clear();
+        }
+    }
+
+    private void rememberLyricRootView(TextView textView) {
+        if (textView == null) {
+            return;
+        }
+        View root = textView.getRootView();
+        if (root == null) {
+            return;
+        }
+        synchronized (lyricRootViewsLock) {
+            for (int i = lyricRootViews.size() - 1; i >= 0; i--) {
+                View existing = lyricRootViews.get(i).get();
+                if (existing == null) {
+                    lyricRootViews.remove(i);
+                } else if (existing == root) {
+                    return;
+                }
+            }
+            if (lyricRootViews.size() >= 4) {
+                lyricRootViews.remove(0);
+            }
+            lyricRootViews.add(new WeakReference<>(root));
+        }
+    }
+
+    private void scheduleActiveLyricRefresh(TextView textView, long delayMillis) {
+        scheduleActiveLyricRefresh(textView, delayMillis, null);
+    }
+
+    private void scheduleActiveLyricRefresh(
+            TextView textView,
+            long delayMillis,
+            WordLine currentLine) {
+        if (textView == null) {
+            return;
+        }
+        if (activeLyricUpdatePosted || !systemUiLyricModeKeepAwakeActive) {
+            return;
+        }
+        activeLyricUpdatePosted = true;
+        long resolvedDelayMillis = resolveActiveLyricRefreshDelay(delayMillis, currentLine);
+        if (resolvedDelayMillis <= ACTIVE_LYRIC_FRAME_DELAY_MS
+                && !isAodLowFrameRateLyricMode()
+                && textView.isAttachedToWindow()) {
+            activeLyricRefreshAnchor = textView;
+            lyricFrameScheduler.post(activeLyricRefreshRunnable);
+        } else {
+            activeLyricRefreshAnchor = null;
+            mainHandler.postDelayed(
+                    activeLyricRefreshRunnable,
+                    Math.max(16L, Math.min(resolvedDelayMillis, 600L)));
+        }
+    }
+
+    private void scheduleActiveLyricRefresh(long delayMillis) {
+        scheduleActiveLyricRefresh(delayMillis, null);
+    }
+
+    private void scheduleActiveLyricRefresh(long delayMillis, WordLine currentLine) {
+        if (activeLyricUpdatePosted || !systemUiLyricModeKeepAwakeActive) {
+            return;
+        }
+        activeLyricUpdatePosted = true;
+        activeLyricRefreshAnchor = null;
+        long resolvedDelayMillis = resolveActiveLyricRefreshDelay(delayMillis, currentLine);
+        mainHandler.postDelayed(
+                activeLyricRefreshRunnable,
+                Math.max(16L, Math.min(resolvedDelayMillis, 600L)));
+    }
+
+    private void cancelActiveLyricRefreshCallbacks(boolean ignoredCancelVisibilityRecovery) {
+        lyricFrameScheduler.cancel(activeLyricRefreshRunnable);
+        mainHandler.removeCallbacks(activeLyricRefreshRunnable);
+        View anchor = activeLyricRefreshAnchor;
+        if (anchor != null) {
+            anchor.removeCallbacks(activeLyricRefreshRunnable);
+        }
+        activeLyricRefreshAnchor = null;
+        activeLyricUpdatePosted = false;
+    }
+
+    private void scheduleLyricSurfaceReactivation(String reason) {
+        if (systemUiLyricModeKeepAwakeActive
+                || (currentWordLyricModel == null && !systemUiHasOfficialLyric)) {
+            return;
+        }
+        cancelLyricSurfaceReactivationCallbacks();
+        lyricSurfaceReactivationPending = true;
+        int generation = lyricSurfaceReactivationGeneration;
+        for (int i = 0; i < LYRIC_VISIBILITY_RECOVERY_DELAYS_MS.length; i++) {
+            Runnable callback = new LyricSurfaceReactivationTask(
+                    generation,
+                    reason,
+                    i == LYRIC_VISIBILITY_RECOVERY_DELAYS_MS.length - 1);
+            synchronized (lyricSurfaceReactivationCallbacksLock) {
+                lyricSurfaceReactivationCallbacks.add(callback);
+            }
+            mainHandler.postDelayed(callback, LYRIC_VISIBILITY_RECOVERY_DELAYS_MS[i]);
+        }
+    }
+
+    private void cancelLyricSurfaceReactivationCallbacks() {
+        lyricSurfaceReactivationGeneration++;
+        synchronized (lyricSurfaceReactivationCallbacksLock) {
+            for (Runnable callback : lyricSurfaceReactivationCallbacks) {
+                mainHandler.removeCallbacks(callback);
+            }
+            lyricSurfaceReactivationCallbacks.clear();
+        }
+        lyricSurfaceReactivationPending = false;
+        clearLyricSurfaceProvisionalDraw();
+    }
+
+    private void clearLyricSurfaceProvisionalDraw() {
+        lyricSurfaceProvisionalDrawUntilElapsedMs = 0L;
+        lyricSurfaceProvisionalRecyclerView = new WeakReference<>(null);
+    }
+
+    private boolean isProvisionalLyricSurfaceDraw(View recycler) {
+        if (recycler == null
+                || recycler != lyricSurfaceProvisionalRecyclerView.get()
+                || SystemClock.elapsedRealtime() >= lyricSurfaceProvisionalDrawUntilElapsedMs) {
+            return false;
+        }
+        return recycler.isAttachedToWindow() && recycler.getVisibility() == View.VISIBLE;
+    }
+
+    private final class LyricSurfaceReactivationTask implements Runnable {
+        private final int generation;
+        private final String reason;
+        private final boolean finalPass;
+
+        LyricSurfaceReactivationTask(int generation, String reason, boolean finalPass) {
+            this.generation = generation;
+            this.reason = reason;
+            this.finalPass = finalPass;
+        }
+
+        @Override
+        public void run() {
+            synchronized (lyricSurfaceReactivationCallbacksLock) {
+                lyricSurfaceReactivationCallbacks.remove(this);
+            }
+            if (generation != lyricSurfaceReactivationGeneration) {
+                return;
+            }
+            if (hasStableActiveLyricRefreshSurface()) {
+                activateSystemUiLyricModeFromSurface(reason + " delayed");
+                return;
+            }
+            TextView visibleLyricTextView = findVisibleLyricTextViewForSurfaceReactivation();
+            View recycler = findContainingLyricsRecyclerView(visibleLyricTextView);
+            if (activateSystemUiLyricModeFromVisibleTextView(
+                    visibleLyricTextView,
+                    recycler,
+                    reason + " delayed visible lyric TextView")) {
+                return;
+            }
+            if (finalPass && generation == lyricSurfaceReactivationGeneration) {
+                lyricSurfaceReactivationPending = false;
+                clearLyricSurfaceProvisionalDraw();
+            }
+        }
+    }
+
+    private TextView findVisibleLyricTextViewForSurfaceReactivation() {
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null) {
+            return null;
+        }
+        ArrayList<TextView> candidates = new ArrayList<>(4);
+        int[] visited = {0};
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (recycler == null
+                    || recycler.getVisibility() != View.VISIBLE
+                    || recycler.getAlpha() <= 0.05f) {
+                continue;
+            }
+            collectVisibleLyricTextViews(recycler, model, "", candidates, visited);
+            if (!candidates.isEmpty()) {
+                return candidates.get(0);
+            }
+        }
+        return null;
+    }
+
+    private long resolveActiveLyricRefreshDelay(long delayMillis, WordLine currentLine) {
+        long boundedDelayMillis = Math.max(16L, Math.min(delayMillis, 600L));
+        if (lastPlaybackIsPlaying && isAodLowFrameRateLyricMode()) {
+            return Math.max(boundedDelayMillis, AOD_ACTIVE_LYRIC_REFRESH_DELAY_MS);
+        }
+        if (lastPlaybackIsPlaying
+                && boundedDelayMillis <= ACTIVE_LYRIC_FRAME_DELAY_MS
+                && !requiresDisplayRateActiveLyricRefresh(currentLine)) {
+            return ACTIVE_LYRIC_STATIC_FRAME_DELAY_MS;
+        }
+        return boundedDelayMillis;
+    }
+
+
+
+
+
+
+
+    private boolean requiresDisplayRateActiveLyricRefresh(WordLine currentLine) {
+        WordLyricModel currentModel = currentWordLyricModel;
+        if (isAnimatedIntroRow(currentModel,
+                LyricIntroDotsPolicy.firstLyricLine(currentModel), estimatePlaybackPositionMillis())) {
+            return true;
+        }
+        if (currentModel != null && currentModel.overlapIndexAt(estimatePlaybackPositionMillis()) >= 0) {
+            return true;
+        }
+        WordLine line = currentLine;
+        if (line == null) {
+            WordLyricModel model = currentWordLyricModel;
+            if (model == null) {
+                return false;
+            }
+            long position = estimatePlaybackPositionMillis();
+            line = resolvePlaybackActiveLyricLine(model, position);
+            if (line == null && position >= 0L) {
+                line = model.lineAt(model.displayIndexAt(position));
+            }
+            if (line == null && position < 0L) {
+                line = model.findLineAtTime(activeLyricLineTimeMs);
+            }
+        }
+        if (line == null) {
+            return false;
+        }
+        if (line.timingMode != LyricTimingMode.LINE_TIMED
+                || lyricUiLineTimedProgressEnabled) {
+            return true;
+        }
+        return lyricUiInactiveBlurEnabled;
+    }
+
+    private boolean isAnimatedIntroRow(WordLyricModel model, WordLine line, long position) {
+        WordLine first = LyricIntroDotsPolicy.firstLyricLine(model);
+        return line != null && line == first && LyricIntroDotsPolicy.shouldAnimate(
+                LyricIntroDotsPolicy.beginMillis(first), position, isSecondaryPlaybackAdvancing(),
+                runtimeLyricUiConfig.motionMode == LyricUiConfig.MOTION_STANDARD && useLyricMotion());
+    }
+
+    private void refreshActiveLyricTextView() {
+        long performanceStartedAt = performanceSampler.begin();
+        try {
+            runActiveLyricRefresh();
+        } finally {
+            performanceSampler.end(
+                    BridgePerformanceSampler.Metric.ACTIVE_REFRESH,
+                    performanceStartedAt);
+        }
+    }
+
+    private void invalidateOverlappingSinger(WordLyricModel model, long position) {
+        WordLine incoming = model.lineAt(model.overlapIndexAt(position));
+        if (incoming == null) return;
+        for (TextView target : snapshotActiveTextViews()) {
+            if (!isEffectivelyVisible(target)) continue;
+            LyricTextMatch match = findLyricTextMatch(
+                    model, target, normalizedTextOf(target), position);
+            if (match.line == incoming || match.translationLine == incoming) {
+                requestLyricAnimationFrame(target);
+            }
+        }
+    }
+
+    private WordLine resolveIntroRefreshTargetLine(WordLyricModel model, WordLine introLine,
+            TextView target, long position) {
+        String normalized = normalizedTextOf(target);
+        int adapterPosition = findValidLyricsRecyclerAdapterPosition(target, model);
+        WordLine indexedLine = model.lineAtAdapterIndexMatchingText(adapterPosition, normalized);
+        WordLine boundFirst = LyricIntroDotsPolicy.boundFirstLyricLine(model, indexedLine, normalized, position);
+        if (boundFirst == introLine) return introLine;
+        // Preserve an existing verified official-slot alias; arbitrary placeholder text
+        // never becomes a main lyric merely because the native current index points at it.
+        if (model.lineAtOfficialIndex(adapterPosition) == introLine) {
+            LyricTextMatch match = findLyricTextMatch(model, target, normalized, position);
+            if (match.line == introLine) return introLine;
+        }
+        return null;
+    }
+
+    private void runActiveLyricRefresh() {
+        if (!systemUiLyricModeKeepAwakeActive) {
+            return;
+        }
+        if (!hasActiveLyricRefreshSurface()) {
+            if (!retainLyricModeForTransientSurfaceMiss("active refresh surface miss")) {
+                deactivateSystemUiLyricModeAfterSurfaceHidden();
+            }
+            return;
+        }
+        WordLyricModel model = currentWordLyricModel;
+        if (model == null) {
+            updateScreenTimeoutWakeLock(currentApplicationContext());
+            return;
+        }
+
+        long position = estimatePlaybackPositionMillis();
+        if (officialLyricTextRenderer.prepareIntroLayout(model, position)) {
+            int firstIndex = model.adapterIndexOfLine(LyricIntroDotsPolicy.firstLyricLine(model));
+            for (View recycler : snapshotLyricsRecyclerViews()) {
+                applyVisibleLyricBlockHeights(recycler);
+                if (firstIndex >= 0 && isEffectivelyVisible(recycler)) {
+                    syncNativeLyricsAnchor(recycler, firstIndex);
+                    Object scrollState = invokeNoArgByName(recycler, "getScrollState");
+                    if (!isAodLowFrameRateLyricMode() && scrollState instanceof Number
+                            && ((Number) scrollState).intValue() == 0) {
+                        scheduleTranslationToggleAnchorRestore(translationLayoutGeneration,
+                                recycler, firstIndex, computeActiveLyricsRecyclerDesiredCenter(recycler));
+                    }
+                }
+            }
+        }
+        invalidateOverlappingSinger(model, position);
+        WordLine introLine = LyricIntroDotsPolicy.visibleLine(model, position);
+        WordLine line = introLine != null ? introLine : resolvePlaybackActiveLyricLine(model, position);
+        if (line == null && position >= 0L) {
+            line = model.lineAt(model.displayIndexAt(position));
+        }
+        if (line == null && position < 0L) {
+            line = model.findLineAtTime(activeLyricLineTimeMs);
+        }
+        if (line == null) {
+            return;
+        }
+        TextView directTarget = null;
+        WordLine directLine = null;
+        int directTargetsUpdated = 0;
+        for (TextView target : snapshotActiveRendererTargets()) {
+            if (!isEffectivelyVisible(target)) {
+                continue;
+            }
+            WordLine targetLine = introLine != null
+                    ? resolveIntroRefreshTargetLine(model, introLine, target, position)
+                    : resolveRecyclerVisualActiveLyricLine(model, position, target);
+            if (targetLine == null
+                    || (introLine == null
+                    && !WordLyricRenderSupport.matchesWordLineText(targetLine, normalizedTextOf(target)))) {
+                continue;
+            }
+            requestLyricAnimationFrame(target);
+            if (directTarget == null) {
+                directTarget = target;
+                directLine = targetLine;
+            }
+            directTargetsUpdated++;
+        }
+        if (directTargetsUpdated > 0 && directTarget != null) {
+            if (directLine != null) {
+                line = directLine;
+            }
+            activeLyricLine = line.normalizedText;
+            activeLyricLineTimeMs = line.timeMillis;
+            activeRendererWordLine = line;
+            scheduleActiveLyricRefresh(
+                    directTarget,
+                    lastPlaybackIsPlaying ? ACTIVE_LYRIC_FRAME_DELAY_MS : 500L,
+                    line);
+            return;
+        }
+
+        activeLyricLine = line.normalizedText;
+        activeLyricLineTimeMs = line.timeMillis;
+
+        ArrayList<TextView> candidates = activeLyricRefreshCandidates;
+        candidates.clear();
+        collectActiveTextViews(candidates);
+        boolean hasSearchRoot = hasActiveLyricRefreshSurface();
+        int rememberedCandidateCount = candidates.size();
+        int effectivelyVisibleCandidateCount = countEffectivelyVisibleLyricCandidates(candidates);
+        if (LockscreenIntegrationPolicy.shouldSearchAttachedRecyclerForLyricCandidates(
+                rememberedCandidateCount,
+                effectivelyVisibleCandidateCount)
+                && hasSearchRoot) {
+            // During SystemUI cross-fades the old row views can stay attached while their
+            // ancestor is transparent. A non-empty weak-reference cache must not prevent us
+            // from discovering the replacement RecyclerView's already-bound rows.
+            mergeVisibleLyricTextViewsFromRoots(candidates, model, activeLyricLine);
+            if (candidates.size() > rememberedCandidateCount
+                    && isLyricLayoutDiagnosticsEnabled()) {
+                info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Recovered lyric candidates from attached RecyclerView"
+                        + " | remembered=" + rememberedCandidateCount
+                        + ", visibleRemembered=" + effectivelyVisibleCandidateCount
+                        + ", discovered=" + (candidates.size() - rememberedCandidateCount));
+            }
+        }
+        if (candidates.isEmpty() && !hasSearchRoot) {
+            return;
+        }
+
+        int attached = 0;
+        int visible = 0;
+        int updated = 0;
+        for (TextView textView : candidates) {
+            if (!textView.isAttachedToWindow()) {
+                continue;
+            }
+            attached++;
+            if (!isEffectivelyVisible(textView)) {
+                continue;
+            }
+            visible++;
+            CharSequence currentText = textView.getText();
+            if (currentText == null) {
+                continue;
+            }
+            String normalized = normalizedTextOf(textView);
+            if (!normalized.equals(activeLyricLine) && !model.hasRenderableText(normalized)) {
+                continue;
+            }
+            LyricTextMatch match = findLyricTextMatch(model, textView, normalized, position);
+            if (!WordLyricRenderSupport.sameWordLine(match.line, line)
+                    && !WordLyricRenderSupport.sameWordLine(match.translationLine, line)) {
+                continue;
+            }
+
+            requestLyricAnimationFrame(textView);
+            rememberActiveRendererTextView(textView);
+            activeRendererWordLine = line;
+            updated++;
+        }
+
+        boolean settleWindowActive = isLyricRecyclerSettleWindowActive();
+        if (updated == 0 && visible > 0 && !settleWindowActive) {
+            updated = invalidateRenderableVisibleLyricTextViews(candidates, model, position);
+        }
+        maybeLogActiveRefresh(position, line.text, candidates.size(), attached, visible, updated);
+        long nextDelay = !lastPlaybackIsPlaying
+                ? 500L
+                : updated > 0
+                ? ACTIVE_LYRIC_FRAME_DELAY_MS
+                : ACTIVE_LYRIC_RETRY_DELAY_MS;
+        TextView nextAnchor = activeRendererTextView.get();
+        if (nextAnchor == null
+                || !nextAnchor.isAttachedToWindow()
+                || !isEffectivelyVisible(nextAnchor)) {
+            nextAnchor = firstActiveLyricTextView();
+        }
+        if (nextAnchor != null) {
+            scheduleActiveLyricRefresh(nextAnchor, nextDelay, line);
+        } else if (hasSearchRoot) {
+            scheduleActiveLyricRefresh(nextDelay, line);
+        }
+    }
+
+    private static int countEffectivelyVisibleLyricCandidates(
+            ArrayList<TextView> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return 0;
+        }
+        int visible = 0;
+        for (TextView candidate : candidates) {
+            if (isEffectivelyVisible(candidate)) {
+                visible++;
+            }
+        }
+        return visible;
+    }
+
+    private int invalidateRenderableVisibleLyricTextViews(
+            ArrayList<TextView> candidates, WordLyricModel model, long position) {
+        if (candidates == null || model == null) {
+            return 0;
+        }
+        int updated = 0;
+        for (TextView textView : candidates) {
+            if (textView == null
+                    || !textView.isAttachedToWindow()
+                    || !isEffectivelyVisible(textView)) {
+                continue;
+            }
+            CharSequence currentText = textView.getText();
+            if (currentText == null || currentText.length() == 0 || currentText.length() > lyricTextLengthLimit()) {
+                continue;
+            }
+            String normalized = normalizedTextOf(textView);
+            if (!model.hasRenderableText(normalized)) {
+                continue;
+            }
+            LyricTextMatch match = findLyricTextMatch(model, textView, normalized, position);
+            WordLine visibleLine = match.line != null ? match.line : match.translationLine;
+            if (visibleLine == null) {
+                continue;
+            }
+            requestLyricAnimationFrame(textView);
+            rememberActiveTextViewReference(textView);
+            if (updated == 0) {
+                rememberActiveRendererTextView(textView);
+                activeRendererWordLine = visibleLine;
+            }
+            updated++;
+        }
+        return updated;
+    }
+
+    private ArrayList<TextView> snapshotActiveTextViews() {
+        ArrayList<TextView> result = new ArrayList<>();
+        collectActiveTextViews(result);
+        return result;
+    }
+
+    private void collectActiveTextViews(ArrayList<TextView> result) {
+        if (result == null) {
+            return;
+        }
+        synchronized (activeLyricTextViewsLock) {
+            for (int i = activeLyricTextViews.size() - 1; i >= 0; i--) {
+                TextView textView = activeLyricTextViews.get(i).get();
+                if (textView == null
+                        || !textView.isAttachedToWindow()
+                        || !isInLyricsRecyclerView(textView)) {
+                    activeLyricTextViews.remove(i);
+                } else {
+                    result.add(textView);
+                }
+            }
+        }
+    }
+
+    private boolean hasAttachedLyricsRecyclerView() {
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else if (recycler.isAttachedToWindow()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasStableActiveLyricRefreshSurface() {
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else if (recycler.isAttachedToWindow()
+                        && recycler.getVisibility() == View.VISIBLE
+                        && recycler.isShown()) {
+                    // Alpha, translation, and size are intentionally ignored here. An attached
+                    // AOD lyric surface is valid before its first visible frame is committed.
+                    return true;
+                }
+            }
+        }
+        // Some island transitions render the replacement lyric child before the old container's
+        // visibility state has settled. A confirmed visible lyric row is a lyric-local fallback.
+        return firstActiveLyricTextView() != null;
+    }
+
+    private boolean hasEffectivelyVisibleLyricSurface(View excluding) {
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                    continue;
+                }
+                // During onDetachedFromWindow, the callback's subtree can still report attached.
+                View ancestor = recycler;
+                boolean excluded = false;
+                for (int depth = 0; ancestor != null && depth < 32; depth++) {
+                    if (ancestor == excluding) {
+                        excluded = true;
+                        break;
+                    }
+                    ancestor = ancestor.getParent() instanceof View ? (View) ancestor.getParent() : null;
+                }
+                if (!excluded && recycler.getWindowVisibility() == View.VISIBLE
+                        && isEffectivelyVisible(recycler)) return true;
+            }
+        }
+        return false;
+    }
+
+    private void pauseLyricWakeTransitionIfHidden(View excluding) {
+        if ((!officialLyricTextRenderer.wakeTransition.isArmed()
+                && !officialLyricTextRenderer.wakeTransition.isRunning())
+                || hasEffectivelyVisibleLyricSurface(excluding)) return;
+        officialLyricTextRenderer.wakeTransition.sample(SystemClock.elapsedRealtime(), false,
+                runtimeLyricUiConfig.motionMode != LyricUiConfig.MOTION_OFF
+                        && android.animation.ValueAnimator.areAnimatorsEnabled());
+    }
+
+    private void observeLyricWakeSurfaceVisibility(View recycler) {
+        ViewTreeObserver observer = recycler.getViewTreeObserver();
+        if (!observer.isAlive()) return;
+        synchronized (lyricsRecyclerViewsLock) {
+            LyricWakeSurfaceObserver previous = lyricWakeSurfaceObservers.get(recycler);
+            if (previous != null && previous.observer.get() == observer) return;
+            if (previous != null) {
+                previous.remove();
+                // Attach may merge an unattached observer's listeners into the window observer.
+                observer.removeOnPreDrawListener(previous);
+            }
+            LyricWakeSurfaceObserver listener = new LyricWakeSurfaceObserver(recycler, observer);
+            lyricWakeSurfaceObservers.put(recycler, listener);
+            observer.addOnPreDrawListener(listener);
+        }
+    }
+
+    private void forgetLyricWakeSurfaceVisibility(View recycler) {
+        synchronized (lyricsRecyclerViewsLock) {
+            LyricWakeSurfaceObserver listener = lyricWakeSurfaceObservers.remove(recycler);
+            if (listener != null) listener.remove();
+        }
+    }
+
+    private final class LyricWakeSurfaceObserver implements ViewTreeObserver.OnPreDrawListener {
+        final WeakReference<View> recycler;
+        final WeakReference<ViewTreeObserver> observer;
+        boolean wasVisible;
+
+        LyricWakeSurfaceObserver(View recycler, ViewTreeObserver observer) {
+            this.recycler = new WeakReference<>(recycler);
+            this.observer = new WeakReference<>(observer);
+        }
+
+        void remove() {
+            ViewTreeObserver current = observer.get();
+            if (current != null && current.isAlive()) current.removeOnPreDrawListener(this);
+        }
+
+        @Override
+        public boolean onPreDraw() {
+            View surface = recycler.get();
+            if (surface == null) {
+                remove();
+                return true;
+            }
+            if (!officialLyricTextRenderer.wakeTransition.isArmed()
+                    && !officialLyricTextRenderer.wakeTransition.isRunning()) {
+                wasVisible = false;
+                return true;
+            }
+            boolean visible = surface.getWindowVisibility() == View.VISIBLE
+                    && isEffectivelyVisible(surface);
+            if (visible && !wasVisible) {
+                // Alpha animations can reuse a hidden holder's display list. Invalidate once
+                // when its surface becomes visible; hidden surfaces never request a frame here.
+                invalidateLyricsRecyclerDescendants(surface);
+            } else if (!visible && wasVisible) {
+                pauseLyricWakeTransitionIfHidden(null);
+            }
+            wasVisible = visible;
+            return true;
+        }
+    }
+
+    private boolean hasActiveLyricRefreshSurface() {
+        if (hasStableActiveLyricRefreshSurface()) {
+            return true;
+        }
+        View recycler = lyricSurfaceProvisionalRecyclerView.get();
+        return recycler != null
+                && recycler.isAttachedToWindow()
+                && recycler.getVisibility() == View.VISIBLE
+                && SystemClock.elapsedRealtime() < lyricSurfaceProvisionalDrawUntilElapsedMs;
+    }
+
+    private boolean isRememberedLyricsRecyclerView(View candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else if (recycler == candidate) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private ArrayList<View> snapshotLyricRootViews() {
+        ArrayList<View> result = new ArrayList<>();
+        synchronized (lyricRootViewsLock) {
+            for (int i = lyricRootViews.size() - 1; i >= 0; i--) {
+                View root = lyricRootViews.get(i).get();
+                if (root == null) {
+                    lyricRootViews.remove(i);
+                } else {
+                    result.add(root);
+                }
+            }
+        }
+        return result;
+    }
+
+    private ArrayList<View> snapshotLyricsRecyclerViews() {
+        ArrayList<View> result = new ArrayList<>();
+        synchronized (lyricsRecyclerViewsLock) {
+            for (int i = lyricsRecyclerViews.size() - 1; i >= 0; i--) {
+                View recycler = lyricsRecyclerViews.get(i).get();
+                if (recycler == null) {
+                    lyricsRecyclerViews.remove(i);
+                } else if (recycler.isAttachedToWindow()) {
+                    result.add(recycler);
+                }
+            }
+        }
+        return result;
+    }
+
+    private TextView firstActiveLyricTextView() {
+        synchronized (activeLyricTextViewsLock) {
+            for (int i = activeLyricTextViews.size() - 1; i >= 0; i--) {
+                TextView textView = activeLyricTextViews.get(i).get();
+                if (textView == null
+                        || !textView.isAttachedToWindow()
+                        || !isInLyricsRecyclerView(textView)) {
+                    activeLyricTextViews.remove(i);
+                } else if (isEffectivelyVisible(textView)) {
+                    return textView;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void mergeVisibleLyricTextViewsFromRoots(
+            ArrayList<TextView> candidates, WordLyricModel model, String normalizedLine) {
+        if (model == null) {
+            return;
+        }
+
+        ArrayList<View> roots = new ArrayList<>();
+        for (TextView textView : candidates) {
+            View recycler = findContainingLyricsRecyclerView(textView);
+            if (recycler != null && recycler.isAttachedToWindow() && !containsView(roots, recycler)) {
+                roots.add(recycler);
+            }
+        }
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (recycler != null && recycler.isAttachedToWindow() && !containsView(roots, recycler)) {
+                roots.add(recycler);
+            }
+        }
+
+        for (View root : roots) {
+            collectVisibleLyricTextViews(root, model, normalizedLine, candidates, new int[]{0});
+        }
+    }
+
+    private void collectVisibleLyricTextViews(
+            View view, WordLyricModel model, String normalizedLine, ArrayList<TextView> candidates, int[] visited) {
+        if (view == null || visited[0]++ > 220 || view.getVisibility() != View.VISIBLE || view.getAlpha() <= 0.05f) {
+            return;
+        }
+
+        if (view instanceof TextView && isEffectivelyVisible(view)) {
+            TextView textView = (TextView) view;
+            CharSequence text = textView.getText();
+            String normalized = text == null ? "" : normalizedTextOf(textView);
+            if (text != null
+                    && text.length() <= lyricTextLengthLimit()
+                    && isInLyricsRecyclerView(textView)
+                    && (normalized.equals(normalizedLine) || model.hasRenderableText(normalized))
+                    && !containsTextView(candidates, textView)) {
+                candidates.add(textView);
+                rememberActiveTextViewReference(textView);
+            }
+        }
+
+        if (!(view instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup viewGroup = (ViewGroup) view;
+        for (int i = 0; i < viewGroup.getChildCount(); i++) {
+            collectVisibleLyricTextViews(viewGroup.getChildAt(i), model, normalizedLine, candidates, visited);
+        }
+    }
+
+    private static boolean isEffectivelyVisible(View view) {
+        if (view == null
+                || !view.isAttachedToWindow()
+                || view.getVisibility() != View.VISIBLE
+                || view.getAlpha() <= 0.01f
+                || view.getWidth() <= 0
+                || view.getHeight() <= 0) {
+            return false;
+        }
+
+        Object parent = view.getParent();
+        for (int depth = 0; depth < 16 && parent instanceof View; depth++) {
+            View parentView = (View) parent;
+            if (parentView.getVisibility() != View.VISIBLE
+                    || parentView.getAlpha() <= 0.01f
+                    || parentView.getWidth() <= 0
+                    || parentView.getHeight() <= 0) {
+                return false;
+            }
+            parent = parentView.getParent();
+        }
+        Rect visibleRect = VIEW_VISIBLE_RECT.get();
+        visibleRect.setEmpty();
+        return view.getGlobalVisibleRect(visibleRect) && !visibleRect.isEmpty();
+    }
+
+    private static boolean isInLyricsRecyclerView(TextView textView) {
+        return findLyricsRecyclerMatch(textView) != null;
+    }
+
+    private static boolean containsTextView(ArrayList<TextView> textViews, TextView target) {
+        for (TextView textView : textViews) {
+            if (textView == target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsView(ArrayList<View> views, View target) {
+        for (View view : views) {
+            if (view == target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String describeViewForLog(View view) {
+        if (view == null) {
+            return "null";
+        }
+        return view.getClass().getName()
+                + "{attached=" + view.isAttachedToWindow()
+                + ", visibility=" + view.getVisibility()
+                + ", windowVisibility=" + view.getWindowVisibility()
+                + ", alpha=" + view.getAlpha()
+                + ", size=" + view.getWidth() + "x" + view.getHeight()
+                + ", measured=" + view.getMeasuredWidth() + "x" + view.getMeasuredHeight()
+                + ", pos=" + view.getX() + "," + view.getY()
+                + ", top=" + view.getTop()
+                + ", left=" + view.getLeft()
+                + ", scroll=" + view.getScrollX() + "," + view.getScrollY()
+                + ", translation=" + view.getTranslationX() + "," + view.getTranslationY()
+                + ", layout=" + describeLayoutParamsForLog(view)
+                + "}";
+    }
+
+    private static String describeLayoutParamsForLog(View view) {
+        if (view == null) {
+            return "null";
+        }
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params == null) {
+            return "null";
+        }
+        String value = params.width + "x" + params.height;
+        if (params instanceof ViewGroup.MarginLayoutParams) {
+            ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) params;
+            value += ",margins="
+                    + margins.leftMargin + ","
+                    + margins.topMargin + ","
+                    + margins.rightMargin + ","
+                    + margins.bottomMargin;
+        }
+        return value;
+    }
+
+    private static void tryInvokeOneArgByName(Object target, String methodName, Object arg) {
+        if (target == null || TextUtils.isEmpty(methodName)) {
+            return;
+        }
+        Class<?> current = target.getClass();
+        while (current != null) {
+            Method[] methods = current.getDeclaredMethods();
+            for (Method method : methods) {
+                if (!methodName.equals(method.getName()) || method.getParameterTypes().length != 1) {
+                    continue;
+                }
+                try {
+                    method.setAccessible(true);
+                    method.invoke(target, arg);
+                    return;
+                } catch (Throwable ignored) {
+                    // Try another overload or superclass implementation.
+                }
+            }
+            current = current.getSuperclass();
+        }
+    }
+
+    private static void tryInvokeNoArgByName(Object target, String methodName) {
+        if (target == null || TextUtils.isEmpty(methodName)) {
+            return;
+        }
+        Class<?> current = target.getClass();
+        while (current != null) {
+            try {
+                Method method = current.getDeclaredMethod(methodName);
+                method.setAccessible(true);
+                method.invoke(target);
+                return;
+            } catch (Throwable ignored) {
+                current = current.getSuperclass();
+            }
+        }
+    }
+
+    private static Object invokeNoArgByName(Object target, String methodName) {
+        if (target == null || TextUtils.isEmpty(methodName)) {
+            return null;
+        }
+        Class<?> current = target.getClass();
+        while (current != null) {
+            try {
+                Method method = current.getDeclaredMethod(methodName);
+                method.setAccessible(true);
+                return method.invoke(target);
+            } catch (NoSuchMethodException ignored) {
+                current = current.getSuperclass();
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static boolean invokeTwoIntByName(
+            Object target,
+            String methodName,
+            int first,
+            int second) {
+        if (target == null || TextUtils.isEmpty(methodName)) {
+            return false;
+        }
+        Class<?> current = target.getClass();
+        while (current != null) {
+            Method[] methods = current.getDeclaredMethods();
+            for (Method method : methods) {
+                Class<?>[] parameterTypes = method.getParameterTypes();
+                if (!methodName.equals(method.getName()) || parameterTypes.length != 2) {
+                    continue;
+                }
+                if (!isIntParameter(parameterTypes[0]) || !isIntParameter(parameterTypes[1])) {
+                    continue;
+                }
+                try {
+                    method.setAccessible(true);
+                    method.invoke(target, first, second);
+                    return true;
+                } catch (Throwable ignored) {
+                    // Try another overload or superclass implementation.
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return false;
+    }
+
+    private static boolean isIntParameter(Class<?> type) {
+        return type == int.class || type == Integer.class;
+    }
+
+    private static boolean isBooleanParameter(Class<?> type) {
+        return type == boolean.class || type == Boolean.class;
+    }
+
+    private static Method findMethod(
+            Class<?> clazz, String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                Method method = current.getDeclaredMethod(methodName, parameterTypes);
+                method.setAccessible(true);
+                return method;
+            } catch (NoSuchMethodException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        throw new NoSuchMethodException(methodName);
+    }
+
+    private static int readIntField(Object target, String fieldName, int defaultValue) {
+        Object value = readFieldValue(target, fieldName);
+        return value instanceof Number ? ((Number) value).intValue() : defaultValue;
+    }
+
+    private static int readLyricsRecyclerCurrentIndex(Object recycler) {
+        return LYRICS_RECYCLER_FIELD_ACCESSOR.readCurrentIndex(recycler, -1);
+    }
+
+    private static long readLongField(Object target, String fieldName, long defaultValue) {
+        Object value = readFieldValue(target, fieldName);
+        return value instanceof Number ? ((Number) value).longValue() : defaultValue;
+    }
+
+    private static float readFloatField(Object target, String fieldName, float defaultValue) {
+        Object value = readFieldValue(target, fieldName);
+        return value instanceof Number ? ((Number) value).floatValue() : defaultValue;
+    }
+
+    private static boolean readBooleanField(Object target, String fieldName, boolean defaultValue) {
+        Object value = readFieldValue(target, fieldName);
+        return value instanceof Boolean ? ((Boolean) value).booleanValue() : defaultValue;
+    }
+
+    private static Object readFieldValue(Object target, String fieldName) {
+        if (target == null || TextUtils.isEmpty(fieldName)) {
+            return null;
+        }
+
+        Class<?> current = target.getClass();
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    @SuppressLint({"PrivateApi", "DiscouragedPrivateApi"})
+    private static Context currentApplicationContext() {
+        try {
+            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+            Method currentApplication = activityThreadClass.getDeclaredMethod("currentApplication");
+            currentApplication.setAccessible(true);
+            Object application = currentApplication.invoke(null);
+            if (application instanceof Context) {
+                Context context = ((Context) application).getApplicationContext();
+                return context == null ? (Context) application : context;
+            }
+        } catch (Throwable ignored) {
+            // Some early package-ready callbacks run before ActivityThread exposes the app context.
+        }
+        return null;
+    }
+
+    private static Context applicationContextOf(Context context) {
+        if (context == null) {
+            return null;
+        }
+        Context appContext = context.getApplicationContext();
+        return appContext == null ? context : appContext;
+    }
+
+    private void ensureScreenTimeoutReceiver(Context context) {
+        if (context == null || screenTimeoutReceiverRegistered) {
+            return;
+        }
+        synchronized (this) {
+            if (screenTimeoutReceiverRegistered) {
+                return;
+            }
+            Context appContext = context.getApplicationContext();
+            if (appContext == null) {
+                appContext = context;
+            }
+            BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context receiverContext, Intent intent) {
+                    if (intent == null) {
+                        return;
+                    }
+                    String action = intent.getAction();
+                    if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                        screenTimeoutPausedByScreenOff = true;
+                        screenTimeoutPausedByUserPresent = false;
+                        screenTurnedOffForLockState = true;
+                        invalidateScreenTimeoutKeyguardCache();
+                        resetScreenTimeoutKeepAwakeWindow();
+                        setAodLowFrameRateLyricMode(true);
+                        beginScreenStateLyricSettleWindow();
+                        releaseScreenTimeoutWakeLock("screen off");
+                        maybeLogScreenTimeout("Paused screen timeout keep-awake after screen off", true);
+                        infoAlways(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.TRANSLATION_ACTION_REBIND,
+                                "Keyguard locked screen off, requesting rebind for " + currentTranslationPreferencePackage());
+                        requestOplusTranslationActionRebind(currentTranslationPreferencePackage());
+                        // Keyguard may become locked slightly after SCREEN_OFF; re-run once so the
+                        // gate is evaluated against the settled lock state.
+                        mainHandler.postDelayed(() -> {
+                            if (isDeviceKeyguardLocked(receiverContext)) {
+                                requestOplusTranslationActionRebind(currentTranslationPreferencePackage());
+                            }
+                        }, 600L);
+                        return;
+                    }
+                    if (Intent.ACTION_SCREEN_ON.equals(action)) {
+                        boolean wasPausedByScreenOff = screenTimeoutPausedByScreenOff;
+                        screenTimeoutPausedByScreenOff = false;
+                        screenTimeoutPausedByUserPresent = false;
+                        invalidateScreenTimeoutKeyguardCache();
+                        setAodLowFrameRateLyricMode(false);
+                        beginScreenStateLyricSettleWindow();
+                        if (wasPausedByScreenOff) {
+                            maybeLogScreenTimeout("Resumed screen timeout keep-awake after screen on", true);
+                        }
+                        updateScreenTimeoutWakeLock(receiverContext);
+                        // Check if device is actually locked (handles delay-lock window where screen was turned on before keyguard locked)
+                        if (!isDeviceKeyguardLocked(receiverContext)) {
+                            screenTurnedOffForLockState = false;
+                            restoreOriginalPkgActionsRules();
+                            requestOplusTranslationActionRebind(currentTranslationPreferencePackage());
+                        }
+                        return;
+                    }
+                    if (Intent.ACTION_USER_PRESENT.equals(action)) {
+                        setAodLowFrameRateLyricMode(false);
+                        invalidateScreenTimeoutKeyguardCache();
+                        resetScreenTimeoutKeepAwakeWindow();
+                        screenTimeoutPausedByUserPresent = true;
+                        releaseScreenTimeoutWakeLock("user present");
+                        scheduleScreenTimeoutUserPresentRecheck(receiverContext);
+                        maybeLogScreenTimeout(
+                                "Paused screen timeout keep-awake pending keyguard recheck",
+                                true);
+                        screenTurnedOffForLockState = false;
+                        restoreOriginalPkgActionsRules();
+                        infoAlways(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.TRANSLATION_ACTION_REBIND,
+                                "Keyguard unlocked user present, requesting rebind for " + currentTranslationPreferencePackage());
+                        requestOplusTranslationActionRebind(currentTranslationPreferencePackage());
+                        return;
+                    }
+                }
+            };
+            try {
+                IntentFilter filter = new IntentFilter();
+                filter.addAction(Intent.ACTION_SCREEN_OFF);
+                filter.addAction(Intent.ACTION_SCREEN_ON);
+                filter.addAction(Intent.ACTION_USER_PRESENT);
+                if (Build.VERSION.SDK_INT >= 33) {
+                    appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+                } else {
+                    appContext.registerReceiver(receiver, filter);
+                }
+                screenTimeoutReceiver = receiver;
+                screenTimeoutReceiverRegistered = true;
+                info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED, "Registered SystemUI screen timeout receiver");
+            } catch (Throwable t) {
+                error("Failed to register SystemUI screen timeout receiver", t);
+            }
+        }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void ensureLyricUiSettingsReceiver(Context context) {
+        if (context == null) return;
+        LyriconPlayerRegistry.refresh(context);
+        if (lyricUiSettingsReceiverRegistered) return;
+        synchronized (this) {
+            if (lyricUiSettingsReceiverRegistered) return;
+            Context appContext = context.getApplicationContext();
+            if (appContext == null) appContext = context;
+            BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context receiverContext, Intent intent) {
+                    if (intent == null) return;
+                    if (LyricUiSettings.ACTION_STYLE_CHANGED.equals(intent.getAction())) {
+                        handleLyricUiStyleSettingsChanged(receiverContext, intent);
+                    } else if (LyricUiSettings.ACTION_PLAYER_TRANSLATION_SETTINGS_CHANGED.equals(
+                            intent.getAction())) {
+                        handlePlayerTranslationSettingsChanged(receiverContext, intent);
+                    } else if (LyricUiSettings.ACTION_REQUEST_MEDIA_SNAPSHOT.equals(
+                            intent.getAction())) {
+                        sendMediaSnapshotResult(intent);
+                    } else if (LyricUiSettings.ACTION_REQUEST_MODULE_STATUS.equals(
+                            intent.getAction())) {
+                        handleModuleStatusRequest(intent);
+                    } else if (LyricUiSettings.ACTION_CONTENT_CLEANUP_CHANGED.equals(
+                            intent.getAction())) {
+                        handleLyricContentCleanupChanged(receiverContext, intent);
+                    } else if (LyricUiSettings.ACTION_DEBUG_SETTINGS_CHANGED.equals(
+                            intent.getAction())) {
+                        handleBridgeDebugSettingsChanged(receiverContext, intent);
+                    } else if (LyricUiSettings.ACTION_RESTART_SYSTEM_UI.equals(
+                            intent.getAction())) {
+                        handleSystemUiRestartRequest(intent);
+                    }
+                }
+            };
+            try {
+                IntentFilter filter = new IntentFilter(LyricUiSettings.ACTION_STYLE_CHANGED);
+                filter.addAction(LyricUiSettings.ACTION_PLAYER_TRANSLATION_SETTINGS_CHANGED);
+                filter.addAction(LyricUiSettings.ACTION_REQUEST_MEDIA_SNAPSHOT);
+                filter.addAction(LyricUiSettings.ACTION_REQUEST_MODULE_STATUS);
+                filter.addAction(LyricUiSettings.ACTION_CONTENT_CLEANUP_CHANGED);
+                filter.addAction(LyricUiSettings.ACTION_DEBUG_SETTINGS_CHANGED);
+                filter.addAction(LyricUiSettings.ACTION_RESTART_SYSTEM_UI);
+                if (Build.VERSION.SDK_INT >= 33) {
+                    appContext.registerReceiver(
+                            receiver,
+                            filter,
+                            LyricUiSettings.CHANGE_SETTINGS_PERMISSION,
+                            mainHandler,
+                            Context.RECEIVER_EXPORTED);
+                } else {
+                    appContext.registerReceiver(
+                            receiver,
+                            filter,
+                            LyricUiSettings.CHANGE_SETTINGS_PERMISSION,
+                            mainHandler);
+                }
+                lyricUiSettingsReceiver = receiver;
+                lyricUiSettingsReceiverRegistered = true;
+                infoAlways(BridgeDebugArea.BOOTSTRAP, BridgeEvents.SYSTEMUI_BOOTSTRAP, "Registered protected SystemUI lyric settings receiver");
+                LyriconPlayerRegistry.refresh(appContext);
+            } catch (Throwable t) {
+                error("Failed to register protected SystemUI lyric settings receiver", t);
+            }
+        }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+
+
+
+
+    private void syncDeclaredTranslationTogglePackages() {
+        providerDeclaredTranslationTogglePackages.clear();
+        providerDeclaredTranslationTogglePackages.addAll(
+                LyriconPlayerRegistry.extraHistoryPackages());
+    }
+
+    /**
+     * Restarts only the main SystemUI process after the protected settings broadcast has been
+     * delivered.  The settings app cannot kill another UID directly, so the request is handled
+     * here while running inside SystemUI.  Sub-processes keep running; the persistent main
+     * process is the one that owns the lock-screen surface and will be restarted by the system.
+     */
+    @SuppressWarnings("deprecation")
+    private void handleSystemUiRestartRequest(Intent intent) {
+        if (!SYSTEMUI_PACKAGE.equals(logProcessName)) {
+            return;
+        }
+        ResultReceiver receiver = intent == null
+                ? null
+                : intent.getParcelableExtra(
+                LyricUiSettings.EXTRA_SYSTEM_UI_RESTART_RESULT_RECEIVER);
+        if (receiver != null) {
+            Bundle result = new Bundle();
+            result.putLong(
+                    LyricUiSettings.RESULT_SYSTEM_UI_RESTART_REQUEST_ID,
+                    intent.getLongExtra(
+                            LyricUiSettings.EXTRA_SYSTEM_UI_RESTART_REQUEST_ID,
+                            -1L));
+            result.putBoolean(LyricUiSettings.RESULT_SYSTEM_UI_RESTART_ACCEPTED, true);
+            try {
+                receiver.send(
+                        LyricUiSettings.RESULT_SYSTEM_UI_RESTART_ACKNOWLEDGED,
+                        result);
+            } catch (Throwable throwable) {
+                warn(
+                        LyricLogFormatter.Area.SETTINGS,
+                        "systemui-restart-ack-failed",
+                        "Could not acknowledge SystemUI restart request"
+                                + " | error=" + throwable.getClass().getSimpleName());
+            }
+        }
+        mainHandler.postDelayed(() -> {
+            try {
+                android.os.Process.killProcess(android.os.Process.myPid());
+            } catch (Throwable throwable) {
+                error("Failed to restart SystemUI process", throwable);
+            }
+        }, 120L);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void handleModuleStatusRequest(Intent intent) {
+        if (!SYSTEMUI_PACKAGE.equals(logProcessName)) {
+            return;
+        }
+        ResultReceiver receiver = intent == null
+                ? null
+                : intent.getParcelableExtra(LyricUiSettings.EXTRA_RESULT_RECEIVER);
+        if (receiver == null) return;
+        Bundle result = new Bundle();
+        result.putInt(LyricUiSettings.RESULT_MODULE_VERSION_CODE, BuildConfig.VERSION_CODE);
+        result.putString(LyricUiSettings.RESULT_PROCESS, logProcessName);
+        result.putLong(LyricUiSettings.RESULT_MODULE_TIMESTAMP, System.currentTimeMillis());
+        StructuredBridgeLog.config().putStatus(result);
+        try {
+            receiver.send(0, result);
+        } catch (Throwable throwable) {
+            warn(
+                    LyricLogFormatter.Area.SETTINGS,
+                    "module-status-reply-failed",
+                    "Could not answer module status request"
+                            + " | error=" + throwable.getClass().getSimpleName());
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void sendMediaSnapshotResult(Intent intent) {
+        ResultReceiver receiver = intent.getParcelableExtra(LyricUiSettings.EXTRA_RESULT_RECEIVER);
+        if (receiver == null) return;
+        Bundle result = new Bundle();
+        result.putString(LyricUiSettings.RESULT_TITLE, lastSystemUiSongName);
+        result.putString(LyricUiSettings.RESULT_ARTIST, lastSystemUiArtistName);
+        result.putString(LyricUiSettings.RESULT_ALBUM, lastSystemUiAlbumName);
+        boolean snapshotMatchesCurrent = TextUtils.equals(
+                WordLyricRenderSupport.normalizeLine(currentCleanupSnapshotTitle),
+                WordLyricRenderSupport.normalizeLine(lastSystemUiSongName))
+                && (TextUtils.isEmpty(currentCleanupSnapshotArtist)
+                || TextUtils.isEmpty(lastSystemUiArtistName)
+                || TextUtils.equals(
+                WordLyricRenderSupport.normalizeLine(currentCleanupSnapshotArtist),
+                WordLyricRenderSupport.normalizeLine(lastSystemUiArtistName)));
+        result.putString(
+                LyricUiSettings.RESULT_TRACK_KEY,
+                snapshotMatchesCurrent ? currentCleanupSnapshotTrackKey : "");
+        result.putString(
+                LyricUiSettings.RESULT_RAW_LYRIC,
+                snapshotMatchesCurrent
+                        ? LyricOpeningCleanup.previewTimedText(currentCleanupSnapshotRawLyric)
+                        : "");
+        receiver.send(0, result);
+    }
+
+    private void scheduleScreenTimeoutUserPresentRecheck(Context context) {
+        if (screenTimeoutUserPresentRecheckPosted) {
+            return;
+        }
+        screenTimeoutUserPresentRecheckPosted = true;
+        Context appContext = applicationContextOf(context);
+        mainHandler.postDelayed(() -> {
+            screenTimeoutUserPresentRecheckPosted = false;
+            recheckScreenTimeoutAfterUserPresent(appContext);
+        }, SCREEN_TIMEOUT_USER_PRESENT_RECHECK_DELAY_MS);
+    }
+
+    private void recheckScreenTimeoutAfterUserPresent(Context context) {
+        if (!screenTimeoutPausedByUserPresent) {
+            updateScreenTimeoutWakeLock(context);
+            return;
+        }
+        if (screenTimeoutPausedByScreenOff) {
+            return;
+        }
+        if (isKeyguardShowingForScreenTimeout(context)) {
+            screenTimeoutPausedByUserPresent = false;
+            maybeLogScreenTimeout(
+                    "Resumed screen timeout keep-awake after keyguard remained visible",
+                    true);
+            updateScreenTimeoutWakeLock(context);
+            return;
+        }
+        deactivateSystemUiLyricModeAfterSurfaceHidden();
+        releaseScreenTimeoutWakeLock("keyguard dismissed");
+        maybeLogScreenTimeout("Stopped screen timeout keep-awake after keyguard dismissed", true);
+    }
+
+    private void updateScreenTimeoutWakeLock(Context context) {
+        if (!hasScreenTimeoutWakeLockBaseConditions(context)) {
+            resetScreenTimeoutKeepAwakeWindow();
+            maybeLogScreenTimeoutSkip(context);
+            releaseScreenTimeoutWakeLock("conditions changed");
+            return;
+        }
+        if (!ensureScreenTimeoutKeepAwakeWindowActive()) {
+            maybeLogScreenTimeout("Skip screen timeout wake lock: custom timeout elapsed", false);
+            releaseScreenTimeoutWakeLock("custom timeout elapsed");
+            return;
+        }
+        if (context == null) {
+            return;
+        }
+        ensureScreenTimeoutReceiver(context);
+        try {
+            Context appContext = context.getApplicationContext();
+            if (appContext == null) {
+                appContext = context;
+            }
+            PowerManager powerManager = screenTimeoutPowerManager;
+            if (powerManager == null) {
+                powerManager =
+                        (PowerManager) appContext.getSystemService(Context.POWER_SERVICE);
+                if (powerManager == null) {
+                    return;
+                }
+                screenTimeoutPowerManager = powerManager;
+            }
+            if (!powerManager.isInteractive()) {
+                releaseScreenTimeoutWakeLock("screen not interactive");
+                return;
+            }
+            PowerManager.WakeLock wakeLock = screenTimeoutWakeLock;
+            if (wakeLock == null) {
+                wakeLock = powerManager.newWakeLock(
+                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK,
+                        TAG + ":ScreenTimeout");
+                wakeLock.setReferenceCounted(false);
+                screenTimeoutWakeLock = wakeLock;
+            }
+            boolean wasHeld = wakeLock.isHeld();
+            long leaseMs = screenTimeoutWakeLockLeaseMs();
+            if (!wasHeld) {
+                wakeLock.acquire(leaseMs);
+            }
+            if (!wasHeld) {
+                maybeLogScreenTimeout(
+                        "Acquired bright screen timeout wake lock lease="
+                                + leaseMs + "ms",
+                        true);
+                pulseScreenTimeoutUserActivity(powerManager, true);
+            }
+            scheduleScreenTimeoutUserActivityPulse();
+        } catch (Throwable t) {
+            error("Failed to update screen timeout wake lock", t);
+        }
+    }
+
+    private boolean shouldHoldScreenTimeoutWakeLock(Context context) {
+        return hasScreenTimeoutWakeLockBaseConditions(context)
+                && isScreenTimeoutKeepAwakeWindowActive();
+    }
+
+    private boolean hasScreenTimeoutWakeLockBaseConditions(Context context) {
+        return screenTimeoutSmartEnabled
+                && systemUiLyricModeKeepAwakeActive
+                && !screenTimeoutPausedByScreenOff
+                && !screenTimeoutPausedByUserPresent
+                && hasSupportedSystemUiPlayer()
+                && lastPlaybackIsPlaying
+                && hasScreenTimeoutLyricEvidence()
+                && isKeyguardShowingForScreenTimeout(context)
+                && isScreenInteractiveForWakeLock();
+    }
+
+    private boolean ensureScreenTimeoutKeepAwakeWindowActive() {
+        long customDurationMs = screenTimeoutCustomDurationMs();
+        if (customDurationMs <= 0L) {
+            resetScreenTimeoutKeepAwakeWindow();
+            return true;
+        }
+        long now = SystemClock.elapsedRealtime();
+        long until = screenTimeoutKeepAwakeUntilElapsedMs;
+        if (until <= 0L) {
+            screenTimeoutKeepAwakeUntilElapsedMs = now + customDurationMs;
+            maybeLogScreenTimeout(
+                    "Started custom screen timeout window duration=" + customDurationMs + "ms",
+                    true);
+            return true;
+        }
+        return now <= until;
+    }
+
+    private boolean isScreenTimeoutKeepAwakeWindowActive() {
+        if (screenTimeoutCustomDurationMs() <= 0L) {
+            return true;
+        }
+        long until = screenTimeoutKeepAwakeUntilElapsedMs;
+        return until > 0L && SystemClock.elapsedRealtime() <= until;
+    }
+
+    private long screenTimeoutCustomDurationMs() {
+        int seconds = LyricUiSettings.sanitizeScreenTimeoutSeconds(screenTimeoutCustomSeconds);
+        return seconds <= 0 ? 0L : seconds * 1000L;
+    }
+
+    private long screenTimeoutWakeLockLeaseMs() {
+        long customDurationMs = screenTimeoutCustomDurationMs();
+        if (customDurationMs <= 0L) {
+            return SCREEN_TIMEOUT_WAKE_LOCK_LEASE_MS;
+        }
+        long remainingMs = screenTimeoutKeepAwakeUntilElapsedMs - SystemClock.elapsedRealtime();
+        if (remainingMs <= 0L) {
+            return 1L;
+        }
+        return Math.min(SCREEN_TIMEOUT_WAKE_LOCK_LEASE_MS, Math.max(1L, remainingMs));
+    }
+
+    private void resetScreenTimeoutKeepAwakeWindow() {
+        screenTimeoutKeepAwakeUntilElapsedMs = 0L;
+    }
+
+    private boolean hasSupportedSystemUiPlayer() {
+        return lastSystemUiPackageSupported
+                || (!TextUtils.isEmpty(currentLyricProviderPackage)
+                && isCurrentLyricProviderPackage(currentLyricProviderPackage));
+    }
+
+    private boolean hasScreenTimeoutLyricEvidence() {
+        return hasRecentVisibleOfficialLyricTextView()
+                || hasRecentScreenTimeoutLyricModelEvidence();
+    }
+
+    private boolean hasRecentVisibleOfficialLyricTextView() {
+        long lastVisibleAt = lastVisibleOfficialLyricTextViewAt;
+        if (lastVisibleAt <= 0L) {
+            return false;
+        }
+        long age = SystemClock.elapsedRealtime() - lastVisibleAt;
+        return age >= 0L && age <= SCREEN_TIMEOUT_VISIBLE_LYRIC_VIEW_MAX_AGE_MS;
+    }
+
+    private boolean hasRecentScreenTimeoutLyricModelEvidence() {
+        long until = screenTimeoutLyricEvidenceGraceUntilElapsedMs;
+        return until > 0L && SystemClock.elapsedRealtime() <= until;
+    }
+
+    private void markScreenTimeoutLyricModelEvidence() {
+        screenTimeoutLyricEvidenceGraceUntilElapsedMs =
+                SystemClock.elapsedRealtime() + SCREEN_TIMEOUT_MODEL_EVIDENCE_GRACE_MS;
+    }
+
+    private void clearScreenTimeoutLyricEvidence() {
+        lastVisibleOfficialLyricTextViewAt = 0L;
+        screenTimeoutLyricEvidenceGraceUntilElapsedMs = 0L;
+        resetScreenTimeoutKeepAwakeWindow();
+    }
+
+    private void invalidateScreenTimeoutKeyguardCache() {
+        screenTimeoutKeyguardCacheUntilElapsedMs = 0L;
+    }
+
+    private boolean isScreenInteractiveForWakeLock() {
+        PowerManager powerManager = screenTimeoutPowerManager;
+        return powerManager == null || powerManager.isInteractive();
+    }
+
+    private boolean isDeviceKeyguardLocked(Context context) {
+        Context appContext = applicationContextOf(context);
+        if (appContext != null) {
+            try {
+                KeyguardManager keyguardManager = screenTimeoutKeyguardManager;
+                if (keyguardManager == null) {
+                    keyguardManager =
+                            (KeyguardManager) appContext.getSystemService(Context.KEYGUARD_SERVICE);
+                    screenTimeoutKeyguardManager = keyguardManager;
+                }
+                if (keyguardManager != null) {
+                    return keyguardManager.isKeyguardLocked();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return screenTurnedOffForLockState;
+    }
+
+    private boolean isKeyguardShowingForScreenTimeout(Context context) {
+        long now = SystemClock.elapsedRealtime();
+        if (now <= screenTimeoutKeyguardCacheUntilElapsedMs) {
+            return screenTimeoutKeyguardLockedCached;
+        }
+        Context appContext = applicationContextOf(context);
+        if (appContext == null) {
+            return false;
+        }
+        try {
+            KeyguardManager keyguardManager = screenTimeoutKeyguardManager;
+            if (keyguardManager == null) {
+                keyguardManager =
+                        (KeyguardManager) appContext.getSystemService(Context.KEYGUARD_SERVICE);
+                screenTimeoutKeyguardManager = keyguardManager;
+            }
+            boolean locked = keyguardManager != null && keyguardManager.isKeyguardLocked();
+            screenTimeoutKeyguardLockedCached = locked;
+            screenTimeoutKeyguardCacheUntilElapsedMs =
+                    now + SCREEN_TIMEOUT_KEYGUARD_STATE_CACHE_MS;
+            return locked;
+        } catch (Throwable t) {
+            invalidateScreenTimeoutKeyguardCache();
+            maybeLogScreenTimeout("Skip screen timeout wake lock: failed to read keyguard state", false);
+            return false;
+        }
+    }
+
+    private void maybeLogScreenTimeoutSkip(Context context) {
+        if (!systemUiLyricModeKeepAwakeActive) {
+            return;
+        }
+        maybeLogScreenTimeout("Skip screen timeout wake lock: screenOff=" + screenTimeoutPausedByScreenOff
+                + ", enabled=" + screenTimeoutSmartEnabled
+                + ", userPresent=" + screenTimeoutPausedByUserPresent
+                + ", supportedPlayer=" + hasSupportedSystemUiPlayer()
+                + ", playing=" + lastPlaybackIsPlaying
+                + ", hasModel=" + (currentWordLyricModel != null)
+                + ", hasOfficialLyric=" + systemUiHasOfficialLyric
+                + ", recentOfficialView=" + hasRecentVisibleOfficialLyricTextView()
+                + ", modelGrace=" + hasRecentScreenTimeoutLyricModelEvidence()
+                + ", customSeconds=" + screenTimeoutCustomSeconds
+                + ", customWindowActive=" + isScreenTimeoutKeepAwakeWindowActive()
+                + ", keyguardShowing=" + isKeyguardShowingForScreenTimeout(context)
+                + ", interactive=" + isScreenInteractiveForWakeLock(), false);
+    }
+
+    private void releaseScreenTimeoutWakeLock(String reason) {
+        stopScreenTimeoutUserActivityPulse();
+        PowerManager.WakeLock wakeLock = screenTimeoutWakeLock;
+        if (wakeLock == null) {
+            return;
+        }
+        try {
+            if (wakeLock.isHeld()) {
+                wakeLock.release();
+                maybeLogScreenTimeout("Released screen timeout wake lock: " + reason, true);
+            }
+        } catch (Throwable t) {
+            error("Failed to release screen timeout wake lock", t);
+        }
+    }
+
+    private void scheduleScreenTimeoutUserActivityPulse() {
+        if (screenTimeoutUserActivityPulsePosted) {
+            return;
+        }
+        screenTimeoutUserActivityPulsePosted = true;
+        mainHandler.postDelayed(
+                screenTimeoutUserActivityPulse,
+                nextScreenTimeoutUserActivityPulseDelayMs());
+    }
+
+    private void stopScreenTimeoutUserActivityPulse() {
+        if (!screenTimeoutUserActivityPulsePosted) {
+            return;
+        }
+        mainHandler.removeCallbacks(screenTimeoutUserActivityPulse);
+        screenTimeoutUserActivityPulsePosted = false;
+    }
+
+    private void renewScreenTimeoutWakeLockLease(PowerManager powerManager) {
+        if (powerManager == null) {
+            return;
+        }
+        PowerManager.WakeLock wakeLock = screenTimeoutWakeLock;
+        if (wakeLock == null) {
+            return;
+        }
+        try {
+            boolean wasHeld = wakeLock.isHeld();
+            long leaseMs = screenTimeoutWakeLockLeaseMs();
+            wakeLock.acquire(leaseMs);
+            if (!wasHeld) {
+                maybeLogScreenTimeout(
+                        "Re-acquired bright screen timeout wake lock lease="
+                                + leaseMs + "ms",
+                        true);
+            }
+        } catch (Throwable t) {
+            error("Failed to renew screen timeout wake lock lease", t);
+        }
+    }
+
+    private long nextScreenTimeoutUserActivityPulseDelayMs() {
+        long customDurationMs = screenTimeoutCustomDurationMs();
+        if (customDurationMs <= 0L) {
+            return SCREEN_TIMEOUT_USER_ACTIVITY_INTERVAL_MS;
+        }
+        long remainingMs = screenTimeoutKeepAwakeUntilElapsedMs - SystemClock.elapsedRealtime();
+        if (remainingMs <= 0L) {
+            return 1L;
+        }
+        return Math.min(SCREEN_TIMEOUT_USER_ACTIVITY_INTERVAL_MS, Math.max(1L, remainingMs));
+    }
+
+    @SuppressLint("DiscouragedPrivateApi")
+    private void pulseScreenTimeoutUserActivity(PowerManager powerManager, boolean forceLog) {
+        if (powerManager == null) {
+            return;
+        }
+        long uptime = SystemClock.uptimeMillis();
+        Throwable firstFailure = null;
+        try {
+            Method userActivity = PowerManager.class.getDeclaredMethod(
+                    "userActivity",
+                    long.class,
+                    int.class,
+                    int.class);
+            userActivity.setAccessible(true);
+            userActivity.invoke(powerManager, uptime, 0, 1);
+            maybeLogScreenTimeout("Pulsed screen timeout user activity without changing lights", forceLog);
+            return;
+        } catch (NoSuchMethodException ignored) {
+            // Fall through to older framework signature.
+        } catch (Throwable t) {
+            firstFailure = t;
+        }
+        try {
+            Method userActivity = PowerManager.class.getDeclaredMethod(
+                    "userActivity",
+                    long.class,
+                    boolean.class);
+            userActivity.setAccessible(true);
+            userActivity.invoke(powerManager, uptime, true);
+            maybeLogScreenTimeout("Pulsed screen timeout user activity without changing lights", forceLog);
+        } catch (Throwable t) {
+            if (!screenTimeoutUserActivityFailureLogged) {
+                screenTimeoutUserActivityFailureLogged = true;
+                if (firstFailure != null) {
+                    error("Failed to pulse screen timeout user activity via int signature", firstFailure);
+                }
+                error("Failed to pulse screen timeout user activity", t);
+            }
+        }
+    }
+
+    private void maybeLogScreenTimeout(String message, boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && now - lastScreenTimeoutLogAt < 2_000L) {
+            return;
+        }
+        lastScreenTimeoutLogAt = now;
+        info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED, message);
+    }
+
+    private static boolean hasCustomAction(PlaybackState state, String actionId) {
+        if (state == null || TextUtils.isEmpty(actionId)) {
+            return false;
+        }
+        List<PlaybackState.CustomAction> actions = state.getCustomActions();
+        if (actions == null) {
+            return false;
+        }
+        for (PlaybackState.CustomAction action : actions) {
+            if (action != null && actionId.equals(action.getAction())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @SuppressLint("WrongConstant")
+    private static MediaMetadata buildMetadataWithLyricInfoPreservingArtwork(
+            MediaMetadata base,
+            String lyricInfo,
+            String trackTitle,
+            String trackArtist) {
+        MediaMetadata.Builder builder = new MediaMetadata.Builder(base);
+        copyMediaMetadataArtwork(base, builder);
+        return builder
+                .putString(OPLUS_LYRIC_INFO_KEY, nullToEmpty(lyricInfo))
+                .build();
+    }
+
+    private static void copyMediaMetadataArtwork(
+            MediaMetadata source,
+            MediaMetadata.Builder target) {
+        if (source == null || target == null) {
+            return;
+        }
+        boolean hasArtworkUri = false;
+        String[] uriKeys = {
+                MediaMetadata.METADATA_KEY_ART_URI,
+                MediaMetadata.METADATA_KEY_ALBUM_ART_URI,
+                MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI
+        };
+        for (String key : uriKeys) {
+            if (!TextUtils.isEmpty(source.getString(key))) {
+                hasArtworkUri = true;
+                break;
+            }
+        }
+        String[] bitmapKeys = {
+                MediaMetadata.METADATA_KEY_ART,
+                MediaMetadata.METADATA_KEY_ALBUM_ART,
+                MediaMetadata.METADATA_KEY_DISPLAY_ICON
+        };
+        for (String key : bitmapKeys) {
+            Bitmap bitmap = source.getBitmap(key);
+            if (bitmap != null) {
+                if (hasArtworkUri && bitmap.getWidth() <= 1 && bitmap.getHeight() <= 1) {
+                    target.putBitmap(key, null);
+                } else {
+                    target.putBitmap(key, bitmap);
+                }
+            }
+        }
+        for (String key : uriKeys) {
+            String uri = source.getString(key);
+            if (!TextUtils.isEmpty(uri)) {
+                target.putString(key, uri);
+            }
+        }
+    }
+
+    @SuppressLint("WrongConstant")
+    private static MediaMetadata buildMetadataWithStableSystemUiIdentity(
+            MediaMetadata base,
+            String title,
+            String artist) {
+        return new MediaMetadata.Builder(base)
+                .putString(MediaMetadata.METADATA_KEY_TITLE, nullToEmpty(title))
+                .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, nullToEmpty(title))
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, nullToEmpty(artist))
+                .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, nullToEmpty(artist))
+                .build();
+    }
+
+    private static String describeMetadataArtwork(MediaMetadata metadata) {
+        if (metadata == null) return "metadata-null";
+        Bitmap bitmap = firstNonNullBitmap(
+                metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON),
+                metadata.getBitmap(MediaMetadata.METADATA_KEY_ART),
+                metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART));
+        String uri = firstNonEmpty(
+                metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI),
+                metadata.getString(MediaMetadata.METADATA_KEY_ART_URI),
+                metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI));
+        return (bitmap == null
+                ? "bitmap=null"
+                : "bitmap=" + bitmap.getWidth() + 'x' + bitmap.getHeight()
+                + ":generation-" + bitmap.getGenerationId()
+                + ":identity-" + System.identityHashCode(bitmap))
+                + ", uri=" + SensitiveFieldRedactor.uriSummary(uri);
+    }
+
+    private static Bitmap firstNonNullBitmap(Bitmap... bitmaps) {
+        if (bitmaps == null) return null;
+        for (Bitmap bitmap : bitmaps) {
+            if (bitmap != null) return bitmap;
+        }
+        return null;
+    }
+
+    static String buildTrackKey(String title, String artist) {
+        return TrackIdentity.buildKey(title, artist);
+    }
+
+    private boolean cacheSystemUiLyricModelLocked(
+            XposedInterface.Chain chain,
+            LyricInfoContract.Payload payload,
+            LyricInfoContract.Payload originalPayload,
+            long loadEpoch,
+            String packageName,
+            String observedTitle,
+            String observedArtist) {
+        if (!LyricSourcePolicy.accepts(payload)) {
+            return false;
+        }
+        String displayLyric = payload.lyric;
+        String rawLyric = SentenceWindowContract.renderSource(payload);
+        String translationLyric = payload.translationLyric;
+        boolean displayTimed = LyricInfoContract.containsTimedLrc(displayLyric);
+        boolean rawTimed = LyricInfoContract.containsTimedLrc(rawLyric);
+        String payloadKey = payloadTrackKey(payload);
+        String signature = buildWordLyricModelSignature(payload, rawLyric, translationLyric);
+        NativeLyricModelAssembler.AssemblyResult assembled = null;
+        if (rawTimed
+                && !(currentWordLyricModel != null
+                && !TextUtils.isEmpty(signature)
+                && signature.equals(currentWordLyricModelSignature))) {
+            long parseStartedAt = performanceSampler.begin();
+            try {
+                assembled = nativeLyricModelAssembler.assemble(
+                        rawLyric,
+                        true,
+                        displayLyric,
+                        displayTimed,
+                        translationLyric,
+                        payload.lineMetadata);
+            } finally {
+                performanceSampler.end(
+                        BridgePerformanceSampler.Metric.MODEL_PARSE,
+                        parseStartedAt);
+            }
+        }
+
+        if (!systemUiLyricPublicationGate.canCommit(loadEpoch)
+                || !ZhiBridgeRuntime.isCurrentPlayerPackage(packageName)
+                || (ZhiBridgeRuntime.hasPendingLyricHandoff() && !ZhiBridgeRuntime.hasCurrentPayload())) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED,
+                    "Dropped stale SystemUI lyric parse, epoch=" + loadEpoch
+                            + ", currentEpoch=" + systemUiLyricPublicationGate.currentEpoch()
+                            + ", track=" + SensitiveFieldRedactor.trackHash(
+                            buildTrackKey(observedTitle, observedArtist)));
+            return false;
+        }
+
+        rememberCurrentCleanupSnapshot(originalPayload, observedTitle, observedArtist);
+        acceptCurrentLyricProvider(
+                chain,
+                payload,
+                packageName,
+                observedTitle,
+                observedArtist);
+        systemUiHasOfficialLyric = displayTimed || rawTimed;
+        if (systemUiHasOfficialLyric) {
+            markScreenTimeoutLyricModelEvidence();
+        } else {
+            screenTimeoutLyricEvidenceGraceUntilElapsedMs = 0L;
+        }
+        if (!rawTimed) {
+            clearWordLyricModelState(
+                    BridgeDebugArea.MEDIA,
+                    BridgeEvents.DETAIL,
+                    "Accepted SystemUI timed lyric without word model");
+            return true;
+        }
+        if (assembled == null) {
+            updateScreenTimeoutWakeLock(currentApplicationContext());
+            return true;
+        }
+
+        boolean replacingModel = currentWordLyricModel != null
+                && !TextUtils.isEmpty(signature)
+                && !signature.equals(currentWordLyricModelSignature);
+        if (replacingModel) {
+            lyricModelReplacementInProgress = true;
+            beginOfficialLyricTrackHandoff("publishing replacement lyric model");
+            extendLyricTrackPositionResetGuard();
+        }
+        if (assembled.aliasesApplied > 0) {
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL,
+                    "Applied official lyric display aliases, aliases=" + assembled.aliasesApplied
+                            + ", first="
+                            + LyricModelTraceSupport.describeSensitiveText(assembled.firstAlias));
+        }
+        if (assembled.supplementalDisplayAdded > 0) {
+            info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL,
+                    "Merged supplemental lyric translations, added="
+                            + assembled.supplementalDisplayAdded);
+        }
+        if (assembled.supplementalTranslationAdded > 0) {
+            info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL,
+                    "Merged supplemental lyric translations, added="
+                            + assembled.supplementalTranslationAdded);
+        }
+        if (assembled.propagatedTranslations > 0) {
+            info(BridgeDebugArea.LYRIC, BridgeEvents.DETAIL,
+                    "Propagated nearby translations during model assembly, copied="
+                            + assembled.propagatedTranslations);
+        }
+
+        WordLyricModel model = assembled.model;
+        if (payload.snapshotPositionMillis >= 0L) {
+            for (WordLine line : model.lines) line.sentenceWindowExpanded = true;
+        }
+        if (model.lines.isEmpty()) {
+            clearWordLyricModelState(
+                    BridgeDebugArea.RENDERER,
+                    BridgeEvents.RENDER_STATE_CHANGED,
+                    "Lyrics Core returned no renderable model; using official SystemUI lyric renderer");
+            return true;
+        }
+        return publishWordLyricModel(model, signature, payloadKey, loadEpoch);
+    }
+
+    private void rememberCurrentCleanupSnapshot(
+            LyricInfoContract.Payload originalPayload,
+            String fallbackTitle,
+            String fallbackArtist) {
+        if (originalPayload == null) {
+            return;
+        }
+        currentCleanupSnapshotTrackKey = firstNonEmpty(
+                originalPayload.trackKey,
+                buildTrackKey(
+                        firstNonEmpty(originalPayload.songName, fallbackTitle),
+                        firstNonEmpty(originalPayload.artist, fallbackArtist)));
+        currentCleanupSnapshotDisplayLyric = originalPayload.lyric;
+        currentCleanupSnapshotRawLyric = firstNonEmpty(
+                originalPayload.rawLyric,
+                originalPayload.lyric);
+        currentCleanupSnapshotTitle = firstNonEmpty(fallbackTitle, originalPayload.songName);
+        currentCleanupSnapshotArtist = firstNonEmpty(fallbackArtist, originalPayload.artist);
+    }
+
+    private void clearWordLyricModelState(BridgeDebugArea area, String event, String message) {
+        cancelBrightLyricGeometryCommit();
+        currentWordLyricModel = null;
+        currentWordLyricModelSignature = "";
+        currentWordLyricModelTrackKey = "";
+        resetAdaptiveLineTimedRecyclerFollow();
+        clearSeedlingActiveLyricHint();
+        clearActiveRendererTargets();
+        activeRendererWordLine = null;
+        officialLyricTextRenderer.clearGlowCache();
+        lyricModelReplacementInProgress = false;
+        info(area, event, message);
+        mainHandler.post(this::refreshTranslationActionViewVisibility);
+        finishOfficialLyricTrackHandoff();
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+    }
+
+    private boolean publishWordLyricModel(WordLyricModel model, String signature,
+            String payloadKey, long loadEpoch) {
+        String translationPackage = currentLyricProviderPackage;
+        int[] committedGeometry = new int[1];
+        // Only these short state writes share the epoch lock. Parsing, vendor calls,
+        // cache cleanup and UI work stay outside it.
+        if (!ZhiBridgeRuntime.isCurrentPlayerPackage(translationPackage)
+                || !ZhiBridgeRuntime.hasCurrentPayload()
+                || !systemUiLyricPublicationGate.commitIfCurrent(loadEpoch, () -> {
+                    committedGeometry[0] = beginBrightLyricGeometryCommit(model, translationPackage);
+                    currentWordLyricModel = model;
+                    currentWordLyricModelSignature = signature;
+                    currentWordLyricModelTrackKey = payloadKey;
+                })) return false;
+        int geometryCommitGeneration = committedGeometry[0];
+        resetAdaptiveLineTimedRecyclerFollow();
+        clearSeedlingActiveLyricHint();
+        lyricModelReplacementInProgress = false;
+        clearActiveRendererTargets();
+        activeRendererWordLine = null;
+        officialLyricTextRenderer.clearGlowCache();
+        officialLyricTextRenderer.cancelModelSwitchReveal();
+        info(BridgeDebugArea.LYRIC, BridgeEvents.DETAIL,
+                "Cached native SystemUI word lyric model, parser=" + model.parserName
+                        + ", lines=" + model.lines.size()
+                        + ", translations=" + model.translationCount());
+        maybeLogWordLyricModelSlotIntegrity(model, "systemui-cache");
+        mainHandler.post(() -> preparePublishedLyricModelGeometry(
+                model, geometryCommitGeneration));
+        mainHandler.post(() -> {
+            if (currentWordLyricModel != model
+                    || !translationPackage.equals(currentLyricProviderPackage)
+                    || !payloadKey.equals(currentWordLyricModelTrackKey)
+                    || !payloadKey.equals(payloadTrackKey(currentLyricProviderPayload))) return;
+            reapplyCurrentTranslationButtonSetting();
+            String rebindKey = translationPackage + "|" + payloadKey
+                    + "|" + (currentTranslationCountForAction() > 0);
+            if (!rebindKey.equals(lastTranslationModelRebindKey)
+                    && requestOplusTranslationActionRebind(translationPackage)) {
+                lastTranslationModelRebindKey = rebindKey;
+            }
+        });
+        updateScreenTimeoutWakeLock(currentApplicationContext());
+        return true;
+    }
+    private void beginOfficialLyricTrackHandoff(String reason) {
+        beginOfficialLyricTrackHandoff(reason, true);
+    }
+
+    private void beginOfficialLyricTrackHandoff(String reason, boolean armRowRebind) {
+        long now = SystemClock.elapsedRealtime();
+        if (!shouldStartOfficialLyricTrackHandoff(now)) {
+            pendingCustomLyricTakeoverFade = false;
+            return;
+        }
+        if (armRowRebind) {
+            lyricTrackRowRebindEligibleUntilElapsedMs =
+                    now + SYSTEMUI_LYRIC_ROW_REBIND_WINDOW_MS;
+        }
+        officialLyricHandoffStartedAtElapsedMs = now;
+        officialLyricHandoffReleaseRetryGeneration = -1;
+        officialLyricDrawSuppressedUntilElapsedMs =
+                now + SYSTEMUI_LYRIC_MODEL_HANDOFF_MAX_MS;
+        pendingCustomLyricTakeoverFade = true;
+        int generation = ++officialLyricHandoffGeneration;
+        if (isLyricLayoutDiagnosticsEnabled()) {
+            info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Suppressing official lyric frames during track handoff, reason=" + reason);
+        }
+        mainHandler.post(() -> {
+            suppressRememberedLyricsRecyclerViews();
+            invalidateRememberedLyricViews();
+        });
+        mainHandler.postDelayed(() -> {
+            if (generation != officialLyricHandoffGeneration) {
+                return;
+            }
+            officialLyricDrawSuppressedUntilElapsedMs = 0L;
+            officialLyricHandoffStartedAtElapsedMs = 0L;
+            officialLyricHandoffReleaseRetryGeneration = -1;
+            pendingCustomLyricTakeoverFade = false;
+            if (isLyricLayoutDiagnosticsEnabled()) {
+                info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Fading lyric renderer in after handoff timeout");
+            }
+            restoreSuppressedLyricsRecyclerViews(true);
+            invalidateRememberedLyricViews();
+        }, SYSTEMUI_LYRIC_MODEL_HANDOFF_MAX_MS);
+        scheduleLyricsRecyclerVisibilityWatchdog();
+    }
+
+    private void finishOfficialLyricTrackHandoff() {
+        if (officialLyricDrawSuppressedUntilElapsedMs <= 0L
+                && !pendingCustomLyricTakeoverFade) {
+            return;
+        }
+        officialLyricDrawSuppressedUntilElapsedMs = 0L;
+        officialLyricHandoffStartedAtElapsedMs = 0L;
+        officialLyricHandoffReleaseRetryGeneration = -1;
+        pendingCustomLyricTakeoverFade = false;
+        int generation = ++officialLyricHandoffGeneration;
+        mainHandler.post(() -> {
+            invalidateRememberedLyricViews();
+            View anchor = firstAttachedLyricsRecyclerView();
+            Runnable restore = () -> {
+                if (generation != officialLyricHandoffGeneration
+                        || officialLyricDrawSuppressedUntilElapsedMs > 0L) {
+                    return;
+                }
+                restoreSuppressedLyricsRecyclerViews(true);
+                invalidateRememberedLyricViews();
+            };
+            if (anchor != null) {
+                anchor.postOnAnimation(restore);
+            } else {
+                mainHandler.postDelayed(restore, ACTIVE_LYRIC_FRAME_DELAY_MS);
+            }
+        });
+    }
+
+    private void finishOfficialLyricTrackHandoffAfterStableCustomFrame(TextView textView) {
+        if (officialLyricDrawSuppressedUntilElapsedMs <= 0L) {
+            return;
+        }
+        if (delayOfficialLyricTrackHandoffReleaseIfNeeded()) {
+            return;
+        }
+        View recycler = textView == null ? null : findContainingLyricsRecyclerView(textView);
+        if (recycler == null
+                || !recycler.isAttachedToWindow()
+                || !hasBoundLyricsRecyclerChildren(recycler)
+                || !isLyricSurfaceCustomFrameReady(recycler, currentWordLyricModel)) {
+            scheduleOfficialLyricHandoffReleaseRetry(96L);
+            return;
+        }
+        finishOfficialLyricTrackHandoff();
+    }
+
+    private boolean delayOfficialLyricTrackHandoffReleaseIfNeeded() {
+        long startedAt = officialLyricHandoffStartedAtElapsedMs;
+        if (startedAt <= 0L) {
+            return false;
+        }
+        long now = SystemClock.elapsedRealtime();
+        long releaseAt = startedAt + SYSTEMUI_LYRIC_HANDOFF_MIN_MASK_MS;
+        if (now >= releaseAt) {
+            return false;
+        }
+        scheduleOfficialLyricHandoffReleaseRetry(releaseAt - now + ACTIVE_LYRIC_FRAME_DELAY_MS);
+        return true;
+    }
+
+    private void scheduleOfficialLyricHandoffReleaseRetry(long delayMs) {
+        int generation = officialLyricHandoffGeneration;
+        if (officialLyricHandoffReleaseRetryGeneration == generation) {
+            return;
+        }
+        officialLyricHandoffReleaseRetryGeneration = generation;
+        mainHandler.postDelayed(() -> {
+            if (generation != officialLyricHandoffGeneration
+                    || officialLyricDrawSuppressedUntilElapsedMs <= 0L) {
+                return;
+            }
+            officialLyricHandoffReleaseRetryGeneration = -1;
+            invalidateRememberedLyricViews();
+        }, Math.max(32L, Math.min(delayMs, 260L)));
+    }
+
+    private void scheduleLyricsRecyclerVisibilityWatchdog() {
+        scheduleLyricsRecyclerVisibilityWatchdog(
+                SYSTEMUI_LYRIC_MODEL_HANDOFF_MAX_MS
+                        + SYSTEMUI_LYRIC_HANDOFF_FADE_IN_MS
+                        + 120L);
+    }
+
+    private void scheduleLyricsRecyclerVisibilityWatchdog(long delayMs) {
+        mainHandler.postDelayed(() -> {
+            long now = SystemClock.elapsedRealtime();
+            long holdUntil = currentLyricsRecyclerVisibilityHoldUntil(now);
+            if (holdUntil > now) {
+                scheduleLyricsRecyclerVisibilityWatchdog(
+                        holdUntil - now + ACTIVE_LYRIC_FRAME_DELAY_MS);
+                return;
+            }
+            if (hasSuppressedLyricsRecyclerAlphas()) {
+                restoreSuppressedLyricsRecyclerViews(true);
+                invalidateRememberedLyricViews();
+                pendingCustomLyricTakeoverFade = false;
+                if (isLyricLayoutDiagnosticsEnabled()) {
+                    info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Visibility watchdog restored module-suppressed lyric RecyclerView alpha");
+                }
+            }
+        }, Math.max(32L, delayMs));
+    }
+
+    private long currentLyricsRecyclerVisibilityHoldUntil(long now) {
+        long holdUntil = Math.max(
+                officialLyricDrawSuppressedUntilElapsedMs,
+                lyricRecyclerFadeInUntilElapsedMs);
+        return holdUntil > now ? holdUntil : 0L;
+    }
+
+    private boolean hasSuppressedLyricsRecyclerAlphas() {
+        synchronized (suppressedLyricsRecyclerAlphasLock) {
+            return !suppressedLyricsRecyclerAlphas.isEmpty();
+        }
+    }
+
+    private boolean shouldSuppressOfficialLyricForTrackHandoff() {
+        if (ZhiBridgeRuntime.hasPendingLyricHandoff()
+                || (currentWordLyricModel != null
+                && pendingBrightLyricGeometryModel == currentWordLyricModel)) return true;
+        long deadline = officialLyricDrawSuppressedUntilElapsedMs;
+        if (deadline <= 0L) {
+            return false;
+        }
+        if (SystemClock.elapsedRealtime() < deadline) {
+            return true;
+        }
+        officialLyricDrawSuppressedUntilElapsedMs = 0L;
+        officialLyricHandoffStartedAtElapsedMs = 0L;
+        officialLyricHandoffReleaseRetryGeneration = -1;
+        return false;
+    }
+
+    private void invalidateRememberedLyricViews() {
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            requestLyricAnimationFrame(recycler);
+        }
+        for (TextView textView : snapshotActiveTextViews()) {
+            requestLyricAnimationFrame(textView);
+        }
+        for (View root : snapshotLyricRootViews()) {
+            requestLyricAnimationFrame(root);
+        }
+    }
+
+    private void suppressRememberedLyricsRecyclerViews() {
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (recycler == null
+                    || !recycler.isAttachedToWindow()
+                    || recycler.getVisibility() != View.VISIBLE
+                    || recycler.getWidth() <= 0
+                    || recycler.getHeight() <= 0) {
+                continue;
+            }
+            invalidateLyricsRecyclerDescendants(recycler);
+            requestLyricAnimationFrame(recycler);
+        }
+    }
+
+    private void restoreSuppressedLyricsRecyclerViews(boolean animate) {
+        synchronized (suppressedLyricsRecyclerAlphasLock) {
+            suppressedLyricsRecyclerAlphas.clear();
+        }
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            invalidateLyricsRecyclerDescendants(recycler);
+            requestLyricAnimationFrame(recycler);
+        }
+    }
+
+    private void fadeInLateCustomLyricTakeover(TextView textView) {
+        if (!pendingCustomLyricTakeoverFade
+                || textView == null) {
+            return;
+        }
+        View recycler = findContainingLyricsRecyclerView(textView);
+        if (recycler == null || !recycler.isAttachedToWindow()) {
+            return;
+        }
+        pendingCustomLyricTakeoverFade = false;
+        int handoffGeneration = officialLyricHandoffGeneration;
+        recycler.postOnAnimation(() -> {
+            if (handoffGeneration != officialLyricHandoffGeneration
+                    || officialLyricDrawSuppressedUntilElapsedMs > 0L
+                    || !recycler.isAttachedToWindow()) {
+                return;
+            }
+            info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Fading late custom lyric takeover");
+            animateLyricsRecyclerFadeIn(recycler, SYSTEMUI_LYRIC_VISIBLE_ALPHA);
+        });
+    }
+
+    private void animateLyricsRecyclerFadeIn(View recycler, float targetAlpha) {
+        if (recycler == null) {
+            return;
+        }
+        lyricRecyclerFadeGeneration++;
+        lyricRecyclerFadeInUntilElapsedMs = 0L;
+        invalidateLyricsRecyclerDescendants(recycler);
+        requestLyricAnimationFrame(recycler);
+    }
+
+    private static void invalidateLyricsRecyclerDescendants(View root) {
+        invalidateLyricsRecyclerDescendants(root, new int[]{0});
+    }
+
+    private static void invalidateLyricsRecyclerDescendants(View view, int[] visited) {
+        if (view == null || visited[0]++ > 320) {
+            return;
+        }
+        if (view instanceof TextView) {
+            requestLyricAnimationFrame(view);
+        }
+        if (!(view instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            invalidateLyricsRecyclerDescendants(group.getChildAt(i), visited);
+        }
+    }
+
+    private View firstAttachedLyricsRecyclerView() {
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (recycler != null && recycler.isAttachedToWindow()) {
+                return recycler;
+            }
+        }
+        return null;
+    }
+
+    private boolean shouldStartOfficialLyricTrackHandoff(long now) {
+        if (hasVisibleLyricsSurfaceForTrackHandoff(now)
+                || now < officialLyricDrawSuppressedUntilElapsedMs
+                || now <= lyricRecyclerFadeInUntilElapsedMs) {
+            return true;
+        }
+        if (!systemUiLyricModeKeepAwakeActive) {
+            return false;
+        }
+        return currentWordLyricModel != null || hasAttachedLyricsRecyclerView();
+    }
+
+    private boolean hasVisibleLyricsSurfaceForTrackHandoff(long now) {
+        if (now < officialLyricDrawSuppressedUntilElapsedMs) {
+            return true;
+        }
+        if (!systemUiLyricModeKeepAwakeActive) {
+            return false;
+        }
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            if (recycler != null
+                    && recycler.isAttachedToWindow()
+                    && recycler.getVisibility() == View.VISIBLE
+                    && recycler.getWidth() > 0
+                    && recycler.getHeight() > 0
+                    && recycler.getAlpha() > 0.01f) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String buildWordLyricModelSignature(
+            LyricInfoContract.Payload payload,
+            String rawLyric,
+            String translationLyric) {
+        if (payload == null) {
+            return "";
+        }
+        return firstNonEmpty(payload.trackKey, payload.songId)
+                + '|'
+                + contentSignature(payload.lyric)
+                + '|'
+                + contentSignature(rawLyric)
+                + '|'
+                + contentSignature(translationLyric)
+                + '|'
+                + contentSignature(payload.lineMetadata);
+    }
+
+    private static String contentSignature(String value) {
+        if (value == null) {
+            return "0:0";
+        }
+        return value.length() + ":" + Integer.toHexString(value.hashCode());
+    }
+
+    private long estimatePlaybackPositionMillis() {
+        LyricInfoContract.Payload snapshot = currentLyricProviderPayload;
+        if (snapshot != null && snapshot.snapshotPositionMillis >= 0L) {
+            return snapshot.snapshotPositionMillis;
+        }
+        long base = lastComputedPositionMs;
+        long elapsed = lastComputedPositionElapsedMs;
+        if (base >= 0 && (!lastPlaybackIsPlaying || elapsed < 0)) {
+            return base;
+        }
+        if (base >= 0 && elapsed >= 0) {
+            long delta = SystemClock.elapsedRealtime() - elapsed;
+            if (delta >= 0) {
+                return Math.max(0L, base + (long) (lastPlaybackSpeed * delta));
+            }
+            return base;
+        }
+
+        WordLyricModel model = currentWordLyricModel;
+        WordLine hintedLine = model == null
+                ? null
+                : model.lineAtAdapterIndex(lastLyricsRecyclerIndex);
+        if (hintedLine != null) {
+            return hintedLine.timeMillis;
+        }
+        return -1L;
+    }
+
+    private void maybeLogOfficialFrameDecision(
+            String source,
+            WordLyricModel model,
+            TextView view,
+            String normalizedText,
+            int adapterPosition,
+            WordLine indexedLine,
+            WordLine officialLine,
+            WordLine activeLine,
+            WordLine selectedLine,
+            WordLine cachedLine,
+            long position,
+            String matchReason,
+            boolean duplicateText) {
+        if (!isLyricVerboseDiagnosticsEnabled() || model == null) {
+            return;
+        }
+        WordLine slotLine = model.lineAt(adapterPosition);
+        int selectedIndex = model.indexOfLine(selectedLine);
+        int slotFirstIndex = model.indexOfLine(slotLine);
+        int officialIndex = model.indexOfLine(officialLine);
+        int activeIndex = model.indexOfLine(activeLine);
+        boolean adapterMismatch =
+                adapterPosition >= 0 && selectedIndex >= 0 && selectedIndex != adapterPosition;
+        boolean slotMismatch = slotLine != null && selectedLine != null && slotLine != selectedLine;
+        boolean officialMismatch =
+                officialLine != null && selectedLine != null && officialLine != selectedLine;
+        boolean duplicateRenderable = duplicateText
+                || (selectedLine != null
+                && model.hasDuplicateRenderableText(selectedLine.normalizedText));
+        if (!adapterMismatch && !slotMismatch && !officialMismatch && !duplicateRenderable) {
+            return;
+        }
+
+        String key = nullToEmpty(source)
+                + "|" + adapterPosition
+                + "|" + selectedIndex
+                + "|" + activeIndex
+                + "|" + objectId(slotLine)
+                + "|" + objectId(officialLine)
+                + "|" + objectId(selectedLine)
+                + "|" + shortenForLog(normalizedText);
+        long now = SystemClock.elapsedRealtime();
+        if (key.equals(lastOfficialFrameDecisionLogKey)
+                && now - lastOfficialFrameDecisionLogAt < 1_000L) {
+            return;
+        }
+        if (!adapterMismatch
+                && !slotMismatch
+                && now - lastOfficialFrameDecisionLogAt < OFFICIAL_FRAME_DECISION_LOG_INTERVAL_MS) {
+            return;
+        }
+        lastOfficialFrameDecisionLogKey = key;
+        lastOfficialFrameDecisionLogAt = now;
+
+        View itemView = findLyricsRecyclerItemView(view);
+        View recycler = findContainingLyricsRecyclerView(view);
+        LyricsRecyclerGeometry geometry = captureLyricsRecyclerGeometry(recycler, adapterPosition);
+        info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Official frame decision"
+                + ", source=" + source
+                + ", reason=" + matchReason
+                + ", position=" + position
+                + ", adapterPosition=" + adapterPosition
+                + ", selectedIndex=" + selectedIndex
+                + ", slotFirstIndex=" + slotFirstIndex
+                + ", officialIndex=" + officialIndex
+                + ", activeIndex=" + activeIndex
+                + ", recyclerIndex=" + lastLyricsRecyclerIndex
+                + ", settleIndex=" + lyricRecyclerSettleOfficialIndex
+                + ", duplicateText=" + duplicateText
+                + ", duplicateRenderable=" + duplicateRenderable
+                + ", adapterMismatch=" + adapterMismatch
+                + ", slotMismatch=" + slotMismatch
+                + ", officialMismatch=" + officialMismatch
+                + ", firstVisiblePosition=" + geometry.firstVisiblePosition
+                + ", firstVisibleTop=" + geometry.firstVisibleTop
+                + ", itemTop=" + (itemView == null ? -1 : itemView.getTop())
+                + ", itemHeight=" + (itemView == null ? -1 : itemView.getHeight())
+                + ", viewId=" + objectId(view)
+                + ", text=" + shortenForLog(normalizedText)
+                + ", slot=" + describeDecisionLine(model, slotLine)
+                + ", indexed=" + describeDecisionLine(model, indexedLine)
+                + ", official=" + describeDecisionLine(model, officialLine)
+                + ", cached=" + describeDecisionLine(model, cachedLine)
+                + ", selected=" + describeDecisionLine(model, selectedLine)
+                + ", active=" + describeDecisionLine(model, activeLine)
+                + ", window=" + describeModelWindow(model, adapterPosition, 3));
+    }
+
+    private void maybeLogWordLyricModelSlotIntegrity(
+            WordLyricModel model,
+            String reason) {
+        if (!isLyricVerboseDiagnosticsEnabled() || model == null) {
+            return;
+        }
+        IdentityHashMap<WordLine, Integer> firstSlots = new IdentityHashMap<>();
+        int duplicateObjects = 0;
+        StringBuilder duplicateSamples = new StringBuilder();
+        for (int i = 0; i < model.lines.size(); i++) {
+            WordLine line = model.lines.get(i);
+            if (line == null) {
+                continue;
+            }
+            Integer firstSlot = firstSlots.get(line);
+            if (firstSlot == null) {
+                firstSlots.put(line, i);
+                continue;
+            }
+            duplicateObjects++;
+            if (duplicateSamples.length() < 900) {
+                if (duplicateSamples.length() > 0) {
+                    duplicateSamples.append(" | ");
+                }
+                duplicateSamples.append(firstSlot)
+                        .append("->")
+                        .append(i)
+                        .append("#")
+                        .append(objectId(line))
+                        .append(" ")
+                        .append(shortenForLog(line.text));
+            }
+        }
+
+        int officialAliasMismatches = 0;
+        StringBuilder aliasSamples = new StringBuilder();
+        for (int i = 0; i < model.officialLines.size(); i++) {
+            WordLine officialLine = model.rawOfficialLineAt(i);
+            if (officialLine == null) {
+                continue;
+            }
+            int mappedIndex = model.indexOfLine(officialLine);
+            if (mappedIndex == i) {
+                continue;
+            }
+            officialAliasMismatches++;
+            if (aliasSamples.length() < 900) {
+                if (aliasSamples.length() > 0) {
+                    aliasSamples.append(" | ");
+                }
+                aliasSamples.append(i)
+                        .append("->")
+                        .append(mappedIndex)
+                        .append("#")
+                        .append(objectId(officialLine))
+                        .append(" ")
+                        .append(shortenForLog(officialLine.text));
+            }
+        }
+        int focusIndex = model.lines.size() > 108 ? 105 : Math.max(0, model.lines.size() - 1);
+        info(BridgeDebugArea.LYRIC, BridgeEvents.LYRIC_PARSED, "Word lyric model slot integrity"
+                + ", reason=" + reason
+                + ", parser=" + model.parserName
+                + ", lines=" + model.lines.size()
+                + ", officialLines=" + model.officialLines.size()
+                + ", duplicateObjects=" + duplicateObjects
+                + ", duplicateSamples=" + duplicateSamples
+                + ", officialAliasMismatches=" + officialAliasMismatches
+                + ", aliasSamples=" + aliasSamples
+                + ", window=" + describeModelWindow(model, focusIndex, 5));
+    }
+
+    private static String describeDecisionLine(WordLyricModel model, WordLine line) {
+        if (line == null) {
+            return "null";
+        }
+        return "idx=" + (model == null ? -1 : model.indexOfLine(line))
+                + "#"
+                + objectId(line)
+                + " time=" + LyricModelTraceSupport.formatLrcTime(line.timeMillis)
+                + " text=" + shortenForLog(line.text);
+    }
+
+    private static String describeModelWindow(WordLyricModel model, int centerIndex, int radius) {
+        if (model == null || model.lines.isEmpty()) {
+            return "";
+        }
+        int center = Math.max(0, Math.min(model.lines.size() - 1, centerIndex));
+        int start = Math.max(0, center - Math.max(0, radius));
+        int end = Math.min(model.lines.size() - 1, center + Math.max(0, radius));
+        StringBuilder builder = new StringBuilder();
+        for (int i = start; i <= end; i++) {
+            WordLine line = model.lineAt(i);
+            if (builder.length() > 0) {
+                builder.append(" | ");
+            }
+            builder.append(i)
+                    .append("=>")
+                    .append(describeDecisionLine(model, line));
+        }
+        return builder.toString();
+    }
+
+    private static String objectId(Object value) {
+        return value == null ? "null" : Integer.toHexString(System.identityHashCode(value));
+    }
+
+    private void maybeLogTextViewSpan(long position, String line, Object view) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastTextViewSpanLogAt < 1_000L) {
+            return;
+        }
+        lastTextViewSpanLogAt = now;
+        info(BridgeDebugArea.MEDIA, BridgeEvents.DETAIL, "Observed active lyric TextView at position=" + position
+                + ", line=" + line
+                + ", view=" + (view == null ? "null" : view.getClass().getName()));
+    }
+
+    private void maybeLogTextViewDraw(DrawFrame frame, TextView view) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastTextViewDrawLogAt < 3_000L) {
+            return;
+        }
+        lastTextViewDrawLogAt = now;
+        WordLine wordLine = frame == null ? null : frame.line;
+        info(BridgeDebugArea.PLAYER_SPECIAL, BridgeEvents.DETAIL, "Custom-drew official lyric TextView at position=" + (frame == null ? -1L : frame.position)
+                + ", playing=" + lastPlaybackIsPlaying
+                + ", index=" + (frame == null ? -1 : frame.lineIndex)
+                + ", active=" + (frame != null && frame.active)
+                + ", focused=" + (frame != null && frame.focused)
+                + ", activeIndex=" + (frame == null ? -1 : frame.activeIndex)
+                + ", scaleActiveIndex=" + (frame == null ? -1 : frame.scaleActiveIndex)
+                + ", line=" + (wordLine == null ? "" : wordLine.text)
+                + ", timing=" + (wordLine == null ? "" : wordLine.timingMode)
+                + ", hasTranslation=" + (wordLine != null && !TextUtils.isEmpty(wordLine.translation))
+                + ", view=" + describeViewForLog(view));
+        maybeLogOfficialLyricGeometry(frame, view, "draw-main");
+    }
+
+    private void maybeLogOfficialRendererFallback(
+            String reason,
+            TextView view,
+            WordLyricModel model,
+            String detail) {
+        if (!isLyricVerboseDiagnosticsEnabled() || view == null
+                || !isInLyricsRecyclerView(view)) {
+            return;
+        }
+        String safeReason = TextUtils.isEmpty(reason) ? "unknown" : reason;
+        long now = SystemClock.elapsedRealtime();
+        Long last = officialRendererFallbackLogAt.get(safeReason);
+        if (last != null && now - last < 3_000L) return;
+        officialRendererFallbackLogAt.put(safeReason, now);
+        info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Official lyric renderer fallback"
+                + " | reason=" + safeReason
+                + ", alignment=" + lyricUiConfig.alignment
+                + ", model=" + (model == null ? "null" : "ready")
+                + ", source=systemui"
+                + ", detail=" + shortenForLog(detail)
+                + ", view=" + describeViewForLog(view));
+    }
+
+    private void maybeLogOfficialLyricPayload(
+            LyricInfoContract.Payload payload,
+            boolean normalizedForOfficialList,
+            MediaMetadata metadata) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastOfficialLyricPayloadLogAt < 1_500L) {
+            return;
+        }
+        lastOfficialLyricPayloadLogAt = now;
+        info(BridgeDebugArea.LYRIC, BridgeEvents.NATIVE_LYRIC_RECEIVED, "Official lyric payload, provider=" + (payload == null ? "" : payload.provider)
+                + ", package=" + currentLyricProviderPackage
+                + ", normalizedForOfficialList=" + normalizedForOfficialList
+                + ", lyricChars=" + (payload == null || payload.lyric == null
+                ? 0
+                : payload.lyric.length())
+                + ", rawChars=" + (payload == null || payload.rawLyric == null
+                ? 0
+                : payload.rawLyric.length())
+                + ", translationChars=" + (payload == null || payload.translationLyric == null
+                ? 0
+                : payload.translationLyric.length())
+                + ", artwork=" + describeMetadataArtwork(metadata));
+    }
+
+    private void maybeLogOfficialLyricGeometry(
+            DrawFrame frame, TextView view, String role) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastLyricLayoutDiagnosticsLogAt < 1_000L) {
+            return;
+        }
+        lastLyricLayoutDiagnosticsLogAt = now;
+        View itemView = findLyricsRecyclerItemView(view);
+        View recycler = findContainingLyricsRecyclerView(view);
+        int adapterPosition = findLyricsRecyclerAdapterPosition(view);
+        LyricsRecyclerGeometry geometry = captureLyricsRecyclerGeometry(
+                recycler,
+                adapterPosition);
+        info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Official lyric geometry, role=" + role
+                + ", adapterPosition=" + adapterPosition
+                + ", drawIndex=" + (frame == null ? -1 : frame.lineIndex)
+                + ", activeIndex=" + (frame == null ? -1 : frame.activeIndex)
+                + ", scaleActiveIndex=" + (frame == null ? -1 : frame.scaleActiveIndex)
+                + ", itemHeight=" + (itemView == null ? -1 : itemView.getHeight())
+                + ", textMeasuredHeight=" + (view == null ? -1 : view.getMeasuredHeight())
+                + ", bottomMargin=" + bottomMarginOf(itemView == null ? view : itemView)
+                + ", firstVisiblePosition=" + geometry.firstVisiblePosition
+                + ", firstVisibleTop=" + geometry.firstVisibleTop
+                + ", targetCenter=" + geometry.targetCenter
+                + ", fallbackSlotDp=" + WordLyricRenderConstants.LYRIC_SLOT_HEIGHT_DP
+                + ", spacingDp="
+                + LyricUiLayoutPolicy.lineSpacingTenthsDp(runtimeLyricUiConfig) / 10f
+                + ", wrappedSpacingDp="
+                + LyricUiLayoutPolicy.wrappedLineSpacingTenthsDp(
+                runtimeLyricUiConfig) / 10f);
+    }
+
+    private void maybeLogLyricsRecyclerSetCurrentGeometry(
+            int targetIndex,
+            LyricsRecyclerGeometry before,
+            LyricsRecyclerGeometry after) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastLyricLayoutDiagnosticsLogAt < 750L) {
+            return;
+        }
+        lastLyricLayoutDiagnosticsLogAt = now;
+        int beforeCenter = before == null ? Integer.MIN_VALUE : before.targetCenter;
+        int afterCenter = after == null ? Integer.MIN_VALUE : after.targetCenter;
+        info(BridgeDebugArea.AOD, BridgeEvents.SET_CURRENT_LYRIC_GEOMETRY, "LyricsRecyclerView setCurrentLyric geometry, target=" + targetIndex
+                + ", beforeFirst=" + (before == null ? -1 : before.firstVisiblePosition)
+                + ", beforeTop=" + (before == null ? 0 : before.firstVisibleTop)
+                + ", beforeTargetCenter=" + beforeCenter
+                + ", afterFirst=" + (after == null ? -1 : after.firstVisiblePosition)
+                + ", afterTop=" + (after == null ? 0 : after.firstVisibleTop)
+                + ", afterTargetCenter=" + afterCenter
+                + ", targetCenterDelta=" + (beforeCenter == Integer.MIN_VALUE
+                || afterCenter == Integer.MIN_VALUE
+                ? "unknown"
+                : String.valueOf(afterCenter - beforeCenter)));
+    }
+
+    private void scheduleLyricsRecyclerOwnershipSnapshots(
+            View recycler,
+            String event,
+            int targetIndex) {
+        if (recycler == null || !isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        maybeLogLyricsRecyclerOwnershipSnapshot(
+                recycler,
+                nullToEmpty(event) + "-immediate",
+                targetIndex);
+        recycler.postOnAnimation(() -> maybeLogLyricsRecyclerOwnershipSnapshot(
+                recycler,
+                nullToEmpty(event) + "-frame",
+                targetIndex));
+        recycler.postDelayed(() -> maybeLogLyricsRecyclerOwnershipSnapshot(
+                recycler,
+                nullToEmpty(event) + "-64ms",
+                targetIndex), 64L);
+    }
+
+    private void maybeLogLyricsRecyclerOwnershipSnapshot(
+            View recycler,
+            String event,
+            int targetIndex) {
+        if (recycler == null || !isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        LyricsRecyclerGeometry geometry = captureLyricsRecyclerGeometry(recycler, targetIndex);
+        Object scrollState = invokeNoArgByName(recycler, "getScrollState");
+        boolean modulePositionOwner = shouldModulePositionLyricsRecycler();
+        info(BridgeDebugArea.AOD, BridgeEvents.AOD_TRANSITION, "LyricsRecyclerView ownership snapshot"
+                + " | event=" + shortenForLog(event)
+                + ", rvId=" + objectId(recycler)
+                + ", owner=" + (modulePositionOwner ? "module-aod-fallback" : "systemui")
+                + ", officialIndex=" + readLyricsRecyclerCurrentIndex(recycler)
+                + ", targetIndex=" + targetIndex
+                + ", children=" + geometry.childCount
+                + ", first=" + geometry.firstVisiblePosition
+                + ", last=" + geometry.lastVisiblePosition
+                + ", firstTop=" + geometry.firstVisibleTop
+                + ", targetCenter=" + geometry.targetCenter
+                + ", officialOffset=" + readIntField(recycler, "B", Integer.MIN_VALUE)
+                + ", scrollState=" + String.valueOf(scrollState)
+                + ", attached=" + recycler.isAttachedToWindow()
+                + ", shown=" + recycler.isShown()
+                + ", visibility=" + recycler.getVisibility()
+                + ", size=" + recycler.getWidth() + "x" + recycler.getHeight()
+                + ", alpha=" + recycler.getAlpha()
+                + ", aod=" + isAodLowFrameRateLyricMode()
+                + ", interactive=" + isScreenInteractiveForWakeLock());
+    }
+
+    private void maybeLogRecyclerScrollStabilize(View recycler, String reason) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastRecyclerScrollStabilizeLogAt < 1_500L) {
+            return;
+        }
+        lastRecyclerScrollStabilizeLogAt = now;
+        info(BridgeDebugArea.AOD, BridgeEvents.RECYCLER_SCROLL_STABILIZED, "Stabilized LyricsRecyclerView scroll, reason=" + reason
+                + ", index=" + lastLyricsRecyclerIndex
+                + ", recycler=" + describeViewForLog(recycler));
+    }
+
+    private void maybeLogForcedLyricsRecyclerAlign(
+            View recycler,
+            int targetIndex,
+            String reason) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastLyricsRecyclerForceAlignLogAt < 1_500L) {
+            return;
+        }
+        lastLyricsRecyclerForceAlignLogAt = now;
+        info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "Force-aligned LyricsRecyclerView, reason=" + reason
+                + ", targetIndex=" + targetIndex
+                + ", recycler=" + describeViewForLog(recycler));
+    }
+
+    private void maybeLogSeedlingPlaybackState(int state, long storedPosition, long computedPosition, float speed) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED
+                && state == lastLoggedSystemUiPlaybackState
+                && now - lastSeedlingPlaybackStateLogAt < 5_000L) {
+            return;
+        }
+        lastLoggedSystemUiPlaybackState = state;
+        lastSeedlingPlaybackStateLogAt = now;
+        info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED, "Seedling playback state=" + state
+                + ", playing=" + lastPlaybackIsPlaying
+                + ", storedPosition=" + storedPosition
+                + ", computedPosition=" + computedPosition
+                + ", speed=" + speed);
+    }
+
+    private void maybeLogIgnoredStalePlaybackPositionAfterTrackReset(
+            long storedPosition,
+            long computedPosition,
+            long previousPosition) {
+        if (!isLyricLayoutDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastStalePlaybackPositionIgnoredLogAt < 1_500L) {
+            return;
+        }
+        lastStalePlaybackPositionIgnoredLogAt = now;
+        info(BridgeDebugArea.MEDIA, BridgeEvents.SESSION_REDUCED, "Ignored stale SystemUI playback position after track reset, previousPosition="
+                + previousPosition
+                + ", storedPosition=" + storedPosition
+                + ", computedPosition=" + computedPosition);
+    }
+
+    private void maybeLogActiveRefresh(
+            long position, String line, int candidates, int attached, int visible, int updated) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastActiveRefreshLogAt < 3_000L) {
+            return;
+        }
+        lastActiveRefreshLogAt = now;
+        info(BridgeDebugArea.RENDERER, BridgeEvents.RENDER_STATE_CHANGED, "Refreshed active lyric renderer at position=" + position
+                + ", candidates=" + candidates
+                + ", attached=" + attached
+                + ", visible=" + visible
+                + ", updated=" + updated
+                + ", line=" + line);
+    }
+
+    private void maybeLogRecyclerIndex(int index) {
+        if (!isLyricVerboseDiagnosticsEnabled()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!LYRIC_VERBOSE_DIAGNOSTICS_ENABLED && now - lastRecyclerLogAt < 1_000L) {
+            return;
+        }
+        lastRecyclerLogAt = now;
+        info(BridgeDebugArea.AOD, BridgeEvents.SURFACE_STATE_CHANGED, "LyricsRecyclerView current index=" + index);
+    }
+
+    private static boolean isLyricLayoutDiagnosticsEnabled() {
+        return StructuredBridgeLog.isMasterEnabled()
+                || LYRIC_VERBOSE_DIAGNOSTICS_ENABLED
+                || Log.isLoggable(TAG, Log.DEBUG);
+    }
+
+    private static boolean isLyricVerboseDiagnosticsEnabled() {
+        return LYRIC_VERBOSE_DIAGNOSTICS_ENABLED || Log.isLoggable(TAG, Log.VERBOSE);
+    }
+
+    private static boolean isLyricParseTraceEnabled() {
+        return LYRIC_PARSE_TRACE_ENABLED || Log.isLoggable(LYRIC_PARSE_TRACE_TAG, Log.VERBOSE);
+    }
+
+    private static LyricsRecyclerGeometry captureLyricsRecyclerGeometry(
+            View recycler, int targetIndex) {
+        if (!(recycler instanceof ViewGroup)) {
+            return LyricsRecyclerGeometry.EMPTY;
+        }
+        ViewGroup group = (ViewGroup) recycler;
+        int childCount = group.getChildCount();
+        int firstVisiblePosition = Integer.MAX_VALUE;
+        int lastVisiblePosition = -1;
+        int firstVisibleTop = 0;
+        int targetCenter = Integer.MIN_VALUE;
+        RectF targetBounds = new RectF();
+        for (int i = 0; i < childCount; i++) {
+            View child = group.getChildAt(i);
+            int position = readRecyclerChildPosition(recycler, child);
+            if (position >= 0 && position < firstVisiblePosition) {
+                firstVisiblePosition = position;
+                firstVisibleTop = child.getTop();
+            }
+            if (position > lastVisiblePosition) {
+                lastVisiblePosition = position;
+            }
+            if (position == targetIndex) {
+                targetCenter = OfficialLyricTextRenderer.mapMainLyricBounds(child, recycler, targetBounds, false)
+                        ? Math.round(targetBounds.centerY())
+                        : child.getTop() + Math.round(lyricMainAnchorCenterInItem(child));
+            }
+        }
+        if (firstVisiblePosition == Integer.MAX_VALUE) {
+            firstVisiblePosition = -1;
+        }
+        return new LyricsRecyclerGeometry(
+                firstVisiblePosition,
+                lastVisiblePosition,
+                firstVisibleTop,
+                targetCenter,
+                childCount);
+    }
+
+    private static int bottomMarginOf(View view) {
+        if (view == null) {
+            return 0;
+        }
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        return params instanceof ViewGroup.MarginLayoutParams
+                ? ((ViewGroup.MarginLayoutParams) params).bottomMargin
+                : 0;
+    }
+
+    private static String shortenForLog(String text) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replace('\n', ' ').replace('\r', ' ').trim();
+        return normalized.length() <= 80 ? normalized : normalized.substring(0, 77) + "...";
+    }
+
+    private static String sanitizeForOplusLyric(String rawLyric) {
+        return OplusLyricNormalizer.normalizeForOfficialList(rawLyric);
+    }
+
+    private static String getText(MediaMetadata metadata, String key) {
+        CharSequence value = metadata.getText(key);
+        if (value == null) {
+            return "";
+        }
+        return value.toString().trim();
+    }
+
+    private static String firstNonEmpty(String... values) {
+        for (String value : values) {
+            if (!TextUtils.isEmpty(value)) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String normalizeLooseMetadataText(String value) {
+        if (TextUtils.isEmpty(value)) {
+            return "";
+        }
+        String trimmed = value.trim().toLowerCase(Locale.ROOT);
+        StringBuilder builder = new StringBuilder(trimmed.length());
+        for (int i = 0; i < trimmed.length(); i++) {
+            char character = trimmed.charAt(i);
+            if (Character.isLetterOrDigit(character) || character > 0x7F) {
+                builder.append(character);
+            }
+        }
+        return builder.toString();
+    }
+
+    private static void traceLyricParse(String message) {
+        if (!isLyricParseTraceEnabled()) {
+            return;
+        }
+        String value = LyricModelTraceSupport.sanitizeTraceMessage(message);
+        for (String chunk : LyricLogFormatter.chunks(value, LYRIC_PARSE_TRACE_CHUNK_SIZE)) {
+            Log.i(
+                    LYRIC_PARSE_TRACE_TAG,
+                    LyricLogFormatter.format(
+                            logProcessName,
+                            LyricLogFormatter.Area.PARSER,
+                            "trace",
+                            chunk));
+        }
+    }
+
+    private static boolean containsAny(String value, String... needles) {
+        if (TextUtils.isEmpty(value)) {
+            return false;
+        }
+        for (String needle : needles) {
+            if (!TextUtils.isEmpty(needle) && value.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isShortStandaloneLyricLine(WordLine line) {
+        return line != null && isShortStandaloneLyricText(line.text);
+    }
+
+    private static boolean isShortStandaloneLyricText(String text) {
+        String normalized = WordLyricRenderSupport.normalizeLine(text);
+        if (TextUtils.isEmpty(normalized) || normalized.length() > 18) {
+            return false;
+        }
+        for (int i = 0; i < normalized.length(); i++) {
+            if (Character.isWhitespace(normalized.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void rememberSystemUiLyricLoadContext(
+            Object owner,
+            Object keyArg,
+            MediaMetadata metadata,
+            String packageName,
+            String title,
+            String artist) {
+        if (owner == null
+                || !(keyArg instanceof String)
+                || metadata == null) {
+            return;
+        }
+        Method refreshMethod = resolveSystemUiMetadataRefreshMethod(owner);
+        if (refreshMethod == null) {
+            return;
+        }
+        latestSystemUiLyricLoadContext = new SystemUiLyricLoadContext(
+                owner,
+                refreshMethod,
+                (String) keyArg,
+                metadata,
+                packageName,
+                title,
+                artist,
+                SystemClock.elapsedRealtime());
+    }
+
+    private Method resolveSystemUiMetadataRefreshMethod(Object owner) {
+        Method cached = systemUiMetadataRefreshMethod;
+        if (cached != null && cached.getDeclaringClass().isInstance(owner)) {
+            return cached;
+        }
+        Class<?> ownerClass = owner.getClass();
+        Method candidate = null;
+        for (Method method : ownerClass.getDeclaredMethods()) {
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            if (java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                    || method.getReturnType() != void.class
+                    || parameterTypes.length != 2
+                    || parameterTypes[0] != String.class
+                    || parameterTypes[1] != MediaMetadata.class) {
+                continue;
+            }
+            if ("onMetaDataChanged".equals(method.getName())) {
+                candidate = method;
+                break;
+            }
+            if (candidate == null) {
+                candidate = method;
+            }
+        }
+        if (candidate == null) {
+            if (!systemUiMetadataRefreshMethodUnavailableLogged) {
+                systemUiMetadataRefreshMethodUnavailableLogged = true;
+                warn(
+                        LyricLogFormatter.Area.SYSTEM_UI,
+                        "metadata-refresh-unavailable",
+                        "No SystemUI metadata refresh method for lyric reload");
+            }
+            return null;
+        }
+        candidate.setAccessible(true);
+        systemUiMetadataRefreshMethod = candidate;
+        return candidate;
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static int dp(Context context, float value) {
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private static float sp(Context context, float value) {
+        return value * context.getResources().getDisplayMetrics().scaledDensity;
+    }
+
+    void info(BridgeDebugArea area, String event, String message) {
+        StructuredBridgeLog.info(area, event, message);
+    }
+
+    private void artworkProbe(String stage, Supplier<String> details) {
+        StructuredBridgeLog.debug(
+                BridgeDebugArea.MEDIA,
+                BridgeEvents.ARTWORK_PROBE + '_' + nullToEmpty(stage),
+                () -> "stage=" + nullToEmpty(stage) + " | "
+                        + (details == null ? "" : nullToEmpty(details.get())));
+    }
+
+    private static boolean isLxPlayerPackage(String packageName) {
+        return PlayerSystemUiPolicy.LX_MUSIC.equals(packageName)
+                || PlayerSystemUiPolicy.LX_WALNUT.equals(packageName);
+    }
+
+    void infoAlways(BridgeDebugArea area, String event, String message) {
+        StructuredBridgeLog.infoAlways(area, event, message);
+    }
+
+    private void settingsInfo(String message) {
+        StructuredBridgeLog.infoAlways(
+                BridgeDebugArea.BOOTSTRAP,
+                BridgeEvents.SETTINGS_APPLIED,
+                message);
+    }
+
+    private void translationButtonDebug(String message) {
+        StructuredBridgeLog.debug(
+                BridgeDebugArea.PLAYER_SPECIAL,
+                BridgeEvents.DETAIL,
+                () -> message);
+    }
+
+    private void warn(LyricLogFormatter.Area area, String event, String message) {
+        StructuredBridgeLog.warn(
+                mapLogArea(area),
+                event == null || event.isEmpty() ? BridgeEvents.DETAIL : event,
+                message);
+    }
+
+    void error(String message, Throwable throwable) {
+        StructuredBridgeLog.error(message, throwable);
+    }
+
+    private void configureBridgeDiagnostics(BridgeDebugConfig nextConfig) {
+        StructuredBridgeLog.setLogTagForcesDebug(Log.isLoggable(TAG, Log.DEBUG));
+        StructuredBridgeLog.configure(
+                nextConfig,
+                logProcessName,
+                this::writeLogcat,
+                this::writeFrameworkLog);
+    }
+
+    private void loadBridgeDebugSettings(Context context) {
+        if (context == null) {
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        if (appContext == null) {
+            appContext = context;
+        }
+        applyBridgeDebugConfig(
+                BridgeDebugConfig.load(appContext.getSharedPreferences(
+                        BridgeDebugConfig.PREFS_NAME,
+                        Context.MODE_PRIVATE)),
+                "systemui-preferences");
+    }
+
+    private void handleBridgeDebugSettingsChanged(Context context, Intent intent) {
+        if (context == null || intent == null) {
+            return;
+        }
+        BridgeDebugConfig config = BridgeDebugConfig.fromIntent(
+                intent,
+                StructuredBridgeLog.config());
+        Context appContext = context.getApplicationContext();
+        if (appContext == null) {
+            appContext = context;
+        }
+        BridgeDebugConfig.save(
+                appContext.getSharedPreferences(
+                        BridgeDebugConfig.PREFS_NAME,
+                        Context.MODE_PRIVATE),
+                config);
+        applyBridgeDebugConfig(config, "settings-broadcast");
+        sendDebugSettingsApplyResult(intent, true, config, "applied");
+    }
+
+    private void applyBridgeDebugConfig(BridgeDebugConfig config, String source) {
+        BridgeDebugConfig next = config == null ? BridgeDebugConfig.disabled() : config;
+        BridgeDebugConfig previous = StructuredBridgeLog.config();
+        boolean reconfigure = BridgeDebugApplyPolicy.shouldReconfigure(previous, next);
+        boolean announce = BridgeDebugApplyPolicy.shouldAnnounce(
+                previous, next, bridgeDebugConfigAnnounced, source);
+        if (reconfigure || !bridgeDebugConfigAnnounced) {
+            configureBridgeDiagnostics(next);
+        } else {
+            StructuredBridgeLog.setLogTagForcesDebug(Log.isLoggable(TAG, Log.DEBUG));
+        }
+        if (!announce) {
+            return;
+        }
+        bridgeDebugConfigAnnounced = true;
+        StructuredBridgeLog.infoAlways(
+                BridgeDebugArea.BOOTSTRAP,
+                BridgeEvents.DEBUG_CONFIG_APPLIED,
+                "Applied bridge debug logging"
+                        + " | source=" + nullToEmpty(source)
+                        + ", revision=" + next.revision
+                        + ", master=" + next.masterEnabled
+                        + ", areas=" + next.enabledAreasLabel());
+    }
+
+    @SuppressWarnings("deprecation")
+    private void sendDebugSettingsApplyResult(
+            Intent intent,
+            boolean applied,
+            BridgeDebugConfig config,
+            String reason) {
+        if (intent == null) {
+            return;
+        }
+        ResultReceiver receiver = intent.getParcelableExtra(LyricUiSettings.EXTRA_RESULT_RECEIVER);
+        if (receiver == null) {
+            return;
+        }
+        Bundle result = new Bundle();
+        result.putBoolean(LyricUiSettings.RESULT_APPLIED, applied);
+        result.putLong(
+                LyricUiSettings.RESULT_CONFIG_REVISION,
+                intent.getLongExtra(LyricUiSettings.EXTRA_CONFIG_REVISION, -1L));
+        result.putString(LyricUiSettings.RESULT_PROCESS, logProcessName);
+        result.putString(LyricUiSettings.RESULT_REASON, nullToEmpty(reason));
+        if (config != null) {
+            config.putStatus(result);
+        }
+        try {
+            receiver.send(
+                    applied
+                            ? LyricUiSettings.RESULT_SETTINGS_APPLIED
+                            : LyricUiSettings.RESULT_SETTINGS_REJECTED,
+                    result);
+        } catch (Throwable throwable) {
+            warn(
+                    LyricLogFormatter.Area.SETTINGS,
+                    "debug-settings-ack-failed",
+                    "Could not acknowledge debug settings"
+                            + " | error=" + throwable.getClass().getSimpleName());
+        }
+    }
+
+    private void writeLogcat(int level, String tag, String message, Throwable throwable) {
+        if (throwable != null) {
+            Log.println(level, tag, message);
+            Log.e(tag, message, throwable);
+        } else {
+            Log.println(level, tag, message);
+        }
+    }
+
+    private void writeFrameworkLog(int level, String tag, String message, Throwable throwable) {
+        if (throwable != null) {
+            log(level, tag, message, throwable);
+        } else {
+            log(level, tag, message);
+        }
+    }
+
+    private static BridgeDebugArea mapLogArea(LyricLogFormatter.Area area) {
+        if (area == null) {
+            return BridgeDebugArea.MEDIA;
+        }
+        switch (area) {
+            case LIFECYCLE:
+            case HOOK:
+            case SETTINGS:
+                return BridgeDebugArea.BOOTSTRAP;
+            case PLAYER:
+            case TRANSACTION:
+            case SYSTEM_UI:
+            case SCREEN:
+                return BridgeDebugArea.MEDIA;
+            case PROVIDER:
+            case PARSER:
+                return BridgeDebugArea.LYRIC;
+            case RENDER:
+            case RECYCLER:
+                return BridgeDebugArea.RENDERER;
+            case AOD:
+                return BridgeDebugArea.AOD;
+            case TRANSLATION:
+                return BridgeDebugArea.PLAYER_SPECIAL;
+            default:
+                return BridgeDebugArea.MEDIA;
+        }
+    }
+
+    static final class SystemUiLyricLoadContext {
+        final WeakReference<Object> owner;
+        final Method refreshMethod;
+        final String key;
+        final WeakReference<MediaMetadata> metadata;
+        final String packageName;
+        final String title;
+        final String artist;
+        final long observedAtElapsedMillis;
+
+        SystemUiLyricLoadContext(
+                Object owner,
+                Method refreshMethod,
+                String key,
+                MediaMetadata metadata,
+                String packageName,
+                String title,
+                String artist,
+                long observedAtElapsedMillis) {
+            this.owner = new WeakReference<>(owner);
+            this.refreshMethod = refreshMethod;
+            this.key = nullToEmpty(key);
+            this.metadata = new WeakReference<>(metadata);
+            this.packageName = nullToEmpty(packageName);
+            this.title = nullToEmpty(title);
+            this.artist = nullToEmpty(artist);
+            this.observedAtElapsedMillis = observedAtElapsedMillis;
+        }
+    }
+
+    private static final class OfficialLyricTextRenderer {
+        private static long lyricAnimationTimeMillis() {
+            LockscreenLyricsModule module = zhiInstance;
+            return module == null ? SystemClock.elapsedRealtime()
+                    : module.lyricFrameScheduler.sampleTimeMillis();
+        }
+        private final WeakHashMap<WordLine, SampledPosition> sampledPositions = new WeakHashMap<>();
+        private static final class SampledPosition {
+            long time = Long.MIN_VALUE, position, glow;
+        }
+
+        // The leading word-progress edge is intentionally broad. It should read as a soft
+        // illuminated wash, rather than a narrow rectangular scanner moving across the text.
+        private static final float ACTIVE_FEATHER_WIDTH_FACTOR = 0.58f;
+        private static final float GLOW_FEATHER_WIDTH_FACTOR = 0.74f;
+        private static final int SOFTWARE_GLOW_FEATHER_BANDS = 12;
+        // Keep the configured bloom warm and expressive; it is intentionally allowed to hug
+        // the glyph a little more than the ultra-diffuse experiment did.
+        private static final float SETTLED_GLOW_RADIUS_FACTOR = 1.22f;
+        private static final float SETTLED_GLOW_ALPHA_FACTOR = 0.88f;
+        private static final float WRAPPED_LINE_BASE_GAP_DP = 1f;
+        // Sub-pixel lift is invisible; treat it as landed so the extra animation
+        // frames stop instead of running forever behind a settled row.
+        private static final float CHAR_LIFT_FRAME_EPSILON = 0.01f;
+        private static int visibleMainDrawLines(WordLine line) {
+            return line == null ? 2 : line.visibleWrappedLineLimit();
+        }
+        private static final long FOCUSED_REVEAL_ANIMATION_MS = 260L;
+        private static final long MAIN_LINE_WINDOW_ANIMATION_MS = 220L;
+        private static final float MAIN_LINE_WINDOW_SLIDE_DP = 7f;
+        private static final float TRANSLATION_TOGGLE_SLIDE_DP = 3f;
+        private static final long TRANSLATION_TRANSIENT_MISS_GRACE_MS = 2_000L;
+        private static final float TRANSLATION_SCROLL_START_PROGRESS = 0.08f;
+        private static final float TRANSLATION_SCROLL_END_PROGRESS = 0.82f;
+        private static final float MODEL_SWITCH_REVEAL_START_ALPHA = 0.76f;
+        private final TextPaint inactivePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint playedPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint activePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint activeGlowPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint activeFeatherPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint translationPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint translationActivePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint translationFeatherPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final TextPaint glowRasterPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final Paint glowBitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint introDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glowFeatherMaskPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint.FontMetrics mainFontMetrics = new Paint.FontMetrics();
+        private final Paint.FontMetrics translationFontMetrics = new Paint.FontMetrics();
+        private final TextPaint secondaryGeometryPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        private final Paint.FontMetrics secondaryFontMetrics = new Paint.FontMetrics();
+        private final TextPaint secondaryTranslationGeometryPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint.FontMetrics secondaryTranslationFontMetrics = new Paint.FontMetrics();
+        private final Paint.FontMetrics glowFontMetrics = new Paint.FontMetrics();
+        private final Rect opticalTextBounds = new Rect();
+        private final Matrix activeFeatherShaderMatrix = new Matrix();
+        private final Matrix glowFeatherMaskShaderMatrix = new Matrix();
+        private final LyricDrawLayoutEngine drawLayoutEngine =
+                new LyricDrawLayoutEngine(
+                        (text, start, end) -> inactivePaint.measureText(text, start, end));
+        private final List<LyricDrawLine> drawLines = drawLayoutEngine.lines();
+        // The engines pool mutable rows: building a vocal must never replace main rows.
+        private final LyricDrawLayoutEngine secondaryDrawLayoutEngine =
+                new LyricDrawLayoutEngine(
+                        (text, start, end) -> secondaryGeometryPaint.measureText(text, start, end));
+        private final List<LyricDrawLine> secondaryDrawLines = secondaryDrawLayoutEngine.lines();
+        private final LyricSecondaryWindowPolicy.TextWidth secondaryTextWidth =
+                (text, start, end) -> translationPaint.measureText(text, start, end);
+        private LinearGradient activeFeatherShader;
+        private String activeFeatherPrimaryColor;
+        // A continuous alpha mask keeps the cached glyph glow soft at the progress boundary.
+        private final LinearGradient glowFeatherMaskShader = new LinearGradient(
+                0f,
+                0f,
+                1f,
+                0f,
+                new int[]{
+                        0xFFFFFFFF,
+                        0xFAFFFFFF,
+                        0xE1FFFFFF,
+                        0xA0FFFFFF,
+                        0x52FFFFFF,
+                        0x15FFFFFF,
+                        0x00FFFFFF
+                },
+                new float[]{0f, 0.13f, 0.32f, 0.55f, 0.76f, 0.92f, 1f},
+                Shader.TileMode.CLAMP);
+        private final PorterDuffXfermode glowFeatherMaskXfermode =
+                new PorterDuffXfermode(PorterDuff.Mode.DST_IN);
+        private final GlowSegmentCache[] glowSegmentCaches = {
+                new GlowSegmentCache(),
+                new GlowSegmentCache(),
+                new GlowSegmentCache(),
+                new GlowSegmentCache(),
+                new GlowSegmentCache(),
+                new GlowSegmentCache()
+        };
+        private long glowCacheUseCounter;
+        private final GraphemeLayoutCache[] graphemeLayoutCaches = {
+                new GraphemeLayoutCache(),
+                new GraphemeLayoutCache(),
+                new GraphemeLayoutCache(),
+                new GraphemeLayoutCache()
+        };
+        private long graphemeCacheUseCounter;
+        private final CharLiftState charLift = new CharLiftState();
+        /**
+         * Canvas y of the translation row's glyph top for the group being drawn,
+         * or 0 when the row has no translation. Sunk main text has to stay above
+         * it: the translation does not sink with the main line.
+         */
+        private float charLiftFloorY;
+        /**
+         * Sticky after a lifted draw throws. A draw error reaching the
+         * coordinator blacklists the binding and falls back to native rendering
+         * for good, so this effect gives itself up instead.
+         */
+        private boolean charLiftUnavailable;
+        private BlurMaskFilter glowMaskFilter;
+        private int glowMaskRadiusKey = -1;
+        private float translationAnimationStartAmount = 1f;
+        private float translationAnimationTargetAmount = 1f;
+        private float translationLayoutAmount = 1f;
+        private long translationAnimationStartedAtMs = -1L;
+        private volatile boolean scrollScaleEnabled = LyricUiConfig.defaults().scaleEnabled;
+        private volatile boolean inactiveBlurEnabled = LyricUiConfig.defaults().blurEnabled;
+        private volatile boolean lineTimedProgressEnabled =
+                LyricUiSettings.DEFAULT_LINE_TIMED_PROGRESS_ENABLED;
+        private volatile boolean translationProgressEnabled =
+                LyricUiSettings.DEFAULT_TRANSLATION_PROGRESS_ENABLED;
+        private volatile boolean charLiftEnabled =
+                LyricUiSettings.DEFAULT_CHAR_LIFT_ENABLED;
+        private volatile int charLiftStrengthPercent =
+                LyricUiSettings.DEFAULT_CHAR_LIFT_STRENGTH_PERCENT;
+        private volatile LyricUiConfig uiConfig = LyricUiConfig.defaults();
+        private volatile LyricUiPalette palette = LyricUiPalette.from(uiConfig);
+        private volatile boolean aodLowFrameRateMode;
+        private volatile boolean playbackAdvancing;
+        private long lastOverflowStartLogAt;
+
+        private WordLine lastLine;
+        private long lineChangeElapsedMs = lyricAnimationTimeMillis();
+        private long lastRenderableTranslationLineTimeMillis = Long.MIN_VALUE;
+        private String lastRenderableTranslationNormalizedText = "";
+        private String lastRenderableTranslationText = "";
+        private long lastRenderableTranslationAtElapsedMs = -1L;
+        private final MainLineWindow mainLineWindow = new MainLineWindow();
+        private final MainLineWindow secondaryLineWindow = new MainLineWindow();
+        private Typeface configuredTypefaceSource;
+        private Typeface configuredTypeface;
+        private final OfficialLyricTypefaceResolver typefaceResolver = new OfficialLyricTypefaceResolver();
+        private int configuredTypefaceWeight = Integer.MIN_VALUE;
+        private boolean configuredTypefaceCached;
+        private final LyricGroupDrawContext lyricGroupDrawContext =
+                new LyricGroupDrawContext();
+        private long modelSwitchRevealStartedAtMs = -1L;
+        private final LyricWakeTransitionPolicy wakeTransition =
+                new LyricWakeTransitionPolicy(AOD_WORD_PROGRESS_TO_LINE_ANIMATION_MS);
+        private float frameAodAmount;
+        private float rowWakeActivation = 1f;
+        private float rowBrightInkAmount;
+        private float rowWakeFillAmount;
+        private boolean rowBrightActive;
+        private float mainProgressAodAmount;
+        private LinearGradient wakeHighlightShader;
+        private float wakeShaderX, wakeShaderWidth, wakeShaderReveal, wakeShaderAmount;
+        private int wakeShaderColor;
+        private float drawBaseFade = 1f;
+        private float rowVisualFade = 1f;
+        private float rowVisualBlurRadius = 0f;
+        private boolean rowVisualAnimationRunning;
+        private final Rect lyricViewportRect = new Rect();
+        private final RectF lyricRowBounds = new RectF();
+        private final RectF lyricFocusBounds = new RectF();
+        private final RectF lyricVisibleContentBounds = new RectF();
+        private static final WeakHashMap<TextView, MainRowGeometry> MAIN_ROW_GEOMETRY = new WeakHashMap<>();
+
+        private static final class MainRowGeometry {
+            String boundText;
+            int viewWidth;
+            Typeface typeface;
+            float nativeTextSize;
+            float top;
+            float mainHeight;
+            float groupHeight;
+            float introHeight;
+            float introAmount;
+
+            float focusCenter() {
+                return LyricMainAnchorPolicy.focusCenter(top, mainHeight, introHeight, introAmount);
+            }
+
+            float focusHeight() {
+                return LyricMainAnchorPolicy.focusHeight(mainHeight, introHeight, introAmount);
+            }
+        }
+
+        private static MainRowGeometry mainGeometry(TextView textView) {
+            if (textView == null) return null;
+            MainRowGeometry geometry = MAIN_ROW_GEOMETRY.get(textView);
+            return geometry != null && geometry.viewWidth == textView.getWidth()
+                    && geometry.typeface == textView.getTypeface()
+                    && geometry.nativeTextSize == textView.getTextSize()
+                    && TextUtils.equals(geometry.boundText, textView.getText()) ? geometry : null;
+        }
+
+        private void rememberMainGeometry(TextView textView, WordLine line,
+                float mainHeight, int collapsedHeight, float groupHeight) {
+            MainRowGeometry geometry = MAIN_ROW_GEOMETRY.get(textView);
+            if (geometry == null) {
+                geometry = new MainRowGeometry();
+                MAIN_ROW_GEOMETRY.put(textView, geometry);
+            }
+            geometry.boundText = textView.getText().toString();
+            geometry.viewWidth = textView.getWidth();
+            geometry.typeface = textView.getTypeface();
+            geometry.nativeTextSize = textView.getTextSize();
+            geometry.top = LyricMainAnchorPolicy.mainTop(mainHeight, collapsedHeight);
+            geometry.mainHeight = mainHeight;
+            geometry.groupHeight = groupHeight;
+            geometry.introHeight = introRowHeight(textView, line);
+            geometry.introAmount = introLayoutAmount(line);
+            applyOfficialLyricScalePivot(textView);
+        }
+
+        private float estimateMainAnchor(View row, WordLine target) {
+            TextView textView = findFirstTextView(row, new int[]{0});
+            if (textView == null || target == null) return -1f;
+            MainRowGeometry previous = MAIN_ROW_GEOMETRY.remove(textView);
+            float oldPivotX = textView.getPivotX();
+            float oldPivot = textView.getPivotY();
+            try {
+                resolveSlotHeight(textView, target, nullToEmpty(target.translation), false);
+                MainRowGeometry measured = MAIN_ROW_GEOMETRY.get(textView);
+                return measured == null ? -1f : lyricMainAnchorCenterInItem(row);
+            } finally {
+                if (previous == null) MAIN_ROW_GEOMETRY.remove(textView);
+                else MAIN_ROW_GEOMETRY.put(textView, previous);
+                textView.setPivotX(oldPivotX);
+                textView.setPivotY(oldPivot);
+            }
+        }
+
+        private static boolean mapMainLyricBounds(View row, View recycler, RectF bounds, boolean content) {
+            TextView textView = findFirstTextView(row, new int[]{0});
+            MainRowGeometry geometry = mainGeometry(textView);
+            if (geometry == null) return mapLyricBounds(row, recycler, bounds);
+            float center = geometry.focusCenter();
+            float height = geometry.focusHeight();
+            bounds.set(0f,
+                    content ? (geometry.introAmount > 0f ? 0f : geometry.introHeight + geometry.top)
+                            : center - height * 0.5f,
+                    textView.getWidth(),
+                    content ? geometry.introHeight + geometry.top + geometry.groupHeight : center + height * 0.5f);
+            return mapLocalLyricBounds(textView, recycler, bounds);
+        }
+        private final LyricViewportMotionPolicy.State viewportMotion =
+                new LyricViewportMotionPolicy.State();
+        private boolean viewportMoving;
+        private volatile boolean forceOfficialSlotHeight;
+        private int drawingAlignment = LyricUiConfig.ALIGN_CENTER;
+        private long trackRevealStartedAtMs = -1L;
+        private WordLyricModel introLayoutModel;
+        private WordLine introLayoutLine;
+        private float introLayoutAmount;
+
+        boolean prepareIntroLayout(WordLyricModel model, long position) {
+            if (introLayoutModel != model) MAIN_ROW_GEOMETRY.clear();
+            WordLine first = LyricIntroDotsPolicy.firstLyricLine(model);
+            boolean motion = uiConfig.motionMode == LyricUiConfig.MOTION_STANDARD
+                    && !aodLowFrameRateMode && android.animation.ValueAnimator.areAnimatorsEnabled();
+            float amount = LyricIntroDotsPolicy.exitAmount(
+                    LyricIntroDotsPolicy.beginMillis(first), position, motion);
+            boolean changed = introLayoutModel != model || introLayoutLine != first
+                    || Math.abs(introLayoutAmount - amount) > 0.00001f;
+            introLayoutModel = model;
+            introLayoutLine = first;
+            introLayoutAmount = amount;
+            return changed;
+        }
+
+        float introLayoutAmount(WordLine line) {
+            return line != null && line == introLayoutLine ? introLayoutAmount : 0f;
+        }
+
+        float introRowHeight(TextView textView, WordLine line) {
+            if (textView == null || line == null || line != introLayoutLine
+                    || !LyricIntroDotsPolicy.hasIntro(LyricIntroDotsPolicy.beginMillis(line))) return 0f;
+            boolean untranslated = TextUtils.isEmpty(resolveRenderableTranslation(line))
+                    && line.secondaryLine == null;
+            float mainSize = sp(textView.getContext(), LyricUiLayoutPolicy.mainTextSizeSp(uiConfig, untranslated));
+            float spacing = dp(textView.getContext(), LyricUiLayoutPolicy.lineSpacingTenthsDp(uiConfig) / 10f);
+            return LyricIntroDotsPolicy.rowHeight(mainSize, spacing);
+        }
+
+        synchronized void armTrackReveal() {
+            trackRevealStartedAtMs = lyricAnimationTimeMillis();
+            armModelSwitchReveal();
+        }
+
+        boolean prepareSecondaryLayout(WordLyricModel model, int focusedIndex, long position,
+                boolean animate, boolean playbackAdvancing) {
+            if (model == null) return false;
+            long now = lyricAnimationTimeMillis();
+            boolean useMotion = animate && !aodLowFrameRateMode
+                    && uiConfig.motionMode != LyricUiConfig.MOTION_OFF
+                    && android.animation.ValueAnimator.areAnimatorsEnabled();
+            boolean running = false;
+            for (int i = 0; i < model.lines.size(); i++) {
+                WordLine line = model.lines.get(i);
+                boolean focused = i == focusedIndex;
+                float target = focused ? 1f : 0f;
+                boolean adjacent = line.secondaryLayoutInitialized
+                        && Math.abs((long) focusedIndex - line.secondaryLayoutFocusIndex) <= 1;
+                if (!line.secondaryLayoutInitialized || !useMotion || !adjacent) {
+                    line.secondaryLayout.reset(target);
+                    line.visualSecondary.reset(target);
+                    line.secondaryFocus = focused;
+                    line.secondaryChangedAtMs = now;
+                } else {
+                    line.secondaryLayout.retarget(target, now,
+                            Math.max(1L, LyricMotionPolicy.scrollMillis(uiConfig.motionMode)), true);
+                    if (line.secondaryFocus != focused) {
+                        line.secondaryFocus = focused;
+                        line.secondaryChangedAtMs = now;
+                    }
+                    boolean waiting = focused && now - line.secondaryChangedAtMs
+                            < LyricMotionPolicy.secondaryDelayMillis(uiConfig.motionMode);
+                    if (!waiting) line.visualSecondary.retarget(target, now,
+                            LyricMotionPolicy.secondaryMillis(uiConfig.motionMode), true);
+                    running |= waiting;
+                }
+                line.secondaryLayoutInitialized = true;
+                line.secondaryLayoutFocusIndex = focusedIndex;
+                running |= line.secondaryLayout.isRunning(now) || line.visualSecondary.isRunning(now);
+                WordLine vocal = line.secondaryLine;
+                long threshold = vocal == null ? Long.MAX_VALUE
+                        : vocal.firstProgressStartMillis() - (vocal.timingMode == LyricTimingMode.WORD_TIMED ? 300L : 0L);
+                boolean singing = focused || model.isSingingLine(i, position);
+                boolean vocalVisible = singing && position >= threshold;
+                float vocalTarget = vocalVisible ? 1f : 0f;
+                if (!useMotion || !adjacent) {
+                    line.vocalLayout.reset(vocalTarget);
+                    line.vocalAppearance.reset(vocalTarget);
+                    line.vocalChangedAtMs = now;
+                    line.vocalVisible = vocalVisible;
+                } else {
+                    line.vocalLayout.retarget(vocalTarget, now,
+                            LyricMotionPolicy.scrollMillis(uiConfig.motionMode), true);
+                    if (line.vocalVisible != vocalVisible) {
+                        line.vocalVisible = vocalVisible;
+                        line.vocalChangedAtMs = now;
+                    }
+                    boolean waiting = vocalVisible && now - line.vocalChangedAtMs
+                            < LyricMotionPolicy.secondaryDelayMillis(uiConfig.motionMode);
+                    if (!waiting) line.vocalAppearance.retarget(vocalTarget, now,
+                            LyricMotionPolicy.secondaryMillis(uiConfig.motionMode), true);
+                    running |= waiting;
+                }
+                running |= line.vocalLayout.isRunning(now) || line.vocalAppearance.isRunning(now)
+                        || (useMotion && playbackAdvancing && singing && vocal != null && position < threshold);
+            }
+            return running;
+        }
+
+        private float focusLayoutAmount(WordLine line) {
+            return line == null ? 0f : line.secondaryLayout.value(lyricAnimationTimeMillis());
+        }
+
+        private float rowTranslationAmount(WordLine line, float enabledAmount) {
+            return LyricSecondaryLayoutPolicy.translationAmount(
+                    uiConfig.translationDisplayMode == LyricUiConfig.TRANSLATION_ALL_LINES,
+                    enabledAmount, focusLayoutAmount(line));
+        }
+
+        private float secondaryTranslationAmount(WordLine line, float enabledAmount) {
+            return line == null || line.secondaryLine == null
+                    || line.secondaryLine.normalizedTranslation().isEmpty()
+                    ? 0f : rowTranslationAmount(line, enabledAmount);
+        }
+
+        private float secondaryTextRatio() {
+            return uiConfig.secondaryFontRatioPercent / 100f;
+        }
+
+        private float secondaryTranslationHeight() {
+            secondaryTranslationGeometryPaint.set(translationPaint);
+            secondaryTranslationGeometryPaint.setTextSize(translationPaint.getTextSize() * secondaryTextRatio());
+            secondaryTranslationGeometryPaint.getFontMetrics(secondaryTranslationFontMetrics);
+            return LyricUiLayoutPolicy.fontOuterHeight(
+                    secondaryTranslationFontMetrics.top, secondaryTranslationFontMetrics.bottom);
+        }
+
+        private void setTranslationTextSize(float size) {
+            translationPaint.setTextSize(size);
+            translationActivePaint.setTextSize(size);
+            translationFeatherPaint.setTextSize(size);
+        }
+
+        synchronized void armModelSwitchReveal() {
+            modelSwitchRevealStartedAtMs = lyricAnimationTimeMillis();
+        }
+
+        synchronized void cancelModelSwitchReveal() {
+            modelSwitchRevealStartedAtMs = -1L;
+        }
+
+        synchronized void setTranslationEnabled(boolean enabled) {
+            if (aodLowFrameRateMode || uiConfig.motionMode == LyricUiConfig.MOTION_OFF
+                    || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                setTranslationEnabledImmediately(enabled);
+                return;
+            }
+            if (translationAnimationTargetAmount == (enabled ? 1f : 0f)) return;
+            long now = lyricAnimationTimeMillis();
+            float currentAmount = resolveTranslationAmount(now);
+            translationAnimationStartAmount = currentAmount;
+            translationLayoutAmount = currentAmount;
+            translationAnimationTargetAmount = enabled ? 1f : 0f;
+            translationAnimationStartedAtMs =
+                    Math.abs(currentAmount - translationAnimationTargetAmount) < 0.001f
+                            ? -1L
+                            : now;
+        }
+
+        synchronized void setTranslationEnabledImmediately(boolean enabled) {
+            translationAnimationStartAmount = enabled ? 1f : 0f;
+            translationAnimationTargetAmount = translationAnimationStartAmount;
+            translationLayoutAmount = translationAnimationStartAmount;
+            translationAnimationStartedAtMs = -1L;
+        }
+
+        void setStyleOptions(
+                boolean scrollScaleEnabled,
+                boolean inactiveBlurEnabled,
+                boolean lineTimedProgressEnabled,
+                boolean translationProgressEnabled) {
+            this.scrollScaleEnabled = scrollScaleEnabled;
+            this.inactiveBlurEnabled = inactiveBlurEnabled;
+            this.lineTimedProgressEnabled = lineTimedProgressEnabled;
+            this.translationProgressEnabled = translationProgressEnabled;
+        }
+
+        void setConfig(LyricUiConfig config) {
+            if (config == null || config.equals(uiConfig)) return;
+            LyricUiConfig previous = uiConfig;
+            uiConfig = config;
+            palette = LyricUiPalette.from(config);
+            if (!config.primaryColor.equals(previous.primaryColor)) {
+                activeFeatherShader = null;
+                activeFeatherPrimaryColor = null;
+            }
+            scrollScaleEnabled = config.scaleEnabled;
+            inactiveBlurEnabled = config.blurEnabled;
+            lineTimedProgressEnabled = config.lineTimedProgressEnabled;
+            translationProgressEnabled = config.translationProgressEnabled;
+            charLiftEnabled = config.charLiftEnabled;
+            charLiftStrengthPercent = config.charLiftStrengthPercent;
+            clearGlowCache();
+            if (isLyricLayoutDiagnosticsEnabled()) {
+                StructuredBridgeLog.info(
+                        BridgeDebugArea.RENDERER,
+                        BridgeEvents.RENDER_STATE_CHANGED,
+                        "Updated lyric renderer config"
+                        + " | previousAlignment=" + previous.alignment
+                        + ", alignment=" + config.alignment
+                        + ", fontSp10=" + config.mainFontTenthsSp
+                        + ", lineSpacingDp10=" + config.lineSpacingTenthsDp
+                        + ", wrappedLineSpacingDp10="
+                        + config.wrappedLineSpacingTenthsDp);
+            }
+        }
+
+        void setForceOfficialSlotHeight(boolean forceOfficialSlotHeight) {
+            this.forceOfficialSlotHeight = forceOfficialSlotHeight;
+        }
+
+        void setPlaybackAdvancing(boolean advancing) {
+            playbackAdvancing = advancing;
+        }
+
+        void setAodLowFrameRateMode(boolean aodLowFrameRateMode) {
+            if (this.aodLowFrameRateMode == aodLowFrameRateMode) {
+                return;
+            }
+            this.aodLowFrameRateMode = aodLowFrameRateMode;
+            wakeTransition.setAod(aodLowFrameRateMode);
+        }
+
+        synchronized void finishTranslationLayoutChange() {
+            translationAnimationStartAmount = translationAnimationTargetAmount;
+            translationLayoutAmount = translationAnimationTargetAmount;
+            translationAnimationStartedAtMs = -1L;
+        }
+
+        synchronized boolean advanceTranslationLayoutAnimation() {
+            translationLayoutAmount = resolveTranslationAmount(lyricAnimationTimeMillis());
+            return translationAnimationStartedAtMs >= 0L;
+        }
+
+        private synchronized float currentTranslationLayoutAmount() {
+            return translationLayoutAmount;
+        }
+
+        void applySlotHeight(TextView textView, WordLine line) {
+            applySlotHeight(textView, line, false);
+        }
+
+        void applySlotHeight(TextView textView, WordLine line, boolean forceOfficialSlotHeight) {
+            int height = resolveSlotHeight(
+                    textView,
+                    line,
+                    resolveRenderableTranslation(line),
+                    forceOfficialSlotHeight);
+            if (height > 0) {
+                setOfficialLyricSlotHeight(textView, height + Math.round(introRowHeight(textView, line)));
+            }
+        }
+
+        void draw(Canvas canvas, TextView textView, DrawFrame frame) {
+            WordLine line = frame.line;
+            long sampleTime = lyricAnimationTimeMillis();
+            SampledPosition sampled = sampledPositions.get(line);
+            if (sampled == null) {
+                sampled = new SampledPosition();
+                sampledPositions.put(line, sampled);
+            }
+            if (sampled.time != sampleTime || Math.abs(frame.position - sampled.position) > 500L) {
+                sampled.time = sampleTime;
+                sampled.position = frame.position;
+                sampled.glow = frame.glowPosition;
+            }
+            long position = sampled.position;
+            long glowPosition = sampled.glow;
+            if (canvas == null || textView == null || line == null || TextUtils.isEmpty(line.text)) {
+                return;
+            }
+            if (textView.getWidth() <= 0 || textView.getHeight() <= 0) {
+                return;
+            }
+            drawingAlignment = LyricSecondaryLayoutPolicy.alignment(uiConfig.alignment, line.sourceAlignment);
+            if (lastLine != line) {
+                lastLine = line;
+                lineChangeElapsedMs = lyricAnimationTimeMillis();
+            }
+
+            String text = line.text;
+            int leftPadding = textView.getPaddingLeft();
+            int rightPadding = textView.getPaddingRight();
+            float availableWidth = textView.getWidth() - leftPadding - rightPadding;
+            if (availableWidth <= 1f) {
+                return;
+            }
+
+            String renderableTranslation = resolveRenderableTranslation(line);
+            boolean forceSlotHeight = forceOfficialSlotHeight && (frame.active || frame.focused);
+            int fixedSlotHeight = resolveSlotHeight(
+                    textView,
+                    line,
+                    renderableTranslation,
+                    forceSlotHeight);
+            if (fixedSlotHeight <= 0) {
+                return;
+            }
+            // Binding/configuration and the shared translation-layout pass own row height.
+            // Mutating LayoutParams from onDraw can make RecyclerView relayout while the
+            // official SmoothScroller is settling, so drawing only consumes measured geometry.
+            float availableHeight = textView.getHeight();
+            if (availableHeight <= 0f) {
+                return;
+            }
+            boolean effectiveScrollScaleEnabled = scrollScaleEnabled;
+            mainProgressAodAmount = 0f;
+            // Advance custom opacity/blur state, but leave physical row scaling to the vendor
+            // LyricsRecyclerView. Applying a second Canvas scale made the active row disagree with
+            // the RecyclerView's n/animation state during page cross-fades and long seeks.
+            resolveOfficialRowVisualState(textView, line, frame);
+            drawBaseFade = resolveModelSwitchRevealAmount() * rowVisualFade;
+            // Hidden holders still prepare their display lists. Only a visible focus/active
+            // holder may advance the shared wake clock, so surface handoff cannot consume it.
+            boolean wakeFrameVisible = textView.getWindowVisibility() == View.VISIBLE
+                    && isEffectivelyVisible(textView);
+            if (frame.active || frame.focused
+                    || (line.aodVisualFocused && wakeTransition.amount() > 0f)) {
+                LockscreenLyricsModule module = zhiInstance;
+                if (wakeFrameVisible || module == null || !module.hasEffectivelyVisibleLyricSurface(null)) {
+                    wakeTransition.sample(lyricAnimationTimeMillis(), wakeFrameVisible,
+                            uiConfig.motionMode != LyricUiConfig.MOTION_OFF
+                                    && android.animation.ValueAnimator.areAnimatorsEnabled());
+                }
+                frameAodAmount = wakeTransition.amount();
+            } else {
+                frameAodAmount = wakeTransition.amount();
+            }
+            if (aodLowFrameRateMode) line.aodVisualFocused = frame.focused;
+            rowBrightActive = frame.active || line.highlightExit.isExiting();
+            float brightActivation = line.highlightExit.highlightAmount();
+            if (line == introLayoutLine) brightActivation *= 1f - introLayoutAmount;
+            rowBrightInkAmount = rowBrightActive ? brightActivation : 0f;
+            rowWakeActivation = LyricWakeRowPolicy.activation(
+                    line.aodVisualFocused, rowBrightActive, frameAodAmount, brightActivation);
+            rowWakeFillAmount = LyricWakeRowPolicy.fillAmount(
+                    line.aodVisualFocused, rowBrightActive, frameAodAmount, brightActivation);
+            boolean visualActiveLine = aodLowFrameRateMode ? frame.focused
+                    : rowBrightActive || (line.aodVisualFocused && frameAodAmount > 0f);
+            float aodLineFillAmount = visualActiveLine
+                    ? resolveAodProgressToLineAmount(line)
+                    : 1f;
+
+            float translationAmount = TextUtils.isEmpty(renderableTranslation)
+                    ? 0f
+                    : rowTranslationAmount(line, resolveTranslationAmount());
+            float translationLayoutAmount = TextUtils.isEmpty(renderableTranslation)
+                    ? 0f
+                    : rowTranslationAmount(line, currentTranslationLayoutAmount());
+            float introInset = Math.min(introRowHeight(textView, line), Math.max(0f, availableHeight - 1f));
+            availableHeight -= introInset;
+            boolean compactSlot = !scrollScaleEnabled
+                    && line.secondaryLine == null
+                    && TextUtils.isEmpty(renderableTranslation)
+                    && isCompactLyricSlot(textView, availableHeight);
+            boolean untranslatedLayout = TextUtils.isEmpty(renderableTranslation) && line.secondaryLine == null;
+            configurePaints(textView, untranslatedLayout);
+            drawIntroDots(canvas, textView, frame, availableWidth, introInset);
+            int introSave = canvas.save();
+            try {
+                // A prefix row has its own geometry; the bound first lyric always draws below it.
+                canvas.translate(0f, introInset);
+            float focusAmount = resolveFocusAmount(
+                    line,
+                    visualActiveLine,
+                    frame.focused,
+                    frame.activeIndex,
+                    effectiveScrollScaleEnabled);
+            float appliedBlurRadius = resolveAppliedOfficialRowBlurRadius(textView, frame);
+            applyFocusedOfficialLyricViewEffects(
+                    textView,
+                    appliedBlurRadius,
+                    inactiveBlurEnabled && appliedBlurRadius > 0f);
+            if ((frame.focused && focusAmount < 1f)
+                    || (wakeFrameVisible && (frame.active || frame.focused
+                            || (line.aodVisualFocused && frameAodAmount > 0f)) && !aodLowFrameRateMode
+                            && (wakeTransition.isRunning() || wakeTransition.isArmed()))
+                    || (!aodLowFrameRateMode && rowVisualAnimationRunning)) {
+                requestLyricAnimationFrame(textView);
+            }
+            applyFade(1f, focusAmount);
+            if (compactSlot) {
+                drawCompactLine(
+                        canvas,
+                        textView,
+                        frame.model,
+                        line,
+                        position,
+                        glowPosition,
+                        visualActiveLine,
+                        focusAmount,
+                        aodLineFillAmount,
+                        availableWidth,
+                        availableHeight);
+                drawBaseFade = 1f;
+                return;
+            }
+            drawLyricGroup(
+                    canvas,
+                    textView,
+                    frame.model,
+                    line,
+                    position,
+                    glowPosition,
+                    visualActiveLine,
+                    availableWidth,
+                    availableHeight,
+                    focusAmount,
+                    aodLineFillAmount,
+                    translationAmount,
+                    translationLayoutAmount,
+                    renderableTranslation);
+            drawBaseFade = 1f;
+            if (isTranslationAnimationRunning()
+                    || isModelSwitchRevealRunning()
+                    || (!aodLowFrameRateMode && rowVisualAnimationRunning)) {
+                requestLyricAnimationFrame(textView);
+            }
+            } finally {
+                canvas.restoreToCount(introSave);
+                drawBaseFade = 1f;
+            }
+        }
+
+        private void drawIntroDots(Canvas canvas, TextView textView, DrawFrame frame,
+                float availableWidth, float introHeight) {
+            WordLine first = LyricIntroDotsPolicy.firstLyricLine(frame.model);
+            long begin = LyricIntroDotsPolicy.beginMillis(first);
+            if (frame.line != first || introHeight <= 0f
+                    || !LyricIntroDotsPolicy.isVisible(begin, frame.position)) return;
+            // The shared playback refresh owns frames, so a paused/static intro owns no timer.
+            boolean motion = uiConfig.motionMode == LyricUiConfig.MOTION_STANDARD
+                    && !aodLowFrameRateMode && android.animation.ValueAnimator.areAnimatorsEnabled();
+            float exit = LyricIntroDotsPolicy.exitAmount(begin, frame.position, motion);
+            boolean untranslated = TextUtils.isEmpty(resolveRenderableTranslation(first))
+                    && first.secondaryLine == null;
+            float mainSize = sp(textView.getContext(), LyricUiLayoutPolicy.mainTextSizeSp(uiConfig, untranslated));
+            float size = LyricIntroDotsPolicy.boundedTextSize(mainSize, availableWidth);
+            float scale = LyricIntroDotsPolicy.scale(frame.position, motion) * exit;
+            float radius = size * LyricIntroDotsPolicy.RADIUS_EM * scale;
+            float spacing = size * LyricIntroDotsPolicy.SPACING_EM * scale;
+            float centerX = LyricIntroDotsPolicy.centerX(drawingAlignment,
+                    textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL,
+                    textView.getPaddingLeft(), availableWidth, size);
+            float centerY = introHeight * 0.5f;
+            introDotPaint.setColor(scaleAlpha(palette.active, exit * resolveModelSwitchRevealAmount()));
+            applyFocusedOfficialLyricViewEffects(textView, 0f, false);
+            int save = canvas.save();
+            try {
+                canvas.clipRect(textView.getPaddingLeft(), 0f,
+                        textView.getWidth() - textView.getPaddingRight(), introHeight);
+                canvas.drawCircle(centerX - spacing, centerY, radius, introDotPaint);
+                canvas.drawCircle(centerX, centerY, radius, introDotPaint);
+                canvas.drawCircle(centerX + spacing, centerY, radius, introDotPaint);
+            } finally {
+                canvas.restoreToCount(save);
+            }
+        }
+
+        private synchronized float resolveTranslationAmount() {
+            return resolveTranslationAmount(lyricAnimationTimeMillis());
+        }
+
+        private float resolveTranslationAmount(long now) {
+            if (aodLowFrameRateMode || uiConfig.motionMode == LyricUiConfig.MOTION_OFF
+                    || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                finishTranslationLayoutChange();
+                return translationAnimationTargetAmount;
+            }
+            if (translationAnimationStartedAtMs < 0L) {
+                return translationAnimationTargetAmount;
+            }
+            float rawProgress = Math.max(
+                    0f,
+                    Math.min(1f, (now - translationAnimationStartedAtMs)
+                            / (float) LyricMotionPolicy.scrollMillis(uiConfig.motionMode)));
+            if (rawProgress >= 1f) {
+                translationAnimationStartAmount = translationAnimationTargetAmount;
+                translationAnimationStartedAtMs = -1L;
+                return translationAnimationTargetAmount;
+            }
+            float eased = ZhiToolLyricMotion.easeOutCubic(rawProgress);
+            return translationAnimationStartAmount
+                    + (translationAnimationTargetAmount - translationAnimationStartAmount)
+                    * eased;
+        }
+
+        private synchronized String resolveRenderableTranslation(WordLine line) {
+            if (line == null) {
+                return "";
+            }
+            String translation = nullToEmpty(line.translation);
+            long now = lyricAnimationTimeMillis();
+            if (!TextUtils.isEmpty(translation)) {
+                lastRenderableTranslationLineTimeMillis = line.timeMillis;
+                lastRenderableTranslationNormalizedText = line.normalizedText;
+                lastRenderableTranslationText = translation;
+                lastRenderableTranslationAtElapsedMs = now;
+                return translation;
+            }
+            if (!TextUtils.isEmpty(line.normalizedText)
+                    && line.timeMillis == lastRenderableTranslationLineTimeMillis
+                    && line.normalizedText.equals(lastRenderableTranslationNormalizedText)
+                    && !TextUtils.isEmpty(lastRenderableTranslationText)
+                    && lastRenderableTranslationAtElapsedMs > 0L
+                    && now - lastRenderableTranslationAtElapsedMs
+                    <= TRANSLATION_TRANSIENT_MISS_GRACE_MS) {
+                return lastRenderableTranslationText;
+            }
+            return "";
+        }
+
+        private synchronized void clearRenderableTranslationCache() {
+            lastRenderableTranslationLineTimeMillis = Long.MIN_VALUE;
+            lastRenderableTranslationNormalizedText = "";
+            lastRenderableTranslationText = "";
+            lastRenderableTranslationAtElapsedMs = -1L;
+        }
+
+        private synchronized boolean isTranslationAnimationRunning() {
+            return translationAnimationStartedAtMs >= 0L;
+        }
+
+        private synchronized float resolveModelSwitchRevealAmount() {
+            if (aodLowFrameRateMode || uiConfig.motionMode == LyricUiConfig.MOTION_OFF
+                    || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                modelSwitchRevealStartedAtMs = -1L;
+                return 1f;
+            }
+            if (modelSwitchRevealStartedAtMs < 0L) {
+                return 1f;
+            }
+            long now = lyricAnimationTimeMillis();
+            float rawProgress = Math.max(
+                    0f,
+                    Math.min(1f, (now - modelSwitchRevealStartedAtMs)
+                            / (float) LyricMotionPolicy.songMillis(uiConfig.motionMode)));
+            if (rawProgress >= 1f) {
+                modelSwitchRevealStartedAtMs = -1L;
+                return 1f;
+            }
+            return MODEL_SWITCH_REVEAL_START_ALPHA
+                    + (1f - MODEL_SWITCH_REVEAL_START_ALPHA) * ZhiToolLyricMotion.easeOutCubic(rawProgress);
+        }
+
+        private synchronized boolean isModelSwitchRevealRunning() {
+            return modelSwitchRevealStartedAtMs >= 0L;
+        }
+
+        private float resolveFocusAmount(
+                WordLine line, boolean activeLine, boolean focusedLine,
+                int activeIndex, boolean effectiveScrollScaleEnabled) {
+            return line == null ? 0f : line.visualFocus.value(lyricAnimationTimeMillis());
+        }
+
+        private float resolveOfficialRowVisualState(TextView textView, WordLine line, DrawFrame frame) {
+            rowVisualFade = 1f;
+            rowVisualBlurRadius = 0f;
+            rowVisualAnimationRunning = false;
+            if (line == null || frame == null) return 1f;
+            long now = lyricAnimationTimeMillis();
+            sampleLyricViewport(textView, frame);
+            boolean animate = line.rowVisualScaleInitialized
+                    && textView != null
+                    && textView.isAttachedToWindow()
+                    && textView.getWindowVisibility() == View.VISIBLE
+                    // The native scale's 900 ms screen-settle gate does not own custom color/focus.
+                    && LyricMotionPolicy.animate(uiConfig.motionMode, aodLowFrameRateMode,
+                    android.animation.ValueAnimator.areAnimatorsEnabled());
+            boolean timedHighlight = !WordLyricRenderSupport.shouldUseTimestampHighlight(frame.model, line)
+                    && shouldDrawWordProgressForVisual(line, 0f)
+                    && line.words != null && !line.words.isEmpty();
+            long completionPosition = timedHighlight
+                    ? resolveCharLiftLineRevealEnd(frame.model, line) : frame.position;
+            if (timedHighlight && charLiftEnabled && !charLiftUnavailable
+                    && charLiftStrengthPercent > 0) {
+                completionPosition += WordLyricRenderConstants.CHAR_LIFT_FINISH_MS;
+            }
+            boolean wasExiting = line.highlightExit.isExiting();
+            line.highlightExit.sample(frame.active, frame.position, now, animate,
+                    completionPosition, LyricMotionPolicy.focusMillis(uiConfig.motionMode));
+            if (!wasExiting && line.highlightExit.isExiting()) {
+                LyricAuxiliaryVisualPolicy.synchronizeExit(line, now);
+            }
+            // Animate the focus change in time; sample spatial falloff directly from the
+            // full-screen viewport so it follows the native scroll without trailing it.
+            float fade = 1f;
+            if (!uiConfig.inactiveRowFadeEnabled) {
+                fade = 1f;
+            } else if (!frame.focused && !frame.active) {
+                fade = LyricVisualAlphaPolicy.inactiveRowFadeMultiplier(uiConfig);
+            }
+            float focus = frame.focused || frame.active ? 1f : 0f;
+            line.visualFade.retarget(fade, now, LyricMotionPolicy.scrollMillis(uiConfig.motionMode), animate);
+            line.visualFocus.retarget(focus, now, LyricMotionPolicy.focusMillis(uiConfig.motionMode), animate);
+            line.rowVisualScaleInitialized = true;
+            line.rowVisualScaleActiveIndex = frame.scaleActiveIndex;
+            float spatialFade = viewportMotion.opacity(frame.active,
+                    uiConfig.inactiveRowFadeEnabled, 1f);
+            rowVisualFade = frame.active ? 1f
+                    : Math.max(0f, Math.min(1f, line.visualFade.value(now) * spatialFade));
+            rowVisualBlurRadius = frame.active ? 0f
+                    : viewportMotion.blurRadius(false, inactiveBlurEnabled,
+                    uiConfig.blurRadiusTenthsPx / 10f) * (1f - line.visualFocus.value(now));
+            rowVisualAnimationRunning = line.visualFade.isRunning(now)
+                    || line.visualFocus.isRunning(now)
+                    || line.highlightExit.isExiting()
+                    || line.highlightExit.isEntering(now)
+                    || line.visualSecondary.isRunning(now) || line.secondaryLayout.isRunning(now) || viewportMoving;
+            // The native View animator remains the only owner of row scale.
+            return 1f;
+        }
+
+        private void sampleLyricViewport(TextView textView, DrawFrame frame) {
+            viewportMoving = false;
+            View recycler = findContainingLyricsRecyclerView(textView);
+            if (!(recycler instanceof ViewGroup)
+                    || !recycler.getLocalVisibleRect(lyricViewportRect)
+                    || !mapMainLyricBounds(textView, recycler, lyricRowBounds, false)
+                    || !mapMainLyricBounds(textView, recycler, lyricVisibleContentBounds, true)) {
+                LyricViewportMotionPolicy.resolve(Float.NaN, Float.NaN, Float.NaN,
+                        0f, 0f, 0f, viewportMotion);
+                return;
+            }
+            ViewGroup group = (ViewGroup) recycler;
+            int viewportTop = Math.max(lyricViewportRect.top,
+                    group.getClipToPadding() ? recycler.getPaddingTop() : 0);
+            int viewportBottom = Math.min(lyricViewportRect.bottom,
+                    recycler.getHeight() - (group.getClipToPadding() ? recycler.getPaddingBottom() : 0));
+            float focusHeight = lyricRowBounds.height();
+            float focusCenter = viewportTop + focusHeight * 0.5f;
+            if (LyricsRecyclerFieldAccessor.isColorOs17Layout(recycler.getClass())) {
+                focusCenter = readIntField(recycler, "q", viewportTop) + recycler.getPaddingTop()
+                        + lyricMainAnchorCenterInItem(textView);
+            }
+            for (int index = 0; index < group.getChildCount(); index++) {
+                View child = group.getChildAt(index);
+                if (readRecyclerChildPosition(recycler, child) == frame.scaleActiveIndex
+                        && mapMainLyricBounds(child, recycler, lyricFocusBounds, false)) {
+                    focusCenter = lyricFocusBounds.centerY();
+                    focusHeight = lyricFocusBounds.height();
+                    break;
+                }
+            }
+            LyricViewportMotionPolicy.resolveAnchored(lyricRowBounds.top, lyricRowBounds.bottom,
+                    lyricVisibleContentBounds.top, lyricVisibleContentBounds.bottom,
+                    focusCenter, focusHeight, viewportTop, viewportBottom, viewportMotion);
+            Object state = invokeNoArgByName(recycler, "getScrollState");
+            viewportMoving = !aodLowFrameRateMode && state instanceof Number
+                    && ((Number) state).intValue() != 0;
+        }
+
+        private static boolean mapLyricBounds(View child, View recycler, RectF bounds) {
+            bounds.set(0f, 0f, child.getWidth(), child.getHeight());
+            return mapLocalLyricBounds(child, recycler, bounds);
+        }
+
+        private static boolean mapLocalLyricBounds(View child, View recycler, RectF bounds) {
+            View current = child;
+            for (int depth = 0; current != recycler && depth < 12; depth++) {
+                if (!(current.getParent() instanceof View)) return false;
+                View parent = (View) current.getParent();
+                current.getMatrix().mapRect(bounds);
+                bounds.offset(current.getLeft() - parent.getScrollX(),
+                        current.getTop() - parent.getScrollY());
+                current = parent;
+            }
+            return current == recycler;
+        }
+
+        private float resolveAppliedOfficialRowBlurRadius(TextView textView, DrawFrame frame) {
+            return rowVisualBlurRadius;
+        }
+
+        private void drawLyricGroup(
+                Canvas canvas,
+                TextView textView,
+                WordLyricModel model,
+                WordLine line,
+                long position,
+                long glowPosition,
+                boolean activeLine,
+                float availableWidth,
+                float availableHeight,
+                float focusAmount,
+                float aodLineFillAmount,
+                float translationAmount,
+                float translationLayoutAmount,
+                String renderableTranslation) {
+            LyricGroupDrawContext state = lyricGroupDrawContext;
+            if (!prepareLyricGroupDraw(
+                    textView,
+                    model,
+                    line,
+                    position,
+                    glowPosition,
+                    activeLine,
+                    availableWidth,
+                    availableHeight,
+                    focusAmount,
+                    aodLineFillAmount,
+                    translationAmount,
+                    translationLayoutAmount,
+                    renderableTranslation,
+                    state)) {
+                return;
+            }
+
+            int save = canvas.save();
+            try {
+                canvas.clipRect(
+                        textView.getPaddingLeft(),
+                        0f,
+                        textView.getWidth() - textView.getPaddingRight(),
+                        textView.getHeight());
+                if (trackRevealStartedAtMs >= 0L) {
+                    boolean animate = !aodLowFrameRateMode
+                            && uiConfig.motionMode != LyricUiConfig.MOTION_OFF
+                            && android.animation.ValueAnimator.areAnimatorsEnabled();
+                    float progress = animate ? Math.min(1f, (lyricAnimationTimeMillis()
+                            - trackRevealStartedAtMs) / (float) LyricMotionPolicy.songMillis(uiConfig.motionMode)) : 1f;
+                    if (progress < 1f) {
+                        canvas.translate(0f, dp(textView.getContext(), 24f)
+                                * (1f - ZhiToolLyricMotion.easeOutCubic(progress)));
+                        requestLyricAnimationFrame(textView);
+                    } else trackRevealStartedAtMs = -1L;
+                }
+                drawMainLyricPass(canvas, textView, state);
+                applyFade(1f, state.focusAmount);
+                drawTranslationPass(canvas, textView, state);
+                drawSecondaryPass(canvas, textView, state);
+            } finally {
+                canvas.restoreToCount(save);
+            }
+        }
+
+        private boolean prepareLyricGroupDraw(
+                TextView textView,
+                WordLyricModel model,
+                WordLine line,
+                long position,
+                long glowPosition,
+                boolean activeLine,
+                float availableWidth,
+                float availableHeight,
+                float focusAmount,
+                float aodLineFillAmount,
+                float translationAmount,
+                float translationLayoutAmount,
+                String renderableTranslation,
+                LyricGroupDrawContext state) {
+            boolean sourceHasTranslation = !TextUtils.isEmpty(renderableTranslation);
+            boolean untranslatedLayout = !sourceHasTranslation && line.secondaryLine == null;
+            String text = line.text;
+            buildDrawLines(line, text, availableWidth, false, untranslatedLayout);
+            if (drawLines.isEmpty()) {
+                return false;
+            }
+
+            boolean timestampHighlight = WordLyricRenderSupport.shouldUseTimestampHighlight(
+                    model,
+                    line);
+            boolean drawProgress = activeLine
+                    && !timestampHighlight
+                    && shouldDrawWordProgressForVisual(line, aodLineFillAmount);
+            float fullLineOverlayAmount = drawProgress
+                    ? aodLineFillAmount
+                    : 0f;
+            int wordIndex = drawProgress ? line.findWordIndex(position) : -1;
+            WordRange activeWord = wordIndex >= 0 && wordIndex < line.words.size()
+                    ? line.words.get(wordIndex)
+                    : null;
+            int glowWordIndex = drawProgress ? line.findWordIndex(glowPosition) : -1;
+            WordRange glowActiveWord =
+                    glowWordIndex >= 0 && glowWordIndex < line.words.size()
+                            ? line.words.get(glowWordIndex)
+                            : null;
+
+            MainLineWindow lineWindow = resolveMainLineWindow(
+                    model, line, activeWord, activeLine, availableWidth, position);
+            int visibleMainLineCount = LyricUiLayoutPolicy.visibleMainLineCount(
+                    drawLines.size(),
+                    visibleMainDrawLines(line));
+
+            inactivePaint.getFontMetrics(mainFontMetrics);
+            Paint.FontMetrics mainMetrics = mainFontMetrics;
+            float lineHeight = mainMetrics.descent - mainMetrics.ascent;
+            float lineGap = visibleMainLineCount > 1
+                    ? LyricUiLayoutPolicy.addWrappedLineSpacing(
+                            dp(textView.getContext(), WRAPPED_LINE_BASE_GAP_DP),
+                            dp(
+                                    textView.getContext(),
+                                    LyricUiLayoutPolicy.wrappedLineSpacingTenthsDp(uiConfig)
+                                            / 10f))
+                    : 0f;
+            float translationGap = sourceHasTranslation
+                    ? dp(textView.getContext(), 2f)
+                    : 0f;
+            translationPaint.getFontMetrics(translationFontMetrics);
+            Paint.FontMetrics translationMetrics = translationFontMetrics;
+            float mainHeight = LyricUiLayoutPolicy.mainTextBlockHeight(
+                    mainMetrics.top,
+                    mainMetrics.ascent,
+                    mainMetrics.descent,
+                    mainMetrics.bottom,
+                    visibleMainLineCount,
+                    lineGap);
+            float translationHeight = sourceHasTranslation
+                    ? LyricUiLayoutPolicy.fontOuterHeight(
+                            translationMetrics.top,
+                            translationMetrics.bottom)
+                    : 0f;
+            float secondaryAmount = line.secondaryLine == null ? 0f
+                    : line.vocalLayout.value(lyricAnimationTimeMillis());
+            float secondaryHeight = secondaryTextBlockHeight(textView, line.secondaryLine, availableWidth);
+            int secondaryLineCount = line.secondaryLine == null ? 0
+                    : LyricUiLayoutPolicy.visibleMainLineCount(
+                            secondaryDrawLines.size(), visibleMainDrawLines(line.secondaryLine));
+            float secondaryGap = line.secondaryLine == null ? 0f : dp(textView.getContext(), 2f);
+            float secondaryTranslationAmount = secondaryTranslationAmount(
+                    line, currentTranslationLayoutAmount());
+            float secondaryTranslationHeight = secondaryTranslationAmount > 0f
+                    ? secondaryTranslationHeight() : 0f;
+            float secondaryTranslationGap = secondaryGap * secondaryTextRatio();
+            float top = LyricMainAnchorPolicy.mainTop(mainHeight, line.slotHeightCollapsedValue);
+
+            state.model = model;
+            state.line = line;
+            state.text = text;
+            state.renderableTranslation = renderableTranslation;
+            state.activeWord = activeWord;
+            state.glowActiveWord = glowActiveWord;
+            state.lineWindow = lineWindow;
+            state.position = position;
+            state.glowPosition = glowPosition;
+            state.auxiliaryPosition = LyricAuxiliaryVisualPolicy.renderPosition(line, position);
+            float auxiliaryBright = Math.min(rowBrightInkAmount,
+                    LyricAuxiliaryVisualPolicy.highlightAmount(line, rowBrightActive, focusAmount));
+            state.auxiliaryProgress = (1f - frameAodAmount) * auxiliaryBright;
+            state.auxiliaryHighlight = (line.aodVisualFocused ? frameAodAmount : 0f)
+                    + state.auxiliaryProgress;
+            state.activeLine = activeLine;
+            state.drawProgress = drawProgress;
+            state.hasTranslation = translationAmount > 0.001f && sourceHasTranslation;
+            state.wordIndex = wordIndex;
+            state.glowWordIndex = glowWordIndex;
+            state.visibleMainLineCount = visibleMainLineCount;
+            state.availableWidth = availableWidth;
+            state.focusAmount = focusAmount;
+            state.fullLineOverlayAmount = fullLineOverlayAmount;
+            state.top = top;
+            state.mainHeight = mainHeight;
+            state.y = top - LyricUiLayoutPolicy.outwardFontTop(mainMetrics.top);
+            state.lineHeight = lineHeight;
+            state.lineGap = lineGap;
+            state.translationGap = translationGap;
+            state.translationMetricsTop = translationMetrics.top;
+            state.translationAmount = translationAmount;
+            state.translationLayoutAmount = translationLayoutAmount;
+            state.translationHeight = translationHeight;
+            state.secondaryAmount = secondaryAmount;
+            state.secondaryGap = secondaryGap;
+            state.secondaryHeight = secondaryHeight;
+            state.secondaryLineCount = secondaryLineCount;
+            state.secondaryMetricsTop = secondaryFontMetrics.top;
+            state.secondaryLineHeight = secondaryFontMetrics.descent - secondaryFontMetrics.ascent;
+            state.secondaryLineGap = secondaryWrappedLineGap(textView.getContext(), secondaryLineCount);
+            state.secondaryTranslationAmount = secondaryTranslationAmount;
+            state.secondaryTranslationGap = secondaryTranslationGap;
+            state.secondaryTranslationMetricsTop = secondaryTranslationFontMetrics.top;
+            // Where drawTranslationPass puts the translation's outward font top.
+            // Unsung main text sinks toward it and must stop short of it.
+            charLiftFloorY = (translationLayoutAmount > 0.001f || secondaryAmount > 0.001f)
+                    ? top + mainHeight + dp(textView.getContext(), 2f) : 0f;
+            return true;
+        }
+
+        private void drawMainLyricPass(
+                Canvas canvas,
+                TextView textView,
+                LyricGroupDrawContext state) {
+
+
+            MainLineWindow lineWindow = state.lineWindow;
+            if (lineWindow != null && lineWindow.animating) {
+                float slide = dp(textView.getContext(), MAIN_LINE_WINDOW_SLIDE_DP);
+                float direction =
+                        lineWindow.currentStart >= lineWindow.previousStart ? 1f : -1f;
+                drawMainLineWindow(
+                        canvas,
+                        textView,
+                        state.model,
+                        state.line,
+                        state.text,
+                        state.activeWord,
+                        state.wordIndex,
+                        state.glowActiveWord,
+                        state.glowWordIndex,
+                        state.y - direction * slide * lineWindow.progress,
+                        state.lineHeight,
+                        state.lineGap,
+                        state.availableWidth,
+                        state.position,
+                        state.glowPosition,
+                        state.activeLine,
+                        state.drawProgress,
+                        state.fullLineOverlayAmount,
+                        lineWindow.previousStart,
+                        lineWindow.count,
+                        state.focusAmount,
+                        1f - lineWindow.alphaProgress);
+                drawMainLineWindow(
+                        canvas,
+                        textView,
+                        state.model,
+                        state.line,
+                        state.text,
+                        state.activeWord,
+                        state.wordIndex,
+                        state.glowActiveWord,
+                        state.glowWordIndex,
+                        state.y + direction * slide * (1f - lineWindow.progress),
+                        state.lineHeight,
+                        state.lineGap,
+                        state.availableWidth,
+                        state.position,
+                        state.glowPosition,
+                        state.activeLine,
+                        state.drawProgress,
+                        state.fullLineOverlayAmount,
+                        lineWindow.currentStart,
+                        lineWindow.count,
+                        state.focusAmount,
+                        lineWindow.alphaProgress);
+                requestLyricAnimationFrame(textView);
+                return;
+            }
+
+            int windowStart = lineWindow == null ? 0 : lineWindow.currentStart;
+            drawMainLineWindow(
+                    canvas,
+                    textView,
+                    state.model,
+                    state.line,
+                    state.text,
+                    state.activeWord,
+                    state.wordIndex,
+                    state.glowActiveWord,
+                    state.glowWordIndex,
+                    state.y,
+                    state.lineHeight,
+                    state.lineGap,
+                    state.availableWidth,
+                    state.position,
+                    state.glowPosition,
+                    state.activeLine,
+                    state.drawProgress,
+                    state.fullLineOverlayAmount,
+                    windowStart,
+                    state.visibleMainLineCount,
+                    state.focusAmount,
+                    1f);
+        }
+
+        private void drawTranslationPass(
+                Canvas canvas,
+                TextView textView,
+                LyricGroupDrawContext state) {
+            if (!state.hasTranslation) {
+                return;
+            }
+            boolean allTranslations = uiConfig.translationDisplayMode == LyricUiConfig.TRANSLATION_ALL_LINES;
+            float secondary = allTranslations ? 1f
+                    : state.line.visualSecondary.value(lyricAnimationTimeMillis());
+            if (secondary <= 0.001f) return;
+            float translationBaseline = state.top
+                    + state.mainHeight
+                    + state.translationGap
+                    - LyricUiLayoutPolicy.outwardFontTop(state.translationMetricsTop)
+                    + (allTranslations ? 0f : dp(textView.getContext(), TRANSLATION_TOGGLE_SLIDE_DP))
+                    * (1f - state.translationAmount);
+            translationPaint.setColor(scaleAlpha(
+                    auxiliaryBaseColor(state),
+                    state.translationAmount * drawBaseFade * secondary));
+            translationActivePaint.setColor(scaleAlpha(
+                    palette.activeTranslationProgress,
+                    state.translationAmount * drawBaseFade * secondary * auxiliaryProgressAmount(state)));
+            translationFeatherPaint.setColor(translationActivePaint.getColor());
+            float translationX = resolveTranslationTextX(
+                    textView,
+                    state.model,
+                    state.line,
+                    state.renderableTranslation,
+                    state.auxiliaryPosition,
+                    state.activeLine,
+                    state.availableWidth);
+            int secondarySave = canvas.save();
+            float secondaryScale = allTranslations || uiConfig.motionMode == LyricUiConfig.MOTION_REDUCED
+                    ? 1f : 0.5f + 0.5f * secondary;
+            boolean rtl = textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
+            float contentLeft = textView.getPaddingLeft();
+            float contentRight = textView.getWidth() - textView.getPaddingRight();
+            float pivotX = drawingAlignment == LyricUiConfig.ALIGN_CENTER
+                    ? (contentLeft + contentRight) * 0.5f
+                    : drawingAlignment == LyricUiConfig.ALIGN_END
+                    ? (rtl ? contentLeft : contentRight)
+                    : (rtl ? contentRight : contentLeft);
+            canvas.scale(secondaryScale, secondaryScale, pivotX,
+                    translationBaseline + state.translationMetricsTop);
+            drawTranslationLine(
+                    canvas,
+                    textView,
+                    state.model,
+                    state.line,
+                    state.renderableTranslation,
+                    translationX,
+                    translationBaseline,
+                    state.auxiliaryPosition,
+                    state.activeLine);
+            canvas.restoreToCount(secondarySave);
+        }
+
+        private void drawSecondaryPass(Canvas canvas, TextView textView, LyricGroupDrawContext state) {
+            WordLine secondary = state.line.secondaryLine;
+            if (secondary == null || TextUtils.isEmpty(secondary.text) || state.secondaryAmount <= 0.001f) return;
+            float appearance = state.line.vocalAppearance.value(lyricAnimationTimeMillis());
+            if (appearance <= 0.001f) return;
+            float baseline = state.top + state.mainHeight
+                    + (state.translationGap + state.translationHeight) * state.translationLayoutAmount
+                    + state.secondaryGap - LyricUiLayoutPolicy.outwardFontTop(state.secondaryMetricsTop);
+            float mainTranslationSize = translationPaint.getTextSize();
+            setTranslationTextSize(inactivePaint.getTextSize() * secondaryTextRatio());
+            int save = canvas.save();
+            try {
+                float scale = uiConfig.motionMode == LyricUiConfig.MOTION_REDUCED ? 1f : 0.5f + 0.5f * appearance;
+                canvas.scale(scale, scale, LyricUiLayoutPolicy.horizontalScalePivot(drawingAlignment,
+                        textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL,
+                        textView.getPaddingLeft(), state.availableWidth), baseline + state.secondaryMetricsTop);
+                drawSecondaryTextBlock(canvas, textView, state, secondary, baseline, appearance);
+                // The vocal's translation is independent of its word-progress switch.
+                if (state.secondaryTranslationAmount > 0.001f) {
+                    String translated = secondary.normalizedTranslation();
+                    float translatedAppearance = uiConfig.translationDisplayMode == LyricUiConfig.TRANSLATION_ALL_LINES
+                            ? 1f : state.line.visualSecondary.value(lyricAnimationTimeMillis());
+                    float alpha = drawBaseFade * appearance * state.secondaryTranslationAmount * translatedAppearance;
+                    translationPaint.setColor(scaleAlpha(auxiliaryBaseColor(state), alpha));
+                    translationActivePaint.setColor(scaleAlpha(palette.activeTranslationProgress,
+                            alpha * auxiliaryProgressAmount(state)));
+                    translationFeatherPaint.setColor(translationActivePaint.getColor());
+                    float originalTextSize = translationPaint.getTextSize();
+                    setTranslationTextSize(originalTextSize * uiConfig.translationFontRatioPercent / 100f);
+                    try {
+                        float translatedX = resolveTranslationTextX(textView, null, secondary, translated,
+                                state.auxiliaryPosition, state.activeLine, state.availableWidth);
+                        float translatedBaseline = baseline
+                                + LyricUiLayoutPolicy.outwardFontTop(state.secondaryMetricsTop)
+                                + state.secondaryHeight + state.secondaryTranslationGap
+                                - LyricUiLayoutPolicy.outwardFontTop(state.secondaryTranslationMetricsTop);
+                        drawTranslationLine(canvas, textView, null, secondary, translated, translatedX,
+                                translatedBaseline, state.auxiliaryPosition, state.activeLine);
+                    } finally {
+                        setTranslationTextSize(originalTextSize);
+                    }
+                }
+            } finally {
+                setTranslationTextSize(mainTranslationSize);
+                canvas.restoreToCount(save);
+            }
+        }
+
+        private void drawSecondaryTextBlock(Canvas canvas, TextView textView,
+                LyricGroupDrawContext state, WordLine secondary, float baseline, float appearance) {
+            int count = state.secondaryLineCount;
+            if (count <= 0) return;
+            int clipSave = canvas.save();
+            try {
+                float top = baseline + LyricUiLayoutPolicy.outwardFontTop(state.secondaryMetricsTop);
+                canvas.clipRect(textView.getPaddingLeft(), top,
+                        textView.getWidth() - textView.getPaddingRight(), top + state.secondaryHeight);
+
+                    int target = LyricSecondaryWindowPolicy.targetStart(secondary, secondaryDrawLines,
+                            secondaryTextWidth, state.auxiliaryPosition, visibleMainDrawLines(secondary));
+                    MainLineWindow window = resolveLineWindow(secondary, secondaryDrawLines,
+                            secondaryLineWindow, state.activeLine, state.availableWidth, target);
+                    if (window.animating) {
+                        float slide = dp(textView.getContext(), MAIN_LINE_WINDOW_SLIDE_DP);
+                        float direction = window.currentStart >= window.previousStart ? 1f : -1f;
+                        drawSecondaryTextRows(canvas, textView, state, secondary,
+                                baseline - direction * slide * window.progress,
+                                window.previousStart, count, appearance * (1f - window.alphaProgress));
+                        drawSecondaryTextRows(canvas, textView, state, secondary,
+                                baseline + direction * slide * (1f - window.progress),
+                                window.currentStart, count, appearance * window.alphaProgress);
+                        requestLyricAnimationFrame(textView);
+                    } else {
+                        drawSecondaryTextRows(canvas, textView, state, secondary, baseline,
+                                window.currentStart, count, appearance);
+                    }
+                
+                if (playbackAdvancing && state.activeLine && !aodLowFrameRateMode
+                        && state.position < secondary.endTimeMillis
+                        && (secondaryDrawLines.size() > count || uiConfig.secondaryProgressEnabled)) {
+                    requestLyricAnimationFrame(textView);
+                }
+            } finally {
+                canvas.restoreToCount(clipSave);
+            }
+        }
+
+        private void drawSecondaryTextRows(Canvas canvas, TextView textView,
+                LyricGroupDrawContext state, WordLine secondary, float baseline,
+                int startRow, int count, float appearance) {
+            if (appearance <= 0.001f) return;
+            float alpha = drawBaseFade * appearance;
+            translationPaint.setColor(scaleAlpha(auxiliaryBaseColor(state), alpha));
+            translationActivePaint.setColor(scaleAlpha(palette.activeTranslationProgress,
+                    alpha * auxiliaryProgressAmount(state)));
+            translationFeatherPaint.setColor(translationActivePaint.getColor());
+            int end = Math.min(secondaryDrawLines.size(), startRow + count);
+            for (int i = startRow; i < end; i++) {
+                LyricDrawLine row = secondaryDrawLines.get(i);
+                float x = resolveTextX(textView, secondary.text, row.start, row.end,
+                        translationPaint, row.width, state.availableWidth);
+                canvas.drawText(secondary.text, row.start, row.end, x, baseline, translationPaint);
+                if (state.activeLine && !aodLowFrameRateMode && uiConfig.secondaryProgressEnabled) {
+                    float reveal = LyricSecondaryWindowPolicy.rowRevealWidth(secondary,
+                            secondaryDrawLines, i, secondaryTextWidth, state.auxiliaryPosition);
+                    drawRevealedText(canvas, secondary.text, row.start, row.end, x, baseline,
+                            row.width, reveal, translationActivePaint, translationFeatherPaint);
+                }
+                baseline += state.secondaryLineHeight + state.secondaryLineGap;
+            }
+        }
+
+
+
+        private int auxiliaryBaseColor(LyricGroupDrawContext state) {
+            return LyricAuxiliaryVisualPolicy.baseColor(
+                    palette.inactiveTranslation, palette.activeTranslation, state.auxiliaryHighlight);
+        }
+
+        private float auxiliaryProgressAmount(LyricGroupDrawContext state) {
+            return state.auxiliaryProgress;
+        }
+
+
+        private void drawTranslationLine(
+                Canvas canvas,
+                TextView textView,
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                float x,
+                float y,
+                long position,
+                boolean activeLine) {
+            canvas.drawText(text, x, y, translationPaint);
+            if (!activeLine
+                    || !shouldDrawTranslationProgress(line)
+                    || line == null
+                    || TextUtils.isEmpty(text)) {
+                return;
+            }
+            float width = translationPaint.measureText(text);
+            if (width <= 0f) {
+                return;
+            }
+            float progress = resolveTranslationRevealProgress(model, line, position);
+            float revealWidth = width * progress;
+            if (revealWidth <= 0f) {
+                if (progress < 1f && playbackAdvancing && !aodLowFrameRateMode) {
+                    requestLyricAnimationFrame(textView);
+                }
+                return;
+            }
+            drawProgressGlow(
+                    canvas,
+                    line,
+                    text,
+                    0,
+                    text.length(),
+                    x,
+                    y,
+                    width,
+                    revealWidth,
+                    translationActivePaint);
+            drawRevealedText(
+                    canvas,
+                    text,
+                    0,
+                    text.length(),
+                    x,
+                    y,
+                    width,
+                    revealWidth,
+                    translationActivePaint,
+                    translationFeatherPaint);
+            if (progress < 1f && playbackAdvancing && !aodLowFrameRateMode) {
+                requestLyricAnimationFrame(textView);
+            }
+        }
+
+        private boolean shouldDrawTranslationProgress(WordLine line) {
+            return !aodLowFrameRateMode
+                    && translationProgressEnabled
+                    && line != null;
+        }
+
+        private float resolveTranslationRevealProgress(
+                WordLyricModel model,
+                WordLine line,
+                long position) {
+            if (line == null) {
+                return 0f;
+            }
+            if (line.translationLine != null && line.translationLine != line) {
+                return resolveTranslationRevealProgress(null, line.translationLine, position);
+            }
+            if (line.timingMode == LyricTimingMode.LINE_TIMED && lineTimedProgressEnabled) {
+                return resolveLineElapsedProgress(model, line, position);
+            }
+            if (line.words == null || line.words.isEmpty() || TextUtils.isEmpty(line.text)) {
+                return resolveLineElapsedProgress(model, line, position);
+            }
+            if (WordLyricRenderSupport.shouldHoldWordTimedReveal(line, position)) {
+                return 0f;
+            }
+            int wordIndex = line.findWordIndex(position);
+            if (wordIndex < 0 || wordIndex >= line.words.size()) {
+                return resolveLineElapsedProgress(model, line, position);
+            }
+            if (wordIndex == line.words.size() - 1
+                    && position >= WordLyricRenderSupport.wordRevealEndMillis(model, line, wordIndex)) {
+                return 1f;
+            }
+            WordRange activeWord = line.words.get(wordIndex);
+            int activeStart = Math.max(0, Math.min(activeWord.start, line.text.length()));
+            int activeEnd = Math.max(activeStart, Math.min(activeWord.end, line.text.length()));
+            float fullWidth = inactivePaint.measureText(line.text);
+            if (fullWidth <= 0f || activeStart >= activeEnd) {
+                return resolveLineElapsedProgress(model, line, position);
+            }
+            float revealWidth = inactivePaint.measureText(line.text, 0, activeStart)
+                    + inactivePaint.measureText(line.text, activeStart, activeEnd)
+                    * WordLyricRenderSupport.wordRevealProgress(model, line, wordIndex, position);
+            return Math.max(0f, Math.min(1f, revealWidth / fullWidth));
+        }
+
+        private float resolveLineElapsedProgress(
+                WordLyricModel model,
+                WordLine line,
+                long position) {
+            if (line == null) {
+                return 0f;
+            }
+            long displayEndMillis = resolveLineDisplayEndMillis(model, line);
+            long duration = Math.max(1L, displayEndMillis - line.timeMillis);
+            return Math.max(
+                    0f,
+                    Math.min(1f, (position - line.timeMillis) / (float) duration));
+        }
+
+        private long resolveLineDisplayEndMillis(WordLyricModel model, WordLine line) {
+            long displayEndMillis = line.endTimeMillis;
+            if (model != null) {
+                int lineIndex = model.indexOfLine(line);
+                WordLine nextLine = lineIndex >= 0 ? model.lineAt(lineIndex + 1) : null;
+                if (nextLine != null && nextLine.timeMillis > line.timeMillis
+                        && !model.hasVerifiedOverlapAfter(line)) {
+                    displayEndMillis = nextLine.timeMillis;
+                } else if (lineIndex >= 0
+                        && line.timingMode == LyricTimingMode.LINE_TIMED
+                        && displayEndMillis - line.timeMillis <= 1_000L) {
+                    WordLine previousLine = model.lineAt(lineIndex - 1);
+                    long previousLineIntervalMillis = previousLine == null
+                            ? -1L
+                            : line.timeMillis - previousLine.timeMillis;
+                    displayEndMillis = line.timeMillis
+                            + LockscreenIntegrationPolicy.estimateFinalLineTimedDurationMillis(
+                            previousLineIntervalMillis,
+                            line.text);
+                }
+            }
+            return Math.max(line.timeMillis + 1L, displayEndMillis);
+        }
+
+        private float resolveTranslationTextX(
+                TextView textView,
+                WordLyricModel model,
+                WordLine line,
+                String renderableTranslation,
+                long position,
+                boolean activeLine,
+                float availableWidth) {
+            float translationWidth = translationPaint.measureText(renderableTranslation);
+            float startX = resolveTextX(
+                    textView,
+                    renderableTranslation,
+                    0,
+                    renderableTranslation.length(),
+                    translationPaint,
+                    translationWidth,
+                    availableWidth);
+            if (aodLowFrameRateMode
+                    || !uiConfig.translationMarqueeEnabled
+                    || !LyricMotionPolicy.animate(uiConfig.motionMode, false,
+                            android.animation.ValueAnimator.areAnimatorsEnabled())
+                    || !activeLine
+                    || line == null
+                    || TextUtils.isEmpty(renderableTranslation)) {
+                return startX;
+            }
+            float overflow = translationWidth - availableWidth;
+            if (overflow <= 0.5f) {
+                return startX;
+            }
+            float lineProgress = resolveLineElapsedProgress(model, line, position);
+            float scrollProgress = Math.max(
+                    0f,
+                    Math.min(
+                            1f,
+                            (lineProgress - TRANSLATION_SCROLL_START_PROGRESS)
+                                    / (TRANSLATION_SCROLL_END_PROGRESS
+                                    - TRANSLATION_SCROLL_START_PROGRESS)));
+            float easedScrollProgress = smoothStep(scrollProgress);
+            if (scrollProgress < 1f) {
+                requestLyricAnimationFrame(textView);
+            }
+            float direction = textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL ? 1f : -1f;
+            return startX + direction * overflow * easedScrollProgress * (1f - frameAodAmount);
+        }
+
+        private int resolveSlotHeight(
+                TextView textView,
+                WordLine line,
+                String renderableTranslation,
+                boolean forceOfficialSlotHeight) {
+            if (textView == null || line == null) {
+                return 0;
+            }
+            Context context = textView.getContext();
+            int fallbackHeight = dp(context, WordLyricRenderConstants.LYRIC_SLOT_HEIGHT_DP);
+            float availableWidth = resolveAvailableWidth(textView);
+            if (availableWidth <= 1f || TextUtils.isEmpty(line.text)) {
+                return fallbackHeight;
+            }
+
+            boolean sourceHasTranslation = !TextUtils.isEmpty(renderableTranslation);
+            boolean sourceHasSecondary = line.secondaryLine != null
+                    && !TextUtils.isEmpty(line.secondaryLine.text);
+            boolean untranslatedLayout = !sourceHasTranslation && !sourceHasSecondary;
+            configureGeometryPaints(textView, untranslatedLayout);
+            int widthKey = Math.max(1, Math.round(availableWidth));
+            int baseTextSizeKey = Math.max(1, Math.round(inactivePaint.getTextSize() * 10f));
+            // The enclosing module advances one shared layout amount before each frame,
+            // then updates every bound row together. This avoids holder draw order making
+            // neighboring rows use different heights during the same translation frame.
+            float translationAmount = sourceHasTranslation
+                    ? rowTranslationAmount(line, currentTranslationLayoutAmount())
+                    : 0f;
+            float secondaryAmount = sourceHasSecondary
+                    ? line.vocalLayout.value(lyricAnimationTimeMillis()) : 0f;
+            float secondaryTranslationAmount = secondaryTranslationAmount(
+                    line, currentTranslationLayoutAmount());
+            int translationAmountKey = Math.round(translationAmount * 1000f);
+            int translationHash = sourceHasTranslation ? renderableTranslation.hashCode() : 0;
+            int typographyKey = 31 * Math.round(translationPaint.getTextSize() * 10f)
+                    + uiConfig.fontWeight;
+            typographyKey = 31 * typographyKey
+                    + (uiConfig.glowEnabled ? uiConfig.glowRadiusPercent : 0);
+            typographyKey = 31 * typographyKey + uiConfig.wrappedLineSpacingTenthsDp;
+            typographyKey = 31 * typographyKey + uiConfig.secondaryFontRatioPercent;
+            buildDrawLines(line, line.text, availableWidth, false, untranslatedLayout);
+            if (drawLines.isEmpty()) {
+                return fallbackHeight;
+            }
+
+            int fullMainLineCount = drawLines.size();
+            int visibleMainLineCount = LyricUiLayoutPolicy.visibleMainLineCount(
+                    fullMainLineCount,
+                    visibleMainDrawLines(line));
+
+            inactivePaint.getFontMetrics(mainFontMetrics);
+            Paint.FontMetrics mainMetrics = mainFontMetrics;
+            float lineHeight = mainMetrics.descent - mainMetrics.ascent;
+            float lineGap = visibleMainLineCount > 1
+                    ? LyricUiLayoutPolicy.addWrappedLineSpacing(
+                            dp(context, WRAPPED_LINE_BASE_GAP_DP),
+                            dp(
+                                    context,
+                                    LyricUiLayoutPolicy.wrappedLineSpacingTenthsDp(uiConfig)
+                                            / 10f))
+                    : 0f;
+            float mainHeight = LyricUiLayoutPolicy.mainTextBlockHeight(
+                    mainMetrics.top,
+                    mainMetrics.ascent,
+                    mainMetrics.descent,
+                    mainMetrics.bottom,
+                    visibleMainLineCount,
+                    lineGap);
+
+            float secondaryContribution = 0f;
+            if (sourceHasTranslation || sourceHasSecondary) {
+                translationPaint.getFontMetrics(translationFontMetrics);
+                Paint.FontMetrics translationMetrics = translationFontMetrics;
+                float translationHeight = LyricUiLayoutPolicy.fontOuterHeight(
+                        translationMetrics.top,
+                        translationMetrics.bottom);
+                secondaryContribution = dp(context, 2f) + translationHeight;
+            }
+            float vocalContribution = sourceHasSecondary
+                    ? dp(context, 2f) + secondaryTextBlockHeight(textView, line.secondaryLine, availableWidth)
+                    : 0f;
+            float expandedGroupHeight = mainHeight
+                    + (sourceHasTranslation ? secondaryContribution : 0f) + vocalContribution;
+            float secondaryTranslationContribution = secondaryTranslationAmount > 0f
+                    ? dp(context, 2f) * secondaryTextRatio() + secondaryTranslationHeight() : 0f;
+            expandedGroupHeight += secondaryTranslationContribution;
+
+            // Variable-height rows are safe as long as a row's height is content/config
+            // driven and does not change when focus, progress, AOD, blur, or scale animates.
+            // Keep the same padding for scale presets so bold glyphs and glow are not
+            // clipped at the TextView/item boundary.
+            int minHeight = scrollScaleEnabled && forceOfficialSlotHeight ? fallbackHeight
+                    : dp(context, WordLyricRenderConstants.LYRIC_SLOT_MIN_HEIGHT_DP);
+            int verticalPadding = dp(context, WordLyricRenderConstants.LYRIC_SLOT_VERTICAL_PADDING_DP);
+            if (uiConfig.glowEnabled) {
+                int glowDrawingRoom = Math.round(
+                        inactivePaint.getTextSize()
+                                * uiConfig.glowRadiusPercent
+                                / 50f)
+                        + dp(context, 2f);
+                verticalPadding = Math.max(verticalPadding, glowDrawingRoom);
+            }
+            int collapsedHeight = LyricUiLayoutPolicy.requiredSlotHeight(
+                    mainHeight,
+                    verticalPadding,
+                    dp(context, WordLyricRenderConstants.LYRIC_SLOT_BOTTOM_SAFETY_DP),
+                    minHeight);
+            int expandedHeight = LyricMainAnchorPolicy.slotHeight(collapsedHeight, mainHeight, expandedGroupHeight);
+            float groupHeight = LyricSecondaryLayoutPolicy.groupHeight(mainHeight,
+                            sourceHasTranslation ? secondaryContribution : 0f, translationAmount,
+                            sourceHasSecondary ? vocalContribution
+                                    + secondaryTranslationContribution * secondaryTranslationAmount : 0f,
+                            secondaryAmount);
+            int resolvedHeight = LyricMainAnchorPolicy.slotHeight(collapsedHeight, mainHeight, groupHeight);
+            rememberMainGeometry(textView, line, mainHeight, collapsedHeight, groupHeight);
+            line.slotHeightWidthKey = widthKey;
+            line.slotHeightBaseTextSizeKey = baseTextSizeKey;
+            line.slotHeightTypographyKey = typographyKey;
+            line.slotHeightTranslationHash = translationHash;
+            line.slotHeightTranslationLength = renderableTranslation.length();
+            line.slotHeightTranslationAmountKey = translationAmountKey;
+            line.slotHeightScrollScaleEnabled = scrollScaleEnabled;
+            line.slotHeightForceOfficial = forceOfficialSlotHeight;
+            line.slotHeightCollapsedValue = collapsedHeight;
+            line.slotHeightExpandedValue = expandedHeight;
+            line.slotHeightValue = resolvedHeight;
+            return resolvedHeight;
+        }
+
+        private float resolveAvailableWidth(TextView textView) {
+            if (textView == null) {
+                return 0f;
+            }
+            int leftPadding = textView.getPaddingLeft();
+            int rightPadding = textView.getPaddingRight();
+            float availableWidth = textView.getWidth() - leftPadding - rightPadding;
+            if (availableWidth <= 1f) {
+                View itemView = findLyricsRecyclerItemView(textView);
+                if (itemView != null && itemView != textView) {
+                    availableWidth = itemView.getWidth() - leftPadding - rightPadding;
+                }
+            }
+            if (availableWidth <= 1f) {
+                View recycler = findContainingLyricsRecyclerView(textView);
+                if (recycler != null && recycler.getWidth() > 0) {
+                    int recyclerContentWidth = recycler.getWidth()
+                            - recycler.getPaddingLeft()
+                            - recycler.getPaddingRight();
+                    availableWidth = recyclerContentWidth - leftPadding - rightPadding;
+                }
+            }
+            return availableWidth;
+        }
+
+        private MainLineWindow resolveMainLineWindow(
+                WordLyricModel model,
+                WordLine line,
+                WordRange activeWord,
+                boolean activeLine,
+                float availableWidth,
+                long position) {
+            return resolveLineWindow(line, drawLines, mainLineWindow, activeLine, availableWidth,
+                    targetMainLineWindowStart(model, line, activeWord, drawLines.size(), position));
+        }
+
+        private MainLineWindow resolveLineWindow(
+                WordLine line,
+                List<LyricDrawLine> rows,
+                MainLineWindow output,
+                boolean activeLine,
+                float availableWidth,
+                int targetStart) {
+            int totalLines = rows.size();
+            int count = LyricUiLayoutPolicy.visibleMainLineCount(
+                    totalLines,
+                    visibleMainDrawLines(line));
+            if (totalLines <= visibleMainDrawLines(line)) {
+                resetMainLineWindow(line, 0, availableWidth);
+                return output.set(0, 0, count, 1f, 1f, false);
+            }
+
+            // RecyclerView can briefly draw two holders mapped to the same lyric while it
+            // advances. An inactive holder must not reset the active holder's two-line
+            // sliding window, otherwise later wrapped lines never stay visible.
+            if (!activeLine) {
+                return output.set(0, 0, count, 1f, 1f, false);
+            }
+
+            int layoutKey = mainLineWindowLayoutKey(line, availableWidth);
+            long now = lyricAnimationTimeMillis();
+            if (line.mainLineWindowLayoutKey != layoutKey) {
+                line.mainLineWindowLayoutKey = layoutKey;
+                line.mainLineWindowPreviousStart = targetStart;
+                line.mainLineWindowStart = targetStart;
+                line.mainLineWindowChangedAtMs = now;
+                return output.set(
+                        targetStart,
+                        targetStart,
+                        count,
+                        1f,
+                        1f,
+                        false);
+            }
+
+            if (aodLowFrameRateMode || uiConfig.motionMode != LyricUiConfig.MOTION_STANDARD
+                    || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                resetMainLineWindow(line, targetStart, availableWidth);
+                return output.set(targetStart, targetStart, count, 1f, 1f, false);
+            }
+            // Retain the actual AOD window through the wake blend. The normal
+            // wrapped-row animation takes over afterwards using its existing cache.
+            if (!aodLowFrameRateMode && frameAodAmount > 0f) {
+                return output.set(line.mainLineWindowStart, line.mainLineWindowStart,
+                        count, 1f, 1f, false);
+            }
+
+            if (line.mainLineWindowStart != targetStart) {
+                line.mainLineWindowPreviousStart = line.mainLineWindowStart;
+                line.mainLineWindowStart = targetStart;
+                line.mainLineWindowChangedAtMs = now;
+            }
+
+            float rawProgress = Math.min(
+                    1f,
+                    Math.max(0f, (now - line.mainLineWindowChangedAtMs)
+                            / (float) MAIN_LINE_WINDOW_ANIMATION_MS));
+            float eased = smoothStep(rawProgress);
+            boolean animating = rawProgress < 1f
+                    && line.mainLineWindowPreviousStart != line.mainLineWindowStart;
+            if (!animating) {
+                line.mainLineWindowPreviousStart = line.mainLineWindowStart;
+            }
+            return output.set(
+                    line.mainLineWindowStart,
+                    line.mainLineWindowPreviousStart,
+                    count,
+                    eased,
+                    eased,
+                    animating);
+        }
+
+        private void resetMainLineWindow(WordLine line, int start, float availableWidth) {
+            if (line == null) {
+                return;
+            }
+            line.mainLineWindowLayoutKey = mainLineWindowLayoutKey(line, availableWidth);
+            line.mainLineWindowPreviousStart = start;
+            line.mainLineWindowStart = start;
+            line.mainLineWindowChangedAtMs = lyricAnimationTimeMillis();
+        }
+
+        private static int mainLineWindowLayoutKey(WordLine line, float availableWidth) {
+            int key = Math.max(1, Math.round(availableWidth));
+            key = 31 * key + (line == null ? 0 : line.rendererLayoutTextSizeKey);
+            key = 31 * key + (line == null ? 0 : line.rendererLayoutCount);
+            key = 31 * key + (line == null
+                    ? 0
+                    : System.identityHashCode(line.rendererLayoutTypeface));
+            return key;
+        }
+
+        private int targetMainLineWindowStart(
+                WordLyricModel model,
+                WordLine line,
+                WordRange activeWord,
+                int totalLines,
+                long position) {
+            if (line != null && line.timingMode == LyricTimingMode.LINE_TIMED) {
+                if (!lineTimedProgressEnabled && !aodLowFrameRateMode) {
+                    return 0;
+                }
+                return LockscreenIntegrationPolicy.lineTimedSlidingWindowStart(
+                        position,
+                        line.timeMillis,
+                        resolveLineDisplayEndMillis(model, line),
+                        line.rendererLayoutWidths,
+                        totalLines,
+                        visibleMainDrawLines(line));
+            }
+            if (activeWord == null) {
+                return 0;
+            }
+            for (int i = 0; i < drawLines.size(); i++) {
+                LyricDrawLine drawLine = drawLines.get(i);
+                if (activeWord.end > drawLine.start && activeWord.start < drawLine.end) {
+                    return LockscreenIntegrationPolicy.clampSlidingWindowStart(
+                            i,
+                            totalLines,
+                            visibleMainDrawLines(line));
+                }
+            }
+            return 0;
+        }
+
+        private float resolveAodProgressToLineAmount(WordLine line) {
+            if (!canDrawWordProgress(line)) {
+                return aodLowFrameRateMode ? 1f : 0f;
+            }
+            return rowWakeFillAmount;
+        }
+
+        private boolean shouldDrawWordProgressForVisual(WordLine line, float aodLineFillAmount) {
+            return canDrawWordProgress(line);
+        }
+
+        private boolean canDrawWordProgress(WordLine line) {
+            return line != null
+                    && line.words != null
+                    && !line.words.isEmpty()
+                    && (line.timingMode != LyricTimingMode.LINE_TIMED
+                    || lineTimedProgressEnabled);
+        }
+
+        private void drawMainLineWindow(
+                Canvas canvas,
+                TextView textView,
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                WordRange activeWord,
+                int wordIndex,
+                WordRange glowActiveWord,
+                int glowWordIndex,
+                float y,
+                float lineHeight,
+                float lineGap,
+                float availableWidth,
+                long position,
+                long glowPosition,
+                boolean activeLine,
+                boolean drawProgress,
+                float fullLineOverlayAmount,
+                int windowStart,
+                int count,
+                float focusAmount,
+                float alpha) {
+            if (alpha <= 0.01f || count <= 0) {
+                return;
+            }
+            boolean exitingHighlight = line.highlightExit.isExiting();
+            if (exitingHighlight) {
+                // Each text lane consumes this row's shared exit sample while retaining
+                // its own word/translation timing. Layout controllers keep their own clocks.
+                position = line.highlightExit.renderPosition();
+                glowPosition = position;
+                activeLine = true;
+                drawProgress = !WordLyricRenderSupport.shouldUseTimestampHighlight(model, line)
+                        && shouldDrawWordProgressForVisual(line, 0f);
+                wordIndex = drawProgress ? line.findWordIndex(position) : -1;
+                activeWord = wordIndex >= 0 && wordIndex < line.words.size()
+                        ? line.words.get(wordIndex) : null;
+                glowWordIndex = wordIndex;
+                glowActiveWord = activeWord;
+                fullLineOverlayAmount = rowWakeFillAmount;
+            }
+            applyFade(alpha, focusAmount);
+            mainProgressAodAmount = fullLineOverlayAmount;
+            int start = Math.max(0, Math.min(windowStart, drawLines.size()));
+            int end = Math.min(drawLines.size(), start + count);
+            beginCharLiftLine(
+                    model,
+                    line,
+                    text,
+                    activeWord,
+                    wordIndex,
+                    position,
+                    activeLine,
+                    drawProgress,
+                    fullLineOverlayAmount,
+                    start,
+                    canvas.getHeight(),
+                    dp(
+                            textView.getContext(),
+                            WordLyricRenderConstants.CHAR_LIFT_MIN_CLEARANCE_DP));
+            float lineY = y;
+            for (int i = start; i < end; i++) {
+                LyricDrawLine drawLine = drawLines.get(i);
+                float segmentWidth = drawLine.width;
+                float x = resolveTextX(
+                        textView,
+                        text,
+                        drawLine.start,
+                        drawLine.end,
+                        inactivePaint,
+                        segmentWidth,
+                        availableWidth);
+                drawSegment(
+                        canvas,
+                        model,
+                        line,
+                        text,
+                        drawLine,
+                        activeWord,
+                        wordIndex,
+                        glowActiveWord,
+                        glowWordIndex,
+                        x,
+                        lineY,
+                        position,
+                        glowPosition,
+                        activeLine,
+                        drawProgress,
+                        fullLineOverlayAmount);
+                charLift.flowSegmentStart += drawLine.width;
+                lineY += lineHeight + lineGap;
+            }
+            // Active lift follows playback, so a paused word owns no animation loop.
+            // A deactivated row uses its bounded completion clock until the last
+            // grapheme lands while the same exit clock fades its highlight.
+            if (charLift.lineActive && (playbackAdvancing || exitingHighlight)
+                    && (charLift.ramp < 1f || charLift.finishing)) {
+                requestLyricAnimationFrame(textView);
+            }
+        }
+
+        /**
+         * Line-level lift state for one {@link #drawMainLineWindow} pass. The
+         * reveal front is resolved once per line in flow coordinates (advance
+         * width accumulated across wrapped segments) because a per-segment front
+         * pins itself to the right edge of any segment that sits entirely before
+         * the active word, which would park that segment's trailing grapheme at
+         * the envelope peak for the rest of the row.
+         */
+        private void beginCharLiftLine(
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                WordRange activeWord,
+                int wordIndex,
+                long position,
+                boolean activeLine,
+                boolean drawProgress,
+                float fullLineOverlayAmount,
+                int windowStart,
+                float canvasHeight,
+                float minClearance) {
+            charLift.reset();
+            if (!charLiftEnabled
+                    || charLiftUnavailable
+                    || !activeLine
+                    || !rowBrightActive
+                    || !drawProgress
+                    // drawProgress alone does not rule out AOD: the low frame
+                    // rate path still draws word progress while the fill
+                    // transition runs, and an animation there costs battery for
+                    // motion nobody is watching.
+                    || aodLowFrameRateMode
+                    || uiConfig.motionMode == LyricUiConfig.MOTION_OFF
+                    || !android.animation.ValueAnimator.areAnimatorsEnabled()
+                    || line == null
+                    || (line.timingMode != LyricTimingMode.WORD_TIMED
+                    && (line.timingMode != LyricTimingMode.LINE_TIMED
+                    || !lineTimedProgressEnabled))
+                    || line.words == null
+                    || line.words.isEmpty()
+                    || TextUtils.isEmpty(text)
+                    || WordLyricRenderSupport.shouldUseTimestampHighlight(model, line)) {
+                return;
+            }
+            try {
+                // activeWord == null keeps the front at the start during pre-roll.
+                float textSize = inactivePaint.getTextSize();
+                float maxSink = textSize
+                        * WordLyricRenderConstants.CHAR_LIFT_MAX_FACTOR
+                        * charLiftStrengthPercent
+                        / 100f;
+                // Fill and progress use the same displaced glyphs. Wake reveals the
+                // normal lift geometry continuously instead of switching it on at the end.
+                maxSink = LyricWakeTransitionPolicy.liftAmount(maxSink, frameAodAmount);
+                maxSink *= line.highlightExit.liftActivationAmount();
+                if (maxSink <= CHAR_LIFT_FRAME_EPSILON) {
+                    return;
+                }
+                float ramp = CharLiftGeometry.sinkRamp(
+                        position,
+                        line.timeMillis,
+                        WordLyricRenderConstants.CHAR_LIFT_SINK_IN_MS);
+                if (ramp <= 0f) {
+                    return;
+                }
+                float waveWidth =
+                        textSize * WordLyricRenderConstants.CHAR_LIFT_WAVE_WIDTH_FACTOR;
+                // Before the first word the row is entirely unsung, so the front
+                // sits at the start of the text rather than being absent.
+                float revealFront = activeWord == null
+                        ? 0f
+                        : resolveLineFlowFront(model, line, text, activeWord, wordIndex, position);
+                long lineRevealEndMillis = resolveCharLiftLineRevealEnd(model, line);
+                charLift.flowFront = revealFront
+                        + CharLiftGeometry.finishOvershoot(
+                        position,
+                        lineRevealEndMillis,
+                        WordLyricRenderConstants.CHAR_LIFT_FINISH_MS,
+                        waveWidth);
+                charLift.finishing = position < lineRevealEndMillis
+                        + WordLyricRenderConstants.CHAR_LIFT_FINISH_MS;
+                charLift.flowSegmentStart = flowOffsetBeforeSegment(windowStart);
+                charLift.waveWidth = waveWidth;
+                charLift.maxSink = maxSink;
+                charLift.ramp = ramp;
+                charLift.floorY = charLiftFloorY > 0f ? charLiftFloorY : canvasHeight;
+                charLift.minClearance = minClearance;
+                charLift.lineActive = true;
+            } catch (RuntimeException error) {
+                StructuredBridgeLog.warn(
+                        BridgeDebugArea.RENDERER,
+                        BridgeEvents.CHAR_LIFT_UNAVAILABLE,
+                        "Character lift disabled until the next cache reset: " + error);
+                charLiftUnavailable = true;
+                charLift.reset();
+            }
+        }
+
+        /**
+         * Resolves the endpoint of the reveal that the lift front follows. A
+         * line-timed row has one synthetic whole-row range, but its linear
+         * reveal runs until the display end (normally the next row's start),
+         * rather than until the word-timing fallback would infer.
+         */
+        private long resolveCharLiftLineRevealEnd(WordLyricModel model, WordLine line) {
+            if (line.timingMode == LyricTimingMode.LINE_TIMED) {
+                return resolveLineDisplayEndMillis(model, line);
+            }
+            return WordLyricRenderSupport.wordRevealEndMillis(
+                    model,
+                    line,
+                    line.words.size() - 1);
+        }
+
+        /**
+         * Flow coordinate of the reveal front: the total revealed advance across
+         * the wrapped segments. A segment before the active word reports its
+         * full width, the segment holding the front reports a partial width, and
+         * later segments report zero, so the sum is the front itself and it
+         * stays monotonic across a wrap.
+         */
+        private float resolveLineFlowFront(
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                WordRange activeWord,
+                int wordIndex,
+                long position) {
+            // Sum, never max: a segment after the front reports zero reveal,
+            // and its flow offset alone would otherwise pin the front to the end
+            // of every segment before it (observed on device: the wave parked
+            // at the end of the first wrapped line for the whole line).
+            float front = 0f;
+            for (int i = 0; i < drawLines.size(); i++) {
+                LyricDrawLine candidate = drawLines.get(i);
+                front = CharLiftGeometry.accumulateFlowFront(
+                        front,
+                        resolveWordRevealWidthForSegment(
+                                model,
+                                line,
+                                text,
+                                candidate,
+                                activeWord,
+                                wordIndex,
+                                position,
+                                candidate.width),
+                        candidate.width);
+            }
+            return front;
+        }
+
+        private float flowOffsetBeforeSegment(int windowStart) {
+            float flow = 0f;
+            int limit = Math.max(0, Math.min(windowStart, drawLines.size()));
+            for (int i = 0; i < limit; i++) {
+                flow += drawLines.get(i).width;
+            }
+            return flow;
+        }
+
+        private static float smoothStep(float progress) {
+            float value = Math.max(0f, Math.min(1f, progress));
+            return value * value * (3f - 2f * value);
+        }
+
+        private static float interpolate(float from, float to, float amount) {
+            float clamped = Math.max(0f, Math.min(1f, amount));
+            return from + (to - from) * clamped;
+        }
+
+        private static float smootherStep(float progress) {
+            float value = Math.max(0f, Math.min(1f, progress));
+            return value * value * value * (value * (value * 6f - 15f) + 10f);
+        }
+
+        private void drawCompactLine(
+                Canvas canvas,
+                TextView textView,
+                WordLyricModel model,
+                WordLine line,
+                long position,
+                long glowPosition,
+                boolean activeLine,
+                float focusAmount,
+                float aodLineFillAmount,
+                float availableWidth,
+                float availableHeight) {
+            boolean exitingHighlight = line.highlightExit.isExiting();
+            if (exitingHighlight) {
+                activeLine = true;
+                position = line.highlightExit.renderPosition();
+                glowPosition = position;
+                aodLineFillAmount = rowWakeFillAmount;
+            }
+            float originalSize = inactivePaint.getTextSize();
+            fitSingleLineText(textView, line.text, availableWidth, originalSize, sp(textView.getContext(), 10f));
+            applyFade(1f, focusAmount);
+
+            inactivePaint.getFontMetrics(mainFontMetrics);
+            Paint.FontMetrics metrics = mainFontMetrics;
+            float outerHeight = LyricUiLayoutPolicy.fontOuterHeight(
+                    metrics.top,
+                    metrics.bottom);
+            float y = textView.getPaddingTop()
+                    + Math.max(0f, (availableHeight - outerHeight) / 2f)
+                    - LyricUiLayoutPolicy.outwardFontTop(metrics.top);
+            float compactWidth = inactivePaint.measureText(line.text);
+            float x = resolveTextX(
+                    textView,
+                    line.text,
+                    0,
+                    line.text.length(),
+                    inactivePaint,
+                    compactWidth,
+                    availableWidth);
+
+            int compactSave = canvas.save();
+            try {
+                canvas.clipRect(
+                        textView.getPaddingLeft(),
+                        0f,
+                        textView.getWidth() - textView.getPaddingRight(),
+                        textView.getHeight());
+                boolean timestampHighlight = WordLyricRenderSupport.shouldUseTimestampHighlight(
+                    model,
+                    line);
+            boolean drawProgress = activeLine && !timestampHighlight && shouldDrawWordProgressForVisual(
+                    line,
+                    aodLineFillAmount);
+                if (drawProgress) {
+                    mainProgressAodAmount = aodLineFillAmount;
+                    drawProgressLine(canvas, model, line, position, glowPosition, x, y);
+                } else if (activeLine && timestampHighlight) {
+                    canvas.drawText(line.text, x, y, inactivePaint);
+                    drawProgressGlow(
+                        canvas,
+                        line,
+                        line.text,
+                        0,
+                        line.text.length(),
+                        x,
+                        y,
+                        compactWidth,
+                        compactWidth);
+                    canvas.drawText(line.text, x, y, activePaint);
+                } else {
+                // The active line keeps full-opacity highlight even when it has no word
+                // timing to draw a reveal for. In AOD low frame rate this branch is only
+                // reached once the fill transition completes or for wordless lines, which
+                // preserves the AOD fill behavior.
+                    if (activeLine && rowWakeActivation < 1f) {
+                        int baseColor = inactivePaint.getColor();
+                        inactivePaint.setColor(scaleAlpha(baseColor, 1f - rowWakeActivation));
+                        canvas.drawText(line.text, x, y, inactivePaint);
+                        inactivePaint.setColor(baseColor);
+                    }
+                    canvas.drawText(
+                            line.text,
+                            x,
+                            y,
+                            activeLine ? activePaint : inactivePaint);
+                }
+            } finally {
+                canvas.restoreToCount(compactSave);
+                if (inactivePaint.getTextSize() != originalSize) {
+                    setTextSize(originalSize);
+                }
+            }
+        }
+
+        private void drawProgressLine(
+                Canvas canvas,
+                WordLyricModel model,
+                WordLine line,
+                long position,
+                long glowPosition,
+                float x,
+                float y) {
+            int baseColor = inactivePaint.getColor();
+            float baseAodAmount = mainProgressAodAmount * rowWakeActivation;
+            inactivePaint.setColor(scaleAlpha(baseColor, 1f - baseAodAmount));
+            canvas.drawText(line.text, x, y, inactivePaint);
+            inactivePaint.setColor(baseColor);
+            int wordIndex = line.findWordIndex(position);
+            if (wordIndex < 0 || wordIndex >= line.words.size()) {
+                // Word-timed intro: keep the inactive base until the first word
+                // actually starts. Filling the whole line here made karaoke snap
+                // backwards from a full highlight to word 0.
+                if (line.timingMode != LyricTimingMode.WORD_TIMED) {
+                    canvas.drawText(line.text, x, y, activePaint);
+                } else {
+                    drawRevealedText(canvas, line.text, 0, line.text.length(), x, y,
+                            inactivePaint.measureText(line.text), 0f);
+                }
+                return;
+            }
+            WordRange activeWord = line.words.get(wordIndex);
+            float revealWidth = inactivePaint.measureText(line.text, 0, Math.max(0, Math.min(activeWord.start, line.text.length())));
+            int start = Math.max(0, Math.min(activeWord.start, line.text.length()));
+            int end = Math.max(start, Math.min(activeWord.end, line.text.length()));
+            revealWidth += inactivePaint.measureText(line.text, start, end)
+                    * resolveWordRevealProgress(model, line, wordIndex, position);
+            float segmentWidth = inactivePaint.measureText(line.text);
+            float glowRevealWidth = revealWidth;
+            if (glowPosition != position) {
+                int glowWordIndex = line.findWordIndex(glowPosition);
+                if (glowWordIndex >= 0 && glowWordIndex < line.words.size()) {
+                    WordRange glowWord = line.words.get(glowWordIndex);
+                    int glowStart = Math.max(0, Math.min(glowWord.start, line.text.length()));
+                    int glowEnd = Math.max(glowStart, Math.min(glowWord.end, line.text.length()));
+                    glowRevealWidth = inactivePaint.measureText(line.text, 0, glowStart)
+                            + inactivePaint.measureText(line.text, glowStart, glowEnd)
+                            * resolveWordRevealProgress(model, line, glowWordIndex, glowPosition);
+                } else {
+                    glowRevealWidth = 0f;
+                }
+            }
+            drawProgressGlow(
+                    canvas,
+                    line,
+                    line.text,
+                    0,
+                    line.text.length(),
+                    x,
+                    y,
+                    segmentWidth,
+                    glowRevealWidth);
+            drawRevealedText(
+                    canvas,
+                    line.text,
+                    0,
+                    line.text.length(),
+                    x,
+                    y,
+                    segmentWidth,
+                    revealWidth);
+        }
+
+        private void fitSingleLineText(TextView textView, String text, float availableWidth, float originalSize, float minimumSize) {
+            float width = inactivePaint.measureText(text);
+            if (width > availableWidth) {
+                float fitted = Math.max(minimumSize, originalSize * availableWidth / Math.max(1f, width));
+                inactivePaint.setTextSize(fitted);
+                playedPaint.setTextSize(fitted);
+                activePaint.setTextSize(fitted);
+                activeGlowPaint.setTextSize(fitted);
+                activeFeatherPaint.setTextSize(fitted);
+                translationPaint.setTextSize(fitted * 0.70f);
+            }
+        }
+
+        private void drawSegment(
+                Canvas canvas,
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                LyricDrawLine drawLine,
+                WordRange activeWord,
+                int wordIndex,
+                WordRange glowActiveWord,
+                int glowWordIndex,
+                float x,
+                float y,
+                long position,
+                long glowPosition,
+                boolean activeLine,
+                boolean drawProgress,
+                float fullLineOverlayAmount) {
+            boolean timestampHighlight = activeLine
+                    && !drawProgress
+                    && WordLyricRenderSupport.shouldUseTimestampHighlight(model, line);
+            TextPaint basePaint = timestampHighlight
+                    ? inactivePaint
+                    : activeLine && !drawProgress && !line.highlightExit.isExiting()
+                            && rowWakeActivation >= 1f
+                    ? activePaint : inactivePaint;
+            float segmentWidth = drawLine.width;
+            float revealWidth = drawProgress && activeWord != null
+                    ? resolveWordRevealWidthForSegment(
+                    model,
+                    line,
+                    text,
+                    drawLine,
+                    activeWord,
+                    wordIndex,
+                    position,
+                    segmentWidth)
+                    : 0f;
+            boolean lifted = charLift.lineActive
+                    && prepareCharLiftZone(line, text, drawLine, x, segmentWidth);
+            int baseColor = basePaint.getColor();
+            float baseAodAmount = fullLineOverlayAmount * rowWakeActivation;
+            if (drawProgress) basePaint.setColor(scaleAlpha(baseColor, 1f - baseAodAmount));
+            boolean fadingPlainActive = activeLine && !drawProgress && !timestampHighlight
+                    && (rowWakeActivation < 1f || line.highlightExit.isExiting());
+            if (fadingPlainActive) basePaint.setColor(scaleAlpha(baseColor, 1f - rowWakeActivation));
+            if (lifted) {
+                drawTextOutsideCharLiftZone(canvas, text, drawLine, x, y, basePaint);
+                drawLiftedGraphemes(
+                        canvas,
+                        text,
+                        drawLine,
+                        x,
+                        y,
+                        basePaint,
+                        segmentWidth,
+                        revealWidth,
+                        false);
+            } else {
+                canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
+            }
+            basePaint.setColor(baseColor);
+            if (!drawProgress) {
+                if (timestampHighlight) {
+                    drawProgressGlow(
+                            canvas,
+                            line,
+                            text,
+                            drawLine.start,
+                            drawLine.end,
+                            x,
+                            y,
+                            drawLine.width,
+                            drawLine.width);
+                    canvas.drawText(
+                            text,
+                            drawLine.start,
+                            drawLine.end,
+                            x,
+                            y,
+                            activePaint);
+                } else if (line.highlightExit.isExiting() || fadingPlainActive) {
+                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, activePaint);
+                }
+                return;
+            }
+
+            if (activeWord == null) {
+                if (activeLine && line.timingMode != LyricTimingMode.WORD_TIMED) {
+                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, activePaint);
+                } else if (fullLineOverlayAmount > 0f) {
+                    if (lifted) {
+                        drawRevealedTextOutsideCharLiftZone(canvas, text, drawLine, x, y, segmentWidth, 0f);
+                        drawLiftedGraphemes(canvas, text, drawLine, x, y, basePaint, segmentWidth, 0f, true);
+                    } else {
+                        drawRevealedText(canvas, text, drawLine.start, drawLine.end, x, y, segmentWidth, 0f);
+                    }
+                }
+                return;
+            }
+
+            float glowRevealWidth = revealWidth;
+            if (glowPosition != position) {
+                glowRevealWidth = resolveWordRevealWidthForSegment(
+                        model,
+                        line,
+                        text,
+                        drawLine,
+                        glowActiveWord,
+                        glowWordIndex,
+                        glowPosition,
+                        segmentWidth);
+            }
+            if (glowRevealWidth > 0f) {
+                drawProgressGlow(
+                        canvas,
+                        line,
+                        text,
+                        drawLine.start,
+                        drawLine.end,
+                        x,
+                        y,
+                        segmentWidth,
+                        glowRevealWidth);
+            }
+            if (revealWidth > 0f || fullLineOverlayAmount > 0f) {
+                if (lifted) {
+                    drawRevealedTextOutsideCharLiftZone(
+                            canvas,
+                            text,
+                            drawLine,
+                            x,
+                            y,
+                            segmentWidth,
+                            revealWidth);
+                    drawLiftedGraphemes(
+                            canvas,
+                            text,
+                            drawLine,
+                            x,
+                            y,
+                            basePaint,
+                            segmentWidth,
+                            revealWidth,
+                            true);
+                } else {
+                    drawRevealedText(
+                            canvas,
+                            text,
+                            drawLine.start,
+                            drawLine.end,
+                            x,
+                            y,
+                            segmentWidth,
+                            revealWidth);
+                }
+            }
+        }
+
+        /**
+         * Revealed width of {@code drawLine} for one word, including the cheap
+         * fully-before / fully-after answers. Shared by the draw path and by
+         * {@link #resolveLineFlowFront} so the lift and the clip reveal can
+         * never disagree about where the front is.
+         */
+        private float resolveWordRevealWidthForSegment(
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                LyricDrawLine drawLine,
+                WordRange word,
+                int wordIndex,
+                long position,
+                float segmentWidth) {
+            if (word == null) {
+                return 0f;
+            }
+            if (drawLine.end <= word.start) {
+                return segmentWidth;
+            }
+            if (drawLine.start >= word.end) {
+                return 0f;
+            }
+            return resolveSegmentRevealWidth(
+                    model,
+                    line,
+                    text,
+                    drawLine,
+                    word,
+                    wordIndex,
+                    position);
+        }
+
+        /**
+         * Splits this segment into the sung head, the transition the wave is
+         * crossing, and the unsung tail, in canvas x. Returns false when the
+         * whole segment is already sung, in which case the caller keeps the
+         * untouched whole-segment draw — which is also what makes a settled row
+         * pixel-identical to the effect being off.
+         */
+        private boolean prepareCharLiftZone(
+                WordLine line,
+                String text,
+                LyricDrawLine drawLine,
+                float x,
+                float segmentWidth) {
+            if (segmentWidth <= 0f || drawLine.start >= drawLine.end) {
+                return false;
+            }
+            try {
+                float flowSegmentStart = charLift.flowSegmentStart;
+                float flowSegmentEnd = flowSegmentStart + segmentWidth;
+                float zoneStart = CharLiftGeometry.waveZoneStart(
+                        charLift.flowFront,
+                        charLift.waveWidth,
+                        flowSegmentStart,
+                        flowSegmentEnd);
+                float zoneEnd = CharLiftGeometry.waveZoneEnd(
+                        charLift.flowFront,
+                        charLift.waveWidth,
+                        flowSegmentStart,
+                        flowSegmentEnd);
+                charLift.segmentLeft = x;
+                charLift.segmentRight = x + segmentWidth;
+                charLift.prefixWidths = null;
+                charLift.firstGrapheme = 0;
+                charLift.lastGrapheme = 0;
+                if (zoneEnd <= zoneStart) {
+                    // No transition here: the segment is entirely sung or
+                    // entirely unsung. Only the latter still needs drawing work.
+                    float edge = x + (zoneEnd - flowSegmentStart);
+                    charLift.zoneLeft = edge;
+                    charLift.zoneRight = edge;
+                    return charLift.hasTail();
+                }
+                float[] prefixWidths = resolveGraphemePrefixWidths(line, text, drawLine);
+                if (prefixWidths == null || prefixWidths.length < 2) {
+                    return false;
+                }
+                float localStart = zoneStart - flowSegmentStart;
+                float localEnd = zoneEnd - flowSegmentStart;
+                int first = -1;
+                int last = -1;
+                for (int i = 0; i + 1 < prefixWidths.length; i++) {
+                    if (prefixWidths[i + 1] <= localStart) {
+                        continue;
+                    }
+                    if (prefixWidths[i] >= localEnd) {
+                        break;
+                    }
+                    if (first < 0) {
+                        first = i;
+                    }
+                    last = i + 1;
+                }
+                if (first < 0 || last <= first) {
+                    return false;
+                }
+                charLift.prefixWidths = prefixWidths;
+                charLift.firstGrapheme = first;
+                charLift.lastGrapheme = last;
+                charLift.zoneLeft = x + prefixWidths[first];
+                charLift.zoneRight = x + prefixWidths[last];
+                return true;
+            } catch (RuntimeException error) {
+                StructuredBridgeLog.warn(
+                        BridgeDebugArea.RENDERER,
+                        BridgeEvents.CHAR_LIFT_UNAVAILABLE,
+                        "Character lift disabled until the next cache reset: " + error);
+                charLiftUnavailable = true;
+                return false;
+            }
+        }
+
+        /** Sink shared by every grapheme past the wave, clamped to the floor. */
+        private float resolveTailSink(float y) {
+            return CharLiftGeometry.clampSink(
+                    charLift.maxSink * charLift.ramp,
+                    y + inactivePaint.descent(),
+                    charLift.floorY,
+                    charLift.minClearance);
+        }
+
+        /**
+         * Draws the sung head at the normal baseline and the unsung tail
+         * uniformly sunk. The tail is one clipped draw rather than a per-grapheme
+         * walk: past the wave every grapheme carries the same displacement.
+         */
+        private void drawTextOutsideCharLiftZone(
+                Canvas canvas,
+                String text,
+                LyricDrawLine drawLine,
+                float x,
+                float y,
+                TextPaint paint) {
+            float canvasWidth = canvas.getWidth();
+            float canvasHeight = canvas.getHeight();
+            if (charLift.hasHead()) {
+                int save = canvas.save();
+                try {
+                    canvas.clipRect(0f, 0f, charLift.zoneLeft, canvasHeight);
+                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, paint);
+                } finally {
+                    canvas.restoreToCount(save);
+                }
+            }
+            if (charLift.hasTail()) {
+                float sink = resolveTailSink(y);
+                int save = canvas.save();
+                try {
+                    canvas.clipRect(charLift.zoneRight, 0f, canvasWidth, canvasHeight);
+                    if (sink > 0f) {
+                        canvas.translate(0f, sink);
+                    }
+                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, paint);
+                } finally {
+                    canvas.restoreToCount(save);
+                }
+            }
+        }
+
+        /**
+         * The revealed layer only ever reaches the sung head: the reveal front is
+         * the centre of the wave, so nothing past the wave has been revealed.
+         */
+        private void drawRevealedTextOutsideCharLiftZone(
+                Canvas canvas,
+                String text,
+                LyricDrawLine drawLine,
+                float x,
+                float y,
+                float segmentWidth,
+                float revealWidth) {
+            // During wake the unsung tail also carries fading full-line ink. It
+            // must follow the very same displacement as its inactive base.
+            if (mainProgressAodAmount > 0f && charLift.hasTail()) {
+                int tailSave = canvas.save();
+                try {
+                    canvas.clipRect(charLift.zoneRight, 0f, canvas.getWidth(), canvas.getHeight());
+                    canvas.translate(0f, resolveTailSink(y));
+                    drawRevealedText(canvas, text, drawLine.start, drawLine.end,
+                            x, y, segmentWidth, revealWidth);
+                } finally {
+                    canvas.restoreToCount(tailSave);
+                }
+            }
+            if (!charLift.hasHead()) return;
+            int save = canvas.save();
+            try {
+                canvas.clipRect(0f, 0f, charLift.zoneLeft, canvas.getHeight());
+                drawRevealedText(
+                        canvas,
+                        text,
+                        drawLine.start,
+                        drawLine.end,
+                        x,
+                        y,
+                        segmentWidth,
+                        revealWidth);
+            } finally {
+                canvas.restoreToCount(save);
+            }
+        }
+
+        /**
+         * Repaints the transition one grapheme at a time. Every pass draws the
+         * whole segment string at its original x and lets the clip box select
+         * one grapheme, so shaping and kerning stay identical to the whole
+         * segment draw and the glyph is only displaced.
+         *
+         * <p>The clip boxes tile exactly, without the bleed the plan first
+         * proposed: overlapping boxes would blend the same partly transparent
+         * ink twice and darken the seam, which is worse than the hairline it
+         * would hide.
+         *
+         * <p>{@code revealedLayer} selects the layer being repainted. Base and
+         * revealed text are two separate passes so the progress glow keeps its
+         * original place between them.
+         */
+        private void drawLiftedGraphemes(
+                Canvas canvas,
+                String text,
+                LyricDrawLine drawLine,
+                float x,
+                float y,
+                TextPaint basePaint,
+                float segmentWidth,
+                float revealWidth,
+                boolean revealedLayer) {
+            float canvasHeight = canvas.getHeight();
+            float glyphBottomY = y + inactivePaint.descent();
+            float[] prefixWidths = charLift.prefixWidths;
+            if (prefixWidths == null) {
+                return;
+            }
+            try {
+                for (int i = charLift.firstGrapheme; i < charLift.lastGrapheme; i++) {
+                    float left = x + prefixWidths[i];
+                    float right = x + prefixWidths[i + 1];
+                    if (right <= left) {
+                        continue;
+                    }
+                    float flowCenter = charLift.flowSegmentStart
+                            + (prefixWidths[i] + prefixWidths[i + 1]) * 0.5f;
+                    float sink = CharLiftGeometry.clampSink(
+                            CharLiftGeometry.sinkFor(
+                                    charLift.flowFront,
+                                    flowCenter,
+                                    charLift.waveWidth,
+                                    charLift.maxSink,
+                                    charLift.ramp),
+                            glyphBottomY,
+                            charLift.floorY,
+                            charLift.minClearance);
+                    int save = canvas.save();
+                    try {
+                        canvas.clipRect(left, 0f, right, canvasHeight);
+                        if (sink > 0f) {
+                            canvas.translate(0f, sink);
+                            // Mid-transition only: defeat Skia's whole-pixel
+                            // baseline snapping so a slow rise (held note) is
+                            // continuous instead of one-pixel steps. Fully sunk
+                            // graphemes are static and keep the crisp path.
+                            if (sink < charLift.maxSink * charLift.ramp - CHAR_LIFT_FRAME_EPSILON) {
+                                canvas.rotate(
+                                        WordLyricRenderConstants.CHAR_LIFT_SUBPIXEL_TILT_DEGREES,
+                                        left,
+                                        y);
+                            }
+                        }
+                        if (revealedLayer) {
+                            drawRevealedText(
+                                    canvas,
+                                    text,
+                                    drawLine.start,
+                                    drawLine.end,
+                                    x,
+                                    y,
+                                    segmentWidth,
+                                    revealWidth);
+                        } else {
+                            canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
+                        }
+                    } finally {
+                        canvas.restoreToCount(save);
+                    }
+                }
+            } catch (RuntimeException error) {
+                // Never let this reach the coordinator: one draw error there
+                // blacklists the binding and drops the row back to native
+                // rendering permanently. Repaint the layer whole so the frame
+                // stays complete, and stop lifting until the next cache reset.
+                StructuredBridgeLog.warn(
+                        BridgeDebugArea.RENDERER,
+                        BridgeEvents.CHAR_LIFT_UNAVAILABLE,
+                        "Character lift disabled until the next cache reset: " + error);
+                charLiftUnavailable = true;
+                int save = canvas.save();
+                try {
+                    if (revealedLayer) {
+                        drawRevealedText(
+                                canvas,
+                                text,
+                                drawLine.start,
+                                drawLine.end,
+                                x,
+                                y,
+                                segmentWidth,
+                                revealWidth);
+                    } else {
+                        canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
+                    }
+                } finally {
+                    canvas.restoreToCount(save);
+                }
+            }
+        }
+
+        /**
+         * Advance width from {@code drawLine.start} to every grapheme boundary
+         * in the segment, measured with the same paint the reveal width uses.
+         * Cached per segment: the boundary walk and the prefix measurements are
+         * far too expensive to repeat every frame.
+         */
+        private float[] resolveGraphemePrefixWidths(
+                WordLine line,
+                String text,
+                LyricDrawLine drawLine) {
+            if (line == null || TextUtils.isEmpty(text) || drawLine.start >= drawLine.end) {
+                return null;
+            }
+            int textSizeKey = Math.max(1, Math.round(inactivePaint.getTextSize() * 10f));
+            Typeface typeface = inactivePaint.getTypeface();
+            GraphemeLayoutCache target = null;
+            for (GraphemeLayoutCache cache : graphemeLayoutCaches) {
+                if (cache.matches(
+                        line, text, drawLine.start, drawLine.end, textSizeKey, typeface)) {
+                    cache.lastUsed = ++graphemeCacheUseCounter;
+                    return cache.prefixWidths;
+                }
+                if (target == null || cache.lastUsed < target.lastUsed) {
+                    target = cache;
+                }
+            }
+            if (target == null) {
+                return null;
+            }
+            int[] boundaries = CharLiftGeometry.graphemeBoundaries(
+                    text, drawLine.start, drawLine.end);
+            if (boundaries.length < 2) {
+                return null;
+            }
+            float[] prefixWidths = new float[boundaries.length];
+            for (int i = 1; i < boundaries.length; i++) {
+                prefixWidths[i] = inactivePaint.measureText(text, drawLine.start, boundaries[i]);
+            }
+            target.line = line;
+            target.text = text;
+            target.start = drawLine.start;
+            target.end = drawLine.end;
+            target.textSizeKey = textSizeKey;
+            target.typeface = typeface;
+            target.prefixWidths = prefixWidths;
+            target.lastUsed = ++graphemeCacheUseCounter;
+            return prefixWidths;
+        }
+
+        private float resolveSegmentRevealWidth(
+                WordLyricModel model,
+                WordLine line,
+                String text,
+                LyricDrawLine drawLine,
+                WordRange activeWord,
+                int wordIndex,
+                long position) {
+            int activeStart = Math.max(0, Math.min(activeWord.start, text.length()));
+            int activeEnd = Math.max(activeStart, Math.min(activeWord.end, text.length()));
+            int segmentActiveStart = Math.max(drawLine.start, activeStart);
+            int segmentActiveEnd = Math.min(drawLine.end, activeEnd);
+            if (segmentActiveStart >= segmentActiveEnd) {
+                return drawLine.end <= activeStart
+                        ? inactivePaint.measureText(text, drawLine.start, drawLine.end)
+                        : 0f;
+            }
+
+            float activeWidth = inactivePaint.measureText(text, segmentActiveStart, segmentActiveEnd);
+            float beforeActiveInSegment = inactivePaint.measureText(
+                    text,
+                    drawLine.start,
+                    segmentActiveStart);
+
+            if (activeStart >= drawLine.start && activeEnd <= drawLine.end) {
+                return beforeActiveInSegment
+                        + activeWidth * resolveWordRevealProgress(model, line, wordIndex, position);
+            }
+
+            float totalActiveWidth = 0f;
+            float activeWidthBeforeSegment = 0f;
+            for (LyricDrawLine candidate : drawLines) {
+                int start = Math.max(candidate.start, activeStart);
+                int end = Math.min(candidate.end, activeEnd);
+                if (start >= end) {
+                    continue;
+                }
+                float width = inactivePaint.measureText(text, start, end);
+                if (candidate.end <= drawLine.start) {
+                    activeWidthBeforeSegment += width;
+                }
+                totalActiveWidth += width;
+            }
+            if (totalActiveWidth <= 0f) {
+                return 0f;
+            }
+
+            float revealedActiveWidth =
+                    totalActiveWidth * resolveWordRevealProgress(model, line, wordIndex, position);
+            float revealedInsideSegment = Math.max(
+                    0f,
+                    Math.min(activeWidth, revealedActiveWidth - activeWidthBeforeSegment));
+            return beforeActiveInSegment + revealedInsideSegment;
+        }
+
+        private float resolveWordRevealProgress(
+                WordLyricModel model,
+                WordLine line,
+                int wordIndex,
+                long position) {
+            if (line == null) {
+                return 0f;
+            }
+            if (line.timingMode == LyricTimingMode.LINE_TIMED && lineTimedProgressEnabled) {
+                return resolveLineElapsedProgress(model, line, position);
+            }
+            return WordLyricRenderSupport.wordRevealProgress(model, line, wordIndex, position);
+        }
+
+        private void drawProgressGlow(
+                Canvas canvas,
+                WordLine line,
+                String text,
+                int start,
+                int end,
+                float x,
+                float y,
+                float segmentWidth,
+                float revealWidth) {
+            drawProgressGlow(
+                    canvas,
+                    line,
+                    text,
+                    start,
+                    end,
+                    x,
+                    y,
+                    segmentWidth,
+                    revealWidth,
+                    activePaint);
+        }
+
+        private void drawProgressGlow(
+                Canvas canvas,
+                WordLine line,
+                String text,
+                int start,
+                int end,
+                float x,
+                float y,
+                float segmentWidth,
+                float revealWidth,
+                TextPaint progressPaint) {
+            if (TextUtils.isEmpty(text) || start >= end || segmentWidth <= 0f || revealWidth <= 0f) {
+                return;
+            }
+
+            float visibleWidth = Math.max(0f, Math.min(segmentWidth, revealWidth));
+            if (visibleWidth <= 0f) {
+                return;
+            }
+
+            float segmentLeft = x;
+            float segmentRight = x + segmentWidth;
+            float revealRight = x + visibleWidth;
+            float glowPad = Math.max(1f, progressPaint.getTextSize() * 0.22f);
+            boolean fullyVisible = visibleWidth >= segmentWidth - 0.5f;
+            int paintAlpha = (progressPaint.getColor() >>> 24) & 0xFF;
+            if (progressPaint == activePaint) {
+                paintAlpha = Math.round(paintAlpha * (1f - mainProgressAodAmount));
+            }
+            if (paintAlpha <= 0) return;
+
+            GlowSegmentCache glowCache = obtainGlowSegmentCache(
+                    line,
+                    text,
+                    start,
+                    end,
+                    segmentWidth,
+                    glowPad,
+                    progressPaint);
+            if (glowCache == null || glowCache.bitmap == null) {
+                return;
+            }
+            float bitmapLeft = x - glowCache.padding;
+            float bitmapTop = y - glowCache.baseline;
+            if (fullyVisible) {
+                drawGlowBitmapBand(
+                        canvas,
+                        glowCache,
+                        bitmapLeft,
+                        bitmapTop,
+                        segmentLeft - glowPad,
+                        segmentRight + glowPad,
+                        paintAlpha);
+                return;
+            }
+
+            // Keep the bloom a little behind and in front of the actual reveal point. The
+            // foreground text uses the same wide, soft transition, so this reads as one wet
+            // highlight instead of two independently moving vertical edges.
+            float featherWidth = Math.max(
+                    6f,
+                    progressPaint.getTextSize() * GLOW_FEATHER_WIDTH_FACTOR);
+            float featherStart = Math.max(
+                    segmentLeft - glowPad,
+                    revealRight - featherWidth * 0.58f);
+            float featherEnd = Math.min(
+                    segmentRight + glowPad,
+                    revealRight + featherWidth * 0.78f);
+            if (featherStart > segmentLeft - glowPad) {
+                drawGlowBitmapBand(
+                        canvas,
+                        glowCache,
+                        bitmapLeft,
+                        bitmapTop,
+                        segmentLeft - glowPad,
+                        featherStart,
+                        paintAlpha);
+            }
+            if (canvas.isHardwareAccelerated()) {
+                drawContinuousGlowFeather(
+                        canvas,
+                        glowCache,
+                        bitmapLeft,
+                        bitmapTop,
+                        featherStart,
+                        featherEnd,
+                        paintAlpha);
+            } else {
+                // Software canvases cannot reliably compose DST_IN through a saveLayer. Keep a
+                // denser, eased fallback so they retain the same visual intent without seams.
+                drawSoftwareGlowFeather(
+                        canvas,
+                        glowCache,
+                        bitmapLeft,
+                        bitmapTop,
+                        featherStart,
+                        featherEnd,
+                        paintAlpha);
+            }
+            glowBitmapPaint.setAlpha(255);
+        }
+
+        private void drawContinuousGlowFeather(
+                Canvas canvas,
+                GlowSegmentCache glowCache,
+                float bitmapLeft,
+                float bitmapTop,
+                float featherStart,
+                float featherEnd,
+                int paintAlpha) {
+            if (featherEnd <= featherStart || paintAlpha <= 0) {
+                return;
+            }
+            int layerSave = canvas.saveLayer(
+                    featherStart,
+                    0f,
+                    featherEnd,
+                    canvas.getHeight(),
+                    null);
+            try {
+                drawGlowBitmapBand(
+                        canvas,
+                        glowCache,
+                        bitmapLeft,
+                        bitmapTop,
+                        featherStart,
+                        featherEnd,
+                        paintAlpha);
+                float featherSpan = Math.max(1f, featherEnd - featherStart);
+                glowFeatherMaskShaderMatrix.setScale(featherSpan, 1f);
+                glowFeatherMaskShaderMatrix.postTranslate(featherStart, 0f);
+                glowFeatherMaskShader.setLocalMatrix(glowFeatherMaskShaderMatrix);
+                glowFeatherMaskPaint.setShader(glowFeatherMaskShader);
+                glowFeatherMaskPaint.setXfermode(glowFeatherMaskXfermode);
+                canvas.drawRect(
+                        featherStart,
+                        0f,
+                        featherEnd,
+                        canvas.getHeight(),
+                        glowFeatherMaskPaint);
+            } finally {
+                glowFeatherMaskPaint.setXfermode(null);
+                glowFeatherMaskPaint.setShader(null);
+                canvas.restoreToCount(layerSave);
+            }
+        }
+
+        private void drawSoftwareGlowFeather(
+                Canvas canvas,
+                GlowSegmentCache glowCache,
+                float bitmapLeft,
+                float bitmapTop,
+                float featherStart,
+                float featherEnd,
+                int paintAlpha) {
+            for (int band = 0; band < SOFTWARE_GLOW_FEATHER_BANDS; band++) {
+                float startAmount = band / (float) SOFTWARE_GLOW_FEATHER_BANDS;
+                float endAmount = (band + 1f) / SOFTWARE_GLOW_FEATHER_BANDS;
+                float bandLeft = featherStart
+                        + (featherEnd - featherStart) * startAmount;
+                float bandRight = featherStart
+                        + (featherEnd - featherStart) * endAmount;
+                float alphaAmount = 1f - smootherStep(
+                        (band + 0.5f) / SOFTWARE_GLOW_FEATHER_BANDS);
+                drawGlowBitmapBand(
+                        canvas,
+                        glowCache,
+                        bitmapLeft,
+                        bitmapTop,
+                        bandLeft,
+                        bandRight,
+                        Math.round(paintAlpha * alphaAmount));
+            }
+        }
+
+        private void drawGlowBitmapBand(
+                Canvas canvas,
+                GlowSegmentCache glowCache,
+                float bitmapLeft,
+                float bitmapTop,
+                float clipLeft,
+                float clipRight,
+                int alpha) {
+            if (canvas == null
+                    || glowCache == null
+                    || glowCache.bitmap == null
+                    || clipRight <= clipLeft
+                    || alpha <= 0) {
+                return;
+            }
+            glowBitmapPaint.setAlpha(Math.max(0, Math.min(255, alpha)));
+            int save = canvas.save();
+            try {
+                canvas.clipRect(clipLeft, 0f, clipRight, canvas.getHeight());
+                canvas.drawBitmap(glowCache.bitmap, bitmapLeft, bitmapTop, glowBitmapPaint);
+            } finally {
+                canvas.restoreToCount(save);
+            }
+        }
+
+        private GlowSegmentCache obtainGlowSegmentCache(
+                WordLine line,
+                String text,
+                int start,
+                int end,
+                float segmentWidth,
+                float glowPad,
+                TextPaint progressPaint) {
+            if (line == null || TextUtils.isEmpty(text) || start >= end) {
+                return null;
+            }
+            int textSizeKey = Math.max(1, Math.round(progressPaint.getTextSize() * 10f));
+            int widthKey = Math.max(1, Math.round(segmentWidth));
+            Typeface typeface = progressPaint.getTypeface();
+            GlowSegmentCache target = null;
+            for (GlowSegmentCache cache : glowSegmentCaches) {
+                if (cache.matches(line, text, start, end, textSizeKey, widthKey, typeface)) {
+                    cache.lastUsed = ++glowCacheUseCounter;
+                    return cache;
+                }
+                if (target == null || cache.lastUsed < target.lastUsed) {
+                    target = cache;
+                }
+            }
+            if (target == null) {
+                return null;
+            }
+
+            if (!uiConfig.glowEnabled || uiConfig.glowIntensityPercent <= 0) {
+                return null;
+            }
+            float glowRadius = Math.max(
+                    2f,
+                    progressPaint.getTextSize()
+                            * uiConfig.glowRadiusPercent
+                            / 100f
+                            * SETTLED_GLOW_RADIUS_FACTOR);
+            int radiusKey = Math.max(1, Math.round(glowRadius * 10f));
+            if (glowMaskFilter == null || glowMaskRadiusKey != radiusKey) {
+                glowMaskFilter = new BlurMaskFilter(glowRadius, BlurMaskFilter.Blur.NORMAL);
+                glowMaskRadiusKey = radiusKey;
+            }
+            int padding = Math.max(2, (int) Math.ceil(Math.max(glowPad, glowRadius * 2.2f)));
+            glowRasterPaint.setTypeface(typeface);
+            glowRasterPaint.setTextSize(progressPaint.getTextSize());
+            glowRasterPaint.setStyle(Paint.Style.FILL);
+            glowRasterPaint.clearShadowLayer();
+            glowRasterPaint.setShader(null);
+            glowRasterPaint.setColorFilter(null);
+            glowRasterPaint.getFontMetrics(glowFontMetrics);
+            float baseline = padding
+                    - LyricUiLayoutPolicy.outwardFontTop(glowFontMetrics.top);
+            int requiredWidth = Math.max(1, (int) Math.ceil(segmentWidth) + padding * 2 + 2);
+            int requiredHeight = Math.max(
+                    1,
+                    (int) LyricUiLayoutPolicy.fontOuterHeight(
+                            glowFontMetrics.top,
+                            glowFontMetrics.bottom)
+                            + padding * 2
+                            + 2);
+            target.ensureBitmap(requiredWidth, requiredHeight);
+            if (target.bitmap == null || target.canvas == null) {
+                return null;
+            }
+            target.bitmap.eraseColor(0);
+            int rasterSave = target.canvas.save();
+            try {
+                target.canvas.clipRect(0, 0, requiredWidth, requiredHeight);
+                glowRasterPaint.setColor(scaleAlpha(
+                        palette.glowShadow,
+                        SETTLED_GLOW_ALPHA_FACTOR));
+                glowRasterPaint.setMaskFilter(glowMaskFilter);
+                target.canvas.drawText(text, start, end, padding, baseline, glowRasterPaint);
+            } finally {
+                glowRasterPaint.setMaskFilter(null);
+                target.canvas.restoreToCount(rasterSave);
+            }
+            // The opaque active glyph is drawn immediately after this cached bloom. Do not add
+            // a second unblurred fill underneath it: its anti-aliased edge is what made the
+            // settled highlight look like it had a visible outline.
+
+            target.line = line;
+            target.text = text;
+            target.start = start;
+            target.end = end;
+            target.textSizeKey = textSizeKey;
+            target.widthKey = widthKey;
+            target.typeface = typeface;
+            target.padding = padding;
+            target.baseline = baseline;
+            target.lastUsed = ++glowCacheUseCounter;
+            return target;
+        }
+
+        void clearGlowCache() {
+            MAIN_ROW_GEOMETRY.clear();
+            for (GlowSegmentCache cache : glowSegmentCaches) {
+                cache.clear();
+            }
+            for (GraphemeLayoutCache cache : graphemeLayoutCaches) {
+                cache.clear();
+            }
+            charLift.reset();
+            charLiftUnavailable = false;
+            clearRenderableTranslationCache();
+        }
+
+        private void drawRevealedText(
+                Canvas canvas,
+                String text,
+                int start,
+                int end,
+                float x,
+                float y,
+                float segmentWidth,
+                float revealWidth) {
+            if (mainProgressAodAmount > 0f) {
+                drawWakeBlendedHighlight(canvas, text, start, end, x, y, segmentWidth, revealWidth);
+                return;
+            }
+            drawRevealedText(
+                    canvas,
+                    text,
+                    start,
+                    end,
+                    x,
+                    y,
+                    segmentWidth,
+                    revealWidth,
+                    activePaint,
+                    activeFeatherPaint);
+        }
+
+        private void drawWakeBlendedHighlight(Canvas canvas, String text, int start, int end,
+                float x, float y, float width, float reveal) {
+            if (TextUtils.isEmpty(text) || start >= end || width <= 0f) return;
+            float amount = mainProgressAodAmount;
+            int originalColor = activePaint.getColor();
+            if (amount >= 1f || reveal >= width - 0.5f) {
+                canvas.drawText(text, start, end, x, y, activePaint);
+                return;
+            }
+            if (reveal <= 0f) {
+                activePaint.setColor(scaleAlpha(originalColor, amount));
+            } else {
+                // One highlighter mask, rather than two overlapping active layers:
+                // sung ink stays bright, while unsung ink fades to its normal base.
+                if (wakeHighlightShader == null || wakeShaderX != x || wakeShaderWidth != width
+                        || wakeShaderReveal != reveal || wakeShaderAmount != amount
+                        || wakeShaderColor != originalColor) {
+                    float feather = Math.max(1f, activePaint.getTextSize() * ACTIVE_FEATHER_WIDTH_FACTOR);
+                    float from = Math.max(x, x + reveal - feather * 0.65f);
+                    float to = Math.max(from + 0.01f, Math.min(x + width, x + reveal + feather * 0.85f));
+                    int[] colors = new int[palette.activeFeatherColors.length];
+                    for (int i = 0; i < colors.length; i++) {
+                        float wordMask = ((palette.activeFeatherColors[i] >>> 24) & 0xff) / 255f;
+                        int alpha = Math.round(255f * LyricWakeTransitionPolicy.highlightAmount(wordMask, amount));
+                        colors[i] = (originalColor & 0x00ffffff) | (alpha << 24);
+                    }
+                    wakeHighlightShader = new LinearGradient(from, 0f, to, 0f, colors,
+                            new float[]{0f, 0.13f, 0.32f, 0.55f, 0.76f, 0.92f, 1f}, Shader.TileMode.CLAMP);
+                    wakeShaderX = x;
+                    wakeShaderWidth = width;
+                    wakeShaderReveal = reveal;
+                    wakeShaderAmount = amount;
+                    wakeShaderColor = originalColor;
+                }
+                activePaint.setShader(wakeHighlightShader);
+            }
+            try {
+                canvas.drawText(text, start, end, x, y, activePaint);
+            } finally {
+                activePaint.setShader(null);
+                activePaint.setColor(originalColor);
+            }
+        }
+
+        private LinearGradient resolveActiveFeatherShader() {
+            String primaryColor = uiConfig.primaryColor;
+            if (activeFeatherShader == null
+                    || !primaryColor.equals(activeFeatherPrimaryColor)) {
+                activeFeatherShader = new LinearGradient(
+                        0f,
+                        0f,
+                        1f,
+                        0f,
+                        palette.activeFeatherColors,
+                        new float[]{0f, 0.13f, 0.32f, 0.55f, 0.76f, 0.92f, 1f},
+                        Shader.TileMode.CLAMP);
+                activeFeatherPrimaryColor = primaryColor;
+            }
+            return activeFeatherShader;
+        }
+
+        private void drawRevealedText(
+                Canvas canvas,
+                String text,
+                int start,
+                int end,
+                float x,
+                float y,
+                float segmentWidth,
+                float revealWidth,
+                TextPaint revealPaint,
+                TextPaint featherPaint) {
+            if (TextUtils.isEmpty(text) || start >= end || segmentWidth <= 0f || revealWidth <= 0f) {
+                return;
+            }
+
+            float visibleWidth = Math.max(0f, Math.min(segmentWidth, revealWidth));
+            if (visibleWidth <= 0f) {
+                return;
+            }
+
+            float segmentLeft = x;
+            float segmentRight = x + segmentWidth;
+            float revealRight = x + visibleWidth;
+
+            if (visibleWidth >= segmentWidth - 0.5f) {
+                int fullSave = canvas.save();
+                try {
+                    canvas.clipRect(segmentLeft, 0f, segmentRight, canvas.getHeight());
+                    canvas.drawText(text, start, end, x, y, revealPaint);
+                } finally {
+                    canvas.restoreToCount(fullSave);
+                }
+                return;
+            }
+
+            float featherWidth = Math.max(1f, revealPaint.getTextSize() * ACTIVE_FEATHER_WIDTH_FACTOR);
+            float featherStart = Math.max(segmentLeft, revealRight - featherWidth * 0.65f);
+            float featherEnd = Math.min(segmentRight, revealRight + featherWidth * 0.85f);
+            if (featherEnd <= segmentLeft) {
+                return;
+            }
+            if (featherStart > segmentLeft) {
+                int solidSave = canvas.save();
+                try {
+                    canvas.clipRect(segmentLeft, 0f, featherStart, canvas.getHeight());
+                    canvas.drawText(text, start, end, x, y, revealPaint);
+                } finally {
+                    canvas.restoreToCount(solidSave);
+                }
+            }
+
+            float featherSpan = Math.max(1f, featherEnd - featherStart);
+            activeFeatherShaderMatrix.setScale(featherSpan, 1f);
+            activeFeatherShaderMatrix.postTranslate(featherStart, 0f);
+            LinearGradient featherShader = resolveActiveFeatherShader();
+            featherShader.setLocalMatrix(activeFeatherShaderMatrix);
+            featherPaint.setAlpha((revealPaint.getColor() >>> 24) & 0xFF);
+            featherPaint.setShader(featherShader);
+            int featherSave = canvas.save();
+            try {
+                canvas.clipRect(featherStart, 0f, featherEnd, canvas.getHeight());
+                canvas.drawText(text, start, end, x, y, featherPaint);
+            } finally {
+                canvas.restoreToCount(featherSave);
+                featherPaint.setShader(null);
+            }
+        }
+
+        private void buildDrawLines(
+                WordLine line,
+                String text,
+                float availableWidth,
+                boolean singleLine,
+                boolean balanceUntranslatedText) {
+            int textSizeKey = Math.max(1, Math.round(inactivePaint.getTextSize() * 10f));
+            drawLayoutEngine.build(
+                    line,
+                    text,
+                    availableWidth,
+                    singleLine,
+                    balanceUntranslatedText,
+                    textSizeKey,
+                    inactivePaint.getTypeface());
+        }
+
+        private float secondaryWrappedLineGap(Context context, int count) {
+            return count > 1 ? secondaryTextRatio() * LyricUiLayoutPolicy.addWrappedLineSpacing(
+                    dp(context, WRAPPED_LINE_BASE_GAP_DP),
+                    dp(context, LyricUiLayoutPolicy.wrappedLineSpacingTenthsDp(uiConfig) / 10f)) : 0f;
+        }
+
+        private float secondaryTextBlockHeight(TextView textView, WordLine line, float width) {
+            if (line == null || TextUtils.isEmpty(line.text)) return 0f;
+            secondaryGeometryPaint.set(inactivePaint);
+            secondaryGeometryPaint.setTextSize(inactivePaint.getTextSize() * secondaryTextRatio());
+            secondaryDrawLayoutEngine.build(line, line.text, width, false, false,
+                    Math.max(1, Math.round(secondaryGeometryPaint.getTextSize() * 10f)),
+                    secondaryGeometryPaint.getTypeface());
+            int count = LyricUiLayoutPolicy.visibleMainLineCount(
+                    secondaryDrawLines.size(), visibleMainDrawLines(line));
+            secondaryGeometryPaint.getFontMetrics(secondaryFontMetrics);
+            return LyricUiLayoutPolicy.mainTextBlockHeight(
+                    secondaryFontMetrics.top, secondaryFontMetrics.ascent,
+                    secondaryFontMetrics.descent, secondaryFontMetrics.bottom,
+                    count, secondaryWrappedLineGap(textView.getContext(), count));
+        }
+
+        private static boolean isCompactLyricSlot(TextView textView, float availableHeight) {
+            return availableHeight <= dp(textView.getContext(), 52f);
+        }
+
+        private void configurePaints(TextView textView, boolean untranslatedLayout) {
+            Typeface typeface = resolveConfiguredTypeface(typefaceResolver.resolve(
+                    findContainingLyricsRecyclerView(textView), textView.getTypeface()));
+            if (inactivePaint.getTypeface() != typeface
+                    || playedPaint.getTypeface() != typeface
+                    || activePaint.getTypeface() != typeface
+                    || activeGlowPaint.getTypeface() != typeface
+                    || activeFeatherPaint.getTypeface() != typeface
+                    || translationPaint.getTypeface() != typeface
+                    || translationActivePaint.getTypeface() != typeface
+                    || translationFeatherPaint.getTypeface() != typeface) {
+                inactivePaint.setTypeface(typeface);
+                playedPaint.setTypeface(typeface);
+                activePaint.setTypeface(typeface);
+                activeGlowPaint.setTypeface(typeface);
+                activeFeatherPaint.setTypeface(typeface);
+                translationPaint.setTypeface(typeface);
+                translationActivePaint.setTypeface(typeface);
+                translationFeatherPaint.setTypeface(typeface);
+            }
+            // Always plan at the configured full-size typography. Native focus changes
+            // own the View transform, never the glyph metrics or wrapped-line breaks.
+            float textSize = sp(textView.getContext(),
+                    LyricUiLayoutPolicy.mainTextSizeSp(uiConfig, untranslatedLayout));
+            float translationRatio = uiConfig.translationFontRatioPercent / 100f;
+            if (LyricPaintState.needsTextSizeSync(
+                    textSize,
+                    translationRatio,
+                    inactivePaint.getTextSize(),
+                    playedPaint.getTextSize(),
+                    activePaint.getTextSize(),
+                    activeGlowPaint.getTextSize(),
+                    activeFeatherPaint.getTextSize(),
+                    translationPaint.getTextSize(),
+                    translationActivePaint.getTextSize(),
+                    translationFeatherPaint.getTextSize())) {
+                setTextSize(textSize);
+            }
+            // Reveal drawing clears these after use. Reset only the two paints that can carry
+            // a transient shader so an interrupted draw cannot leak it into the next frame.
+            activeFeatherPaint.setShader(null);
+            translationFeatherPaint.setShader(null);
+        }
+
+        private void setTextSize(float size) {
+            inactivePaint.setTextSize(size);
+            playedPaint.setTextSize(size);
+            activePaint.setTextSize(size);
+            activeGlowPaint.setTextSize(size);
+            activeFeatherPaint.setTextSize(size);
+            float translationRatio = uiConfig.translationFontRatioPercent / 100f;
+            translationPaint.setTextSize(size * translationRatio);
+            translationActivePaint.setTextSize(size * translationRatio);
+            translationFeatherPaint.setTextSize(size * translationRatio);
+        }
+
+        private float resolveTextX(TextView textView, float measuredWidth, float availableWidth) {
+            float left = textView.getPaddingLeft();
+            if (measuredWidth > availableWidth) {
+                long now = lyricAnimationTimeMillis();
+                if (isLyricVerboseDiagnosticsEnabled()
+                        && now - lastOverflowStartLogAt >= 3_000L) {
+                    lastOverflowStartLogAt = now;
+                    StructuredBridgeLog.info(
+                            BridgeDebugArea.RENDERER,
+                            BridgeEvents.RENDER_STATE_CHANGED,
+                            "Wide lyric uses logical-start overflow policy"
+                                    + " | alignment=" + uiConfig.alignment
+                                    + ", measuredWidth=" + measuredWidth
+                                    + ", availableWidth=" + availableWidth
+                                    + ", layoutDirection=" + textView.getLayoutDirection());
+                }
+                return textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL
+                        ? left + availableWidth - measuredWidth
+                        : left;
+            }
+            boolean rtl = textView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
+            if (drawingAlignment == LyricUiConfig.ALIGN_CENTER) {
+                return left + (availableWidth - measuredWidth) / 2f;
+            }
+            if (drawingAlignment == LyricUiConfig.ALIGN_END) {
+                return rtl ? left : left + availableWidth - measuredWidth;
+            }
+            return rtl ? left + availableWidth - measuredWidth : left;
+        }
+
+        private float resolveTextX(
+                TextView textView,
+                String text,
+                int start,
+                int end,
+                TextPaint paint,
+                float measuredWidth,
+                float availableWidth) {
+            float mathematicalX = resolveTextX(textView, measuredWidth, availableWidth);
+            if (drawingAlignment != LyricUiConfig.ALIGN_CENTER
+                    || measuredWidth > availableWidth
+                    || paint == null
+                    || TextUtils.isEmpty(text)) {
+                return mathematicalX;
+            }
+            int safeStart = Math.max(0, Math.min(start, text.length()));
+            int safeEnd = Math.max(safeStart, Math.min(end, text.length()));
+            if (safeStart >= safeEnd) {
+                return mathematicalX;
+            }
+            opticalTextBounds.setEmpty();
+            paint.getTextBounds(text, safeStart, safeEnd, opticalTextBounds);
+            if (opticalTextBounds.isEmpty()) {
+                return mathematicalX;
+            }
+            return LyricUiLayoutPolicy.opticallyCenteredBaselineX(
+                    textView.getPaddingLeft(),
+                    availableWidth,
+                    opticalTextBounds.left,
+                    opticalTextBounds.right);
+        }
+
+        private void configureGeometryPaints(TextView textView, boolean untranslatedLayout) {
+            Typeface typeface = resolveConfiguredTypeface(typefaceResolver.resolve(
+                    findContainingLyricsRecyclerView(textView), textView.getTypeface()));
+            inactivePaint.setTypeface(typeface);
+            translationPaint.setTypeface(typeface);
+            float mainSize = sp(
+                    textView.getContext(),
+                    LyricUiLayoutPolicy.mainTextSizeSp(uiConfig, untranslatedLayout));
+            inactivePaint.setTextSize(mainSize);
+            translationPaint.setTextSize(
+                    mainSize * uiConfig.translationFontRatioPercent / 100f);
+        }
+
+        private Typeface resolveConfiguredTypeface(Typeface officialTypeface) {
+            int weight = uiConfig.fontWeight;
+            if (configuredTypefaceCached
+                    && configuredTypefaceSource == officialTypeface
+                    && configuredTypefaceWeight == weight) {
+                return configuredTypeface;
+            }
+            Typeface resolved;
+            if (weight == LyricUiConfig.WEIGHT_SYSTEM) {
+                resolved = officialTypeface;
+            } else if (weight == LyricUiConfig.WEIGHT_BOLD) {
+                resolved = Typeface.create(officialTypeface, Typeface.BOLD);
+            } else if (weight == LyricUiConfig.WEIGHT_MEDIUM && Build.VERSION.SDK_INT >= 28) {
+                resolved = Typeface.create(officialTypeface, 500, false);
+            } else {
+                resolved = Typeface.create(officialTypeface, Typeface.NORMAL);
+            }
+            configuredTypefaceSource = officialTypeface;
+            configuredTypefaceWeight = weight;
+            configuredTypeface = resolved;
+            configuredTypefaceCached = true;
+            return resolved;
+        }
+
+        private void applyFade(float fade) {
+            applyFade(fade, 0f);
+        }
+
+        private void applyFade(float fade, float focusAmount) {
+            float resolvedFade = fade * drawBaseFade;
+            float amount = Math.max(0f, Math.min(1f, focusAmount));
+            int inactiveColor = palette.inactive;
+            int focusedColor = palette.focusedInactive;
+            int activeColor = palette.active;
+            int playedColor = palette.played;
+            int glowFill = palette.glowFill;
+            inactivePaint.setColor(scaleAlpha(blendColor(inactiveColor, focusedColor, amount), resolvedFade));
+            playedPaint.setColor(scaleAlpha(playedColor, resolvedFade));
+            activePaint.setColor(scaleAlpha(activeColor, resolvedFade * rowWakeActivation));
+            activeGlowPaint.setColor(scaleAlpha(glowFill, resolvedFade * rowWakeActivation));
+            activeFeatherPaint.setColor(scaleAlpha(activeColor, resolvedFade * rowWakeActivation));
+            translationPaint.setColor(scaleAlpha(blendColor(inactiveColor, focusedColor, amount), resolvedFade));
+            translationActivePaint.setColor(scaleAlpha(activeColor, resolvedFade));
+            translationFeatherPaint.setColor(scaleAlpha(activeColor, resolvedFade));
+        }
+
+        private static int blendColor(int fromColor, int toColor, float amount) {
+            float progress = Math.max(0f, Math.min(1f, amount));
+            int fromA = (fromColor >>> 24) & 0xFF;
+            int fromR = (fromColor >>> 16) & 0xFF;
+            int fromG = (fromColor >>> 8) & 0xFF;
+            int fromB = fromColor & 0xFF;
+            int toA = (toColor >>> 24) & 0xFF;
+            int toR = (toColor >>> 16) & 0xFF;
+            int toG = (toColor >>> 8) & 0xFF;
+            int toB = toColor & 0xFF;
+            int a = Math.round(fromA + (toA - fromA) * progress);
+            int r = Math.round(fromR + (toR - fromR) * progress);
+            int g = Math.round(fromG + (toG - fromG) * progress);
+            int b = Math.round(fromB + (toB - fromB) * progress);
+            return (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+        private static int scaleAlpha(int color, float scale) {
+            int alpha = Math.round(((color >>> 24) & 0xFF) * Math.max(0f, Math.min(1f, scale)));
+            return (color & 0x00FFFFFF) | (alpha << 24);
+        }
+
+        private static final class GlowSegmentCache {
+            Bitmap bitmap;
+            Canvas canvas;
+            WordLine line;
+            String text;
+            Typeface typeface;
+            int start;
+            int end;
+            int textSizeKey;
+            int widthKey;
+            int padding;
+            float baseline;
+            long lastUsed;
+
+            boolean matches(
+                    WordLine candidateLine,
+                    String candidateText,
+                    int candidateStart,
+                    int candidateEnd,
+                    int candidateTextSizeKey,
+                    int candidateWidthKey,
+                    Typeface candidateTypeface) {
+                return bitmap != null
+                        && !bitmap.isRecycled()
+                        && line == candidateLine
+                        && TextUtils.equals(text, candidateText)
+                        && start == candidateStart
+                        && end == candidateEnd
+                        && textSizeKey == candidateTextSizeKey
+                        && widthKey == candidateWidthKey
+                        && typeface == candidateTypeface;
+            }
+
+            void ensureBitmap(int width, int height) {
+                boolean replace = bitmap == null
+                        || bitmap.isRecycled()
+                        || bitmap.getWidth() < width
+                        || bitmap.getHeight() < height;
+                if (!replace) {
+                    return;
+                }
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                canvas = new Canvas(bitmap);
+            }
+
+            void clear() {
+                line = null;
+                text = null;
+                typeface = null;
+                lastUsed = 0L;
+            }
+        }
+
+        /**
+         * Reusable per-line scratch for the character lift. Flow coordinates are
+         * accumulated advance width from the start of the line's text across
+         * wrapped segments, which is the only frame of reference that stays
+         * comparable across a wrap.
+         */
+        private static final class CharLiftState {
+            boolean lineActive;
+            float flowFront;
+            float flowSegmentStart;
+            float waveWidth;
+            float maxSink;
+            /** Sink-in factor while the row settles into its unsung position. */
+            float ramp;
+            /** True while the wave is still running off the end of the text. */
+            boolean finishing;
+            /** Canvas y the sunk glyph bottoms may not cross. */
+            float floorY;
+            /** Clearance kept above {@link #floorY}, in pixels. */
+            float minClearance;
+            float zoneLeft;
+            float zoneRight;
+            float segmentLeft;
+            float segmentRight;
+            int firstGrapheme;
+            int lastGrapheme;
+            float[] prefixWidths;
+
+            /** True when part of this segment is already sung and sits on the baseline. */
+            boolean hasHead() {
+                return zoneLeft > segmentLeft;
+            }
+
+            /** True when part of this segment is still unsung and sits uniformly low. */
+            boolean hasTail() {
+                return zoneRight < segmentRight;
+            }
+
+            void reset() {
+                lineActive = false;
+                flowFront = 0f;
+                flowSegmentStart = 0f;
+                waveWidth = 0f;
+                maxSink = 0f;
+                ramp = 0f;
+                finishing = false;
+                floorY = 0f;
+                minClearance = 0f;
+                zoneLeft = 0f;
+                zoneRight = 0f;
+                segmentLeft = 0f;
+                segmentRight = 0f;
+                firstGrapheme = 0;
+                lastGrapheme = 0;
+                prefixWidths = null;
+            }
+        }
+
+        private static final class GraphemeLayoutCache {
+            WordLine line;
+            String text;
+            Typeface typeface;
+            int start;
+            int end;
+            int textSizeKey;
+            float[] prefixWidths;
+            long lastUsed;
+
+            boolean matches(
+                    WordLine candidateLine,
+                    String candidateText,
+                    int candidateStart,
+                    int candidateEnd,
+                    int candidateTextSizeKey,
+                    Typeface candidateTypeface) {
+                return prefixWidths != null
+                        && line == candidateLine
+                        && TextUtils.equals(text, candidateText)
+                        && start == candidateStart
+                        && end == candidateEnd
+                        && textSizeKey == candidateTextSizeKey
+                        && typeface == candidateTypeface;
+            }
+
+            void clear() {
+                line = null;
+                text = null;
+                typeface = null;
+                prefixWidths = null;
+                lastUsed = 0L;
+            }
+        }
+
+        private static final class LyricGroupDrawContext {
+            WordLyricModel model;
+            WordLine line;
+            String text;
+            String renderableTranslation;
+            WordRange activeWord;
+            WordRange glowActiveWord;
+            MainLineWindow lineWindow;
+            long position;
+            long glowPosition;
+            long auxiliaryPosition;
+            float auxiliaryHighlight;
+            float auxiliaryProgress;
+            boolean activeLine;
+            boolean drawProgress;
+            boolean hasTranslation;
+            int wordIndex;
+            int glowWordIndex;
+            int visibleMainLineCount;
+            float availableWidth;
+            float focusAmount;
+            float fullLineOverlayAmount;
+            float top;
+            float mainHeight;
+            float y;
+            float lineHeight;
+            float lineGap;
+            float translationGap;
+            float translationMetricsTop;
+            float translationAmount;
+            float translationLayoutAmount;
+            float translationHeight;
+            float secondaryAmount;
+            float secondaryGap;
+            float secondaryHeight;
+            int secondaryLineCount;
+            float secondaryMetricsTop;
+            float secondaryLineHeight;
+            float secondaryLineGap;
+            float secondaryTranslationAmount;
+            float secondaryTranslationGap;
+            float secondaryTranslationMetricsTop;
+        }
+
+        private static final class MainLineWindow {
+            int currentStart;
+            int previousStart;
+            int count;
+            float progress;
+            float alphaProgress;
+            boolean animating;
+
+            MainLineWindow set(
+                    int currentStart,
+                    int previousStart,
+                    int count,
+                    float progress,
+                    float alphaProgress,
+                    boolean animating) {
+                this.currentStart = currentStart;
+                this.previousStart = previousStart;
+                this.count = count;
+                this.progress = progress;
+                this.alphaProgress = alphaProgress;
+                this.animating = animating;
+                return this;
+            }
+        }
+
+    }
+
+    private static final class OplusMediaWhitelistBypassList extends AbstractList<String> {
+        private final ArrayList<String> values = new ArrayList<>();
+
+        OplusMediaWhitelistBypassList(List<?> delegate) {
+            if (delegate != null) {
+                for (Object value : delegate) {
+                    if (value != null) {
+                        addIfAbsent(value.toString());
+                    }
+                }
+            }
+            for (String packageName : ZhiBridgeRuntime.packages().toArray(new String[0])) {
+                addIfAbsent(packageName);
+            }
+            extraGeneration = LyriconPlayerRegistry.bindingsGeneration();
+            for (String packageName : LyriconPlayerRegistry.extraHistoryPackages()) {
+                addIfAbsent(packageName);
+            }
+        }
+
+        private void addIfAbsent(String value) {
+            if (!TextUtils.isEmpty(value) && !values.contains(value)) {
+                values.add(value);
+            }
+        }
+
+        @Override
+        public String get(int index) {
+            refreshExtras();
+            return values.get(index);
+        }
+
+        @Override
+        public int size() {
+            refreshExtras();
+            return values.size();
+        }
+
+        private int extraGeneration = Integer.MIN_VALUE;
+
+        private void refreshExtras() {
+            int generation = LyriconPlayerRegistry.bindingsGeneration();
+            if (generation == extraGeneration) {
+                return;
+            }
+            extraGeneration = generation;
+            for (String packageName : LyriconPlayerRegistry.extraHistoryPackages()) {
+                addIfAbsent(packageName);
+            }
+        }
+
+        @Override
+        public String toString() {
+            return values.toString();
+        }
+    }
+
+    private static final class MetadataTrackIdentity {
+        final String title;
+        final String artist;
+        final boolean saltRelay;
+
+        MetadataTrackIdentity(String title, String artist, boolean saltRelay) {
+            this.title = title;
+            this.artist = artist;
+            this.saltRelay = saltRelay;
+        }
+    }
+
+    private static final class NormalizedTextSnapshot {
+        final CharSequence source;
+        final int length;
+        final int contentHash;
+        final String normalized;
+
+        NormalizedTextSnapshot(
+                CharSequence source, int length, int contentHash, String normalized) {
+            this.source = source;
+            this.length = length;
+            this.contentHash = contentHash;
+            this.normalized = normalized;
+        }
+    }
+
+    private static final class LyricsRecyclerMatch {
+        final WeakReference<View> recycler;
+        final WeakReference<View> itemView;
+
+        LyricsRecyclerMatch(View recycler, View itemView) {
+            this.recycler = new WeakReference<>(recycler);
+            this.itemView = new WeakReference<>(itemView);
+        }
+
+        View recycler() {
+            return recycler.get();
+        }
+
+        View itemView() {
+            return itemView.get();
+        }
+
+        boolean isUsable(TextView owner) {
+            View currentRecycler = recycler();
+            View currentItemView = itemView();
+            if (owner == null
+                    || currentRecycler == null
+                    || currentItemView == null
+                    || !owner.isAttachedToWindow()
+                    || !currentRecycler.isAttachedToWindow()
+                    || !currentItemView.isAttachedToWindow()) {
+                return false;
+            }
+            View child = owner;
+            Object parent = child.getParent();
+            for (int depth = 0; depth < 12 && parent instanceof View; depth++) {
+                View parentView = (View) parent;
+                if (parentView == currentRecycler) {
+                    return child == currentItemView;
+                }
+                child = parentView;
+                parent = child.getParent();
+            }
+            return false;
+        }
+    }
+
+    private static final class BoundLyricFrameStamp {
+        final WordLyricModel model;
+        final WeakReference<View> recycler;
+        final int bindEpoch;
+        final int contentHash;
+        final int surfaceEpoch;
+        final int adapterPosition;
+        final int lineIndex;
+
+        BoundLyricFrameStamp(
+                WordLyricModel model,
+                View recycler,
+                int bindEpoch,
+                int contentHash,
+                int surfaceEpoch,
+                int adapterPosition,
+                int lineIndex) {
+            this.model = model;
+            this.recycler = new WeakReference<>(recycler);
+            this.bindEpoch = bindEpoch;
+            this.contentHash = contentHash;
+            this.surfaceEpoch = surfaceEpoch;
+            this.adapterPosition = adapterPosition;
+            this.lineIndex = lineIndex;
+        }
+
+        boolean sameIdentity(
+                WordLyricModel expectedModel,
+                View expectedRecycler,
+                int expectedBindEpoch,
+                int expectedContentHash,
+                int expectedSurfaceEpoch,
+                int expectedAdapterPosition,
+                int expectedLineIndex) {
+            return model == expectedModel
+                    && recycler.get() == expectedRecycler
+                    && bindEpoch == expectedBindEpoch
+                    && contentHash == expectedContentHash
+                    && surfaceEpoch == expectedSurfaceEpoch
+                    && adapterPosition == expectedAdapterPosition
+                    && lineIndex == expectedLineIndex;
+        }
+
+        boolean matches(
+                WordLyricModel expectedModel,
+                View expectedRecycler,
+                int expectedBindEpoch,
+                int expectedContentHash,
+                int expectedSurfaceEpoch,
+                int expectedAdapterPosition,
+                int expectedLineIndex,
+                boolean duplicateText) {
+            boolean baseMatch = model == expectedModel
+                    && recycler.get() == expectedRecycler
+                    && bindEpoch == expectedBindEpoch
+                    && contentHash == expectedContentHash
+                    && surfaceEpoch == expectedSurfaceEpoch;
+            if (!baseMatch || !duplicateText) {
+                return baseMatch;
+            }
+            return expectedAdapterPosition >= 0
+                    && adapterPosition == expectedAdapterPosition
+                    && expectedLineIndex >= 0
+                    && lineIndex == expectedLineIndex;
+        }
+    }
+
+    private static final class LyricSurfaceReadinessSnapshot {
+        final int requiredFrames;
+        final int readyFrames;
+        final int cohortSignature;
+        final int recyclerChildCount;
+        final int adapterItemCount;
+
+        LyricSurfaceReadinessSnapshot(
+                int requiredFrames,
+                int readyFrames,
+                int cohortSignature,
+                int recyclerChildCount,
+                int adapterItemCount) {
+            this.requiredFrames = requiredFrames;
+            this.readyFrames = readyFrames;
+            this.cohortSignature = cohortSignature;
+            this.recyclerChildCount = recyclerChildCount;
+            this.adapterItemCount = adapterItemCount;
+        }
+    }
+
+    private static final class LyricSurfaceReadinessState {
+        final int epoch;
+        final WordLyricModel model;
+        final long startedAtElapsedMs;
+        int lastCohortSignature;
+        int lastRequiredFrames = -1;
+        int lastRecyclerChildCount = -1;
+        int consecutiveCompleteFrames;
+        boolean stableReady;
+
+        LyricSurfaceReadinessState(
+                int epoch,
+                WordLyricModel model,
+                long startedAtElapsedMs) {
+            this.epoch = epoch;
+            this.model = model;
+            this.startedAtElapsedMs = startedAtElapsedMs;
+        }
+
+        boolean observe(LyricSurfaceReadinessSnapshot snapshot) {
+            int expectedBoundRows = snapshot.adapterItemCount > 0
+                    ? Math.min(snapshot.recyclerChildCount, snapshot.adapterItemCount)
+                    : snapshot.recyclerChildCount;
+            boolean cohortSufficient = snapshot.requiredFrames > 0
+                    && snapshot.requiredFrames >= Math.max(1, expectedBoundRows)
+                    && (snapshot.adapterItemCount <= 1 || snapshot.recyclerChildCount >= 2);
+            boolean complete = cohortSufficient
+                    && snapshot.readyFrames == snapshot.requiredFrames;
+            boolean sameCohort = complete
+                    && snapshot.cohortSignature == lastCohortSignature
+                    && snapshot.requiredFrames == lastRequiredFrames
+                    && snapshot.recyclerChildCount == lastRecyclerChildCount;
+            consecutiveCompleteFrames = complete
+                    ? (sameCohort ? consecutiveCompleteFrames + 1 : 1)
+                    : 0;
+            lastCohortSignature = snapshot.cohortSignature;
+            lastRequiredFrames = snapshot.requiredFrames;
+            lastRecyclerChildCount = snapshot.recyclerChildCount;
+            stableReady = consecutiveCompleteFrames >= 2;
+            return stableReady;
+        }
+    }
+
+    private static final class LyricTextMatch {
+        static final LyricTextMatch EMPTY = new LyricTextMatch(null, null);
+
+        final WordLine line;
+        final WordLine translationLine;
+
+        LyricTextMatch(WordLine line, WordLine translationLine) {
+            this.line = line;
+            this.translationLine = translationLine;
+        }
+    }
+
+}

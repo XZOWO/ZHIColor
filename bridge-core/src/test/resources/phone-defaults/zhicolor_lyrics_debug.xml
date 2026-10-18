@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <int name="debug_schema" value="1" />
+    <boolean name="debug_area_renderer" value="true" />
+    <boolean name="debug_area_aod" value="true" />
+    <long name="debug_revision" value="1792130809046" />
+    <boolean name="debug_area_media" value="true" />
+    <boolean name="debug_area_bootstrap" value="true" />
+    <boolean name="debug_area_performance" value="true" />
+    <boolean name="debug_logging_enabled" value="false" />
+    <boolean name="debug_area_lyric" value="true" />
+    <boolean name="debug_area_player_special" value="true" />
+</map>

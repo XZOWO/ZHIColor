@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="about_navigation">About</string>
+    <string name="configuration_navigation">Lyrics</string>
+    <string name="home_navigation">Home</string>
+    <string name="store_navigation">Tools</string>
+</resources>

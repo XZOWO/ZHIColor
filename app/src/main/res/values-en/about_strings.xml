@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="about_version_format">Version %1$s (%2$d)</string>
+    <string name="about_preferences">Preferences</string>
+    <string name="about_language">Language</string>
+    <string name="about_language_system">System default</string>
+    <string name="about_project">Project</string>
+    <string name="about_application_id">Application ID</string>
+    <string name="about_licenses">Open source licenses</string>
+    <string name="about_notices">Copyright notices</string>
+    <string name="about_credits">Credits</string>
+    <string name="about_close">Close</string>
+    <string name="about_open_failed">No app is available to open this link</string>
+    <string name="about_document_unavailable">Could not read this document</string>
+    <string name="about_credit_zhitool">ZHITool contributors: home screen and lyric animations</string>
+    <string name="about_credit_bridge">Andrea-lyz: lock screen lyrics</string>
+    <string name="about_credit_lyricon">Lyricon contributors: lyric communication</string>
+    <string name="about_credit_androidx">Application framework</string>
+    <string name="about_credit_miuix">UI components</string>
+    <string name="about_credit_kyant">Glass effects</string>
+</resources>

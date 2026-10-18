@@ -1,0 +1,107 @@
+{
+  "repository": "https://github.com/tomakino/lyricon",
+  "commit": "2bc34008b8a22c7261d33acceed7d708e23ef6d6",
+  "module": "lyric/bridge/central",
+  "files": [
+    {
+      "path": "src/main/AndroidManifest.xml",
+      "upstreamPath": "lyric/bridge/central/src/main/AndroidManifest.xml",
+      "sha256": "7c2bf986773298efe1557909b60aaff378a2e64b4ad504cf9a52c71819a28168"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/BridgeCentral.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/BridgeCentral.kt",
+      "sha256": "7bd8584a466ad185af1d4712f855d615685b535f1afff6e805bb1a13959993a9"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/CentralReceiver.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/CentralReceiver.kt",
+      "sha256": "85ca9d1e809f059738ddd6550956c215575f51081378d725080437b1695c25c7"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/Constants.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/Constants.kt",
+      "sha256": "176db64b179daca40a4565b16618398db67d68368ec7aef3fe6ec9a9e0e2e04c"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/Extensions.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/Extensions.kt",
+      "sha256": "61c753dc026976e959328a4a06b2c2a16c493ccdd1dff13cece96dcaea68929e"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/ProviderManager.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/ProviderManager.kt",
+      "sha256": "113b3b73e589d5662b3f6658792c2769d5c78b903ceca899e744c4b1bee1dba3"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/RemoteProvider.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/RemoteProvider.kt",
+      "sha256": "06bf114e5b7b3d8912ca4562ff79a61ea553455c1bdb462576df1e59d1615c7a"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/RemoteProviderService.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/RemoteProviderService.kt",
+      "sha256": "a1e2b33af82723bb9acdf0543b258d2930e7eb240c6660af1d50f788645964e2"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/player/ActivePlayerDispatcher.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/player/ActivePlayerDispatcher.kt",
+      "sha256": "ebf256352c3f5a336b22a9a235dc7102972bed2f44a86bfb9d3980f43b660b0b"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/player/ActivePlayerListener.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/player/ActivePlayerListener.kt",
+      "sha256": "db6b34217937ca71d077b5d3dadb9ff771397093715239c7034004f5352dea6a"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/player/PlayerListener.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/player/PlayerListener.kt",
+      "sha256": "e936ddf58b3d5e94055bec770987eeca93c0f144f21fcf7b49d0b4fe895889c5"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/player/PlayerRecorder.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/player/PlayerRecorder.kt",
+      "sha256": "7c5dc97950e79e1436d9767edb5a8b37b83a748f31f524b5953b4c81069888c0"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/provider/player/RemotePlayer.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/provider/player/RemotePlayer.kt",
+      "sha256": "3332601f7c429bdafd6a56cf424bb1c24e1da7f3c49375009c4e74114f49a65b"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/subscriber/RemoteSubscriber.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/subscriber/RemoteSubscriber.kt",
+      "sha256": "0ad28df7dd2dbf1beb5d3057d30cd6b7711e1476f1099995625b889f166998b0"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/subscriber/RemoteSubscriberService.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/subscriber/RemoteSubscriberService.kt",
+      "sha256": "be8e5fde97ddec1a883231b2fdc3c7e16836221f0fea0151808db4edcb3da19a"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/subscriber/SubscriberManager.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/subscriber/SubscriberManager.kt",
+      "sha256": "455ed0d145bc4e9c92c569d444a4c7742e76767d9f0b19cb2e47776b9efff793"
+    },
+    {
+      "path": "src/main/kotlin/io/github/proify/lyricon/central/util/ScreenStateMonitor.kt",
+      "upstreamPath": "lyric/bridge/central/src/main/kotlin/io/github/proify/lyricon/central/util/ScreenStateMonitor.kt",
+      "sha256": "298456b739920e0680c0af25525818696c8ce8075d3bede553703ee57fe9c2c1"
+    },
+    {
+      "path": "consumer-rules.pro",
+      "upstreamPath": "lyric/bridge/central/consumer-rules.pro",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "proguard-rules.pro",
+      "upstreamPath": "lyric/bridge/central/proguard-rules.pro",
+      "sha256": "56fd960cf225f6ca40f982b13a5dbb0d8bc3dfde13ff76422825c6070d0a1890"
+    },
+    {
+      "path": "LICENSE",
+      "upstreamPath": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ]
+}

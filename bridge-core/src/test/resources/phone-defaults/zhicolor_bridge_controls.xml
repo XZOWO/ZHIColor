@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <set name="enabled_apps">
+        <string>com.tencent.qqmusic</string>
+        <string>com.apple.android.music</string>
+        <string>com.netease.cloudmusic</string>
+    </set>
+    <string name="provider.com.apple.android.music">com.naivety.lyricon.amprovider</string>
+    <string name="provider.com.tencent.qqmusic">io.github.proify.lyricon.qmprovider</string>
+    <string name="provider.com.netease.cloudmusic">io.github.proify.lyricon.cmprovider</string>
+    <int name="style" value="0" />
+    <boolean name="enabled" value="true" />
+</map>

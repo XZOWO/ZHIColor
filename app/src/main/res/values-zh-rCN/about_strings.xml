@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="about_version_format">版本 %1$s (%2$d)</string>
+    <string name="about_preferences">偏好设置</string>
+    <string name="about_language">语言</string>
+    <string name="about_language_system">跟随系统</string>
+    <string name="about_project">项目</string>
+    <string name="about_application_id">应用标识</string>
+    <string name="about_licenses">开源许可证</string>
+    <string name="about_notices">版权声明</string>
+    <string name="about_credits">致谢</string>
+    <string name="about_close">关闭</string>
+    <string name="about_open_failed">未找到可打开链接的应用</string>
+    <string name="about_document_unavailable">文档读取失败</string>
+    <string name="about_credit_zhitool">ZHITool 贡献者：首页与歌词动画</string>
+    <string name="about_credit_bridge">Andrea-lyz：锁屏歌词</string>
+    <string name="about_credit_lyricon">Lyricon 贡献者：歌词通信</string>
+    <string name="about_credit_androidx">应用框架</string>
+    <string name="about_credit_miuix">界面组件</string>
+    <string name="about_credit_kyant">玻璃效果</string>
+</resources>

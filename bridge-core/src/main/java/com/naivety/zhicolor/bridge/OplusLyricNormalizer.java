@@ -1,0 +1,253 @@
+package com.naivety.zhicolor.bridge;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+final class OplusLyricNormalizer {
+    static final long LEADING_PRE_ROLL_THRESHOLD_MS = 1_500L;
+    static final long TAIL_SPACER_DELAY_MS = 8_000L;
+    private static final long EMBEDDED_LINE_SPLIT_GAP_MS = 3_000L;
+
+    private static final Pattern ANY_LRC_TIME_TAG =
+            Pattern.compile("[\\[<]([0-9]{1,3}:[0-9]{2}(?:[.:][0-9]{1,3})?)[\\]>]");
+    private static final Pattern BRACKETED_LRC_TIME_TAG =
+            Pattern.compile("\\[([0-9]{1,3}:[0-9]{2}(?:[.:][0-9]{1,3})?)]");
+
+    private OplusLyricNormalizer() {
+    }
+
+    static String normalizeForOfficialList(String rawLyric) {
+        return normalizeForOfficialList(rawLyric, java.util.Collections.emptyMap());
+    }
+
+    static String normalizeForOfficialList(String rawLyric, Map<Long, List<String>> explicitMainRows) {
+        if (isEmpty(rawLyric)) {
+            return "";
+        }
+
+        LinkedHashMap<Long, TimedLyricGroup> groups = new LinkedHashMap<>();
+        for (String rawLine : splitRawLyricLines(rawLyric)) {
+            for (String expandedLine : splitEmbeddedTimedLines(rawLine)) {
+                String line = expandedLine == null ? "" : expandedLine.trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+
+                Matcher firstTag = ANY_LRC_TIME_TAG.matcher(line);
+                if (!firstTag.find() || firstTag.start() != 0) {
+                    continue;
+                }
+
+                long timeMillis = parseLrcTimeMillis(firstTag.group(1));
+                String text = cleanPlainLyricText(line.substring(firstTag.end()));
+                if (text.isEmpty()) {
+                    continue;
+                }
+
+                TimedLyricGroup group = groups.get(timeMillis);
+                if (group == null) {
+                    group = new TimedLyricGroup(timeMillis);
+                    groups.put(timeMillis, group);
+                }
+                group.texts.add(text);
+            }
+        }
+
+        ArrayList<TimedLyricGroup> groupedLines = new ArrayList<>(groups.values());
+        StringBuilder out = new StringBuilder(rawLyric.length());
+        boolean preRollFirstLine = !groupedLines.isEmpty()
+                && groupedLines.get(0).timeMillis > LEADING_PRE_ROLL_THRESHOLD_MS;
+        if (preRollFirstLine) {
+            TimedLyricGroup first = groupedLines.get(0);
+            appendGroupedLyricLine(out, first, 0L, explicitMainRows);
+        }
+        for (int i = preRollFirstLine ? 1 : 0; i < groupedLines.size(); i++) {
+            TimedLyricGroup group = groupedLines.get(i);
+            appendGroupedLyricLine(out, group, group.timeMillis, explicitMainRows);
+        }
+        appendTailSpacerLyricLine(out, groupedLines);
+        return out.toString();
+    }
+
+    static boolean isNonLyricInfoLine(String text, long timeMillis) {
+        return LyricMetadataFilter.isNonLyricInfoLine(text, timeMillis);
+    }
+
+    private static void appendGroupedLyricLine(StringBuilder out, TimedLyricGroup group) {
+        if (group == null || group.texts.isEmpty()) {
+            return;
+        }
+        appendLyricLine(
+                out,
+                group.timeMillis,
+                group.texts.get(LyricLaneClassifier.findPrimaryTextIndex(
+                        group.texts,
+                        group.timeMillis)));
+    }
+
+    private static void appendGroupedLyricLine(StringBuilder out, TimedLyricGroup group,
+            long displayTime, Map<Long, List<String>> explicitMainRows) {
+        List<String> mains = explicitMainRows.get(group.timeMillis);
+        if (mains != null && mains.size() >= 2) {
+            boolean allPresent = true;
+            for (String main : mains) allPresent &= group.texts.contains(main);
+            if (allPresent) {
+                for (String main : mains) appendLyricLine(out, displayTime, main);
+                return;
+            }
+        }
+        appendLyricLine(out, displayTime, group.texts.get(
+                LyricLaneClassifier.findPrimaryTextIndex(group.texts, group.timeMillis)));
+    }
+
+    private static void appendLyricLine(StringBuilder out, long timeMillis, String text) {
+        if (isEmpty(text)) {
+            return;
+        }
+        if (out.length() > 0) {
+            out.append('\n');
+        }
+        out.append('[').append(formatLrcTime(timeMillis)).append(']').append(text);
+    }
+
+    private static void appendTailSpacerLyricLine(
+            StringBuilder out, ArrayList<TimedLyricGroup> groups) {
+        if (groups.isEmpty()) {
+            return;
+        }
+        TimedLyricGroup last = groups.get(groups.size() - 1);
+        if (last == null) {
+            return;
+        }
+        appendLyricLine(
+                out,
+                last.timeMillis + TAIL_SPACER_DELAY_MS,
+                LyricTextSanitizer.ZERO_WIDTH_SPACE);
+    }
+
+    private static String cleanPlainLyricText(String text) {
+        if (isEmpty(text)) {
+            return "";
+        }
+        String cleaned = ANY_LRC_TIME_TAG.matcher(text).replaceAll("");
+        cleaned = LyricTextSanitizer.removeIgnorableCharacters(cleaned).trim();
+        return cleaned.replaceAll("[ \\t]{2,}", " ");
+    }
+
+    private static String[] splitRawLyricLines(String rawLyric) {
+        return rawLyric.replace('\r', '\n').split("\n");
+    }
+
+    static List<String> splitEmbeddedTimedLines(String rawLine) {
+        ArrayList<String> lines = new ArrayList<>();
+        String line = rawLine == null ? "" : rawLine;
+        Matcher matcher = BRACKETED_LRC_TIME_TAG.matcher(line);
+        ArrayList<TagMatch> tags = new ArrayList<>();
+        while (matcher.find()) {
+            tags.add(new TagMatch(
+                    matcher.start(),
+                    matcher.end(),
+                    parseLrcTimeMillis(matcher.group(1))));
+        }
+        if (tags.size() < 2) {
+            lines.add(line);
+            return lines;
+        }
+
+        int segmentStart = tags.get(0).start;
+        for (int i = 1; i < tags.size(); i++) {
+            TagMatch previous = tags.get(i - 1);
+            TagMatch current = tags.get(i);
+            boolean hasTextBefore = hasVisibleText(line, previous.end, current.start);
+            boolean hasTextAfter = hasVisibleText(
+                    line,
+                    current.end,
+                    i + 1 < tags.size() ? tags.get(i + 1).start : line.length());
+            boolean onlyTwoLineTags = tags.size() == 2;
+            boolean separatedByLineSizedGap =
+                    current.timeMillis - previous.timeMillis >= EMBEDDED_LINE_SPLIT_GAP_MS;
+            if (hasTextBefore
+                    && hasTextAfter
+                    && (onlyTwoLineTags || separatedByLineSizedGap)) {
+                lines.add(line.substring(segmentStart, current.start));
+                segmentStart = current.start;
+            }
+        }
+        lines.add(line.substring(segmentStart));
+        return lines;
+    }
+
+    private static boolean hasVisibleText(String value, int start, int end) {
+        return start < end
+                && !LyricTextSanitizer.removeIgnorableCharacters(
+                value.substring(start, end)).trim().isEmpty();
+    }
+
+    private static long parseLrcTimeMillis(String time) {
+        String[] minuteAndRest = time.split(":", 2);
+        if (minuteAndRest.length != 2) {
+            return 0L;
+        }
+        long minutes = safeParseLong(minuteAndRest[0]);
+        String rest = minuteAndRest[1].replace(':', '.');
+        String[] secondAndFraction = rest.split("\\.", 2);
+        long seconds = safeParseLong(secondAndFraction[0]);
+        long millis = 0L;
+        if (secondAndFraction.length == 2) {
+            String fraction = secondAndFraction[1];
+            if (fraction.length() > 3) {
+                fraction = fraction.substring(0, 3);
+            }
+            while (fraction.length() < 3) {
+                fraction = fraction + "0";
+            }
+            millis = safeParseLong(fraction);
+        }
+        return minutes * 60_000L + seconds * 1_000L + millis;
+    }
+
+    private static long safeParseLong(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
+    private static final class TagMatch {
+        final int start;
+        final int end;
+        final long timeMillis;
+
+        TagMatch(int start, int end, long timeMillis) {
+            this.start = start;
+            this.end = end;
+            this.timeMillis = timeMillis;
+        }
+    }
+
+    private static String formatLrcTime(long timeMillis) {
+        long minutes = timeMillis / 60_000L;
+        long seconds = (timeMillis % 60_000L) / 1_000L;
+        long millis = timeMillis % 1_000L;
+        return String.format(Locale.ROOT, "%02d:%02d.%03d", minutes, seconds, millis);
+    }
+
+    private static boolean isEmpty(String value) {
+        return value == null || value.isEmpty();
+    }
+
+    private static final class TimedLyricGroup {
+        final long timeMillis;
+        final ArrayList<String> texts = new ArrayList<>();
+
+        TimedLyricGroup(long timeMillis) {
+            this.timeMillis = timeMillis;
+        }
+    }
+}

@@ -1,0 +1,44 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <int name="motion_mode" value="0" />
+    <boolean name="screen_timeout_enabled" value="true" />
+    <int name="font_weight" value="0" />
+    <boolean name="translation_marquee_enabled" value="true" />
+    <int name="char_lift_strength_percent" value="100" />
+    <int name="inactive_scale_percent" value="96" />
+    <boolean name="inactive_row_fade_enabled" value="true" />
+    <boolean name="char_lift_enabled" value="true" />
+    <int name="lyric_ui_schema" value="4" />
+    <int name="inactive_row_fade_percent" value="90" />
+    <boolean name="line_spacing_zero_default_migrated" value="true" />
+    <int name="vertical_fade_length_tenths_dp" value="519" />
+    <int name="blur_radius_tenths_px" value="20" />
+    <boolean name="secondary_progress_enabled" value="true" />
+    <int name="inactive_opacity_percent" value="36" />
+    <int name="translation_font_ratio_percent" value="66" />
+    <boolean name="vertical_fade_enabled" value="true" />
+    <int name="max_refresh_rate_hz" value="0" />
+    <int name="inactive_translation_opacity_percent" value="36" />
+    <int name="screen_timeout_seconds" value="0" />
+    <int name="wrapped_line_spacing_tenths_dp" value="0" />
+    <int name="translation_display_mode" value="1" />
+    <string name="glow_color">#FFD68A</string>
+    <boolean name="lyric_ui_line_timed_progress_enabled" value="true" />
+    <string name="primary_color">#FFFFFF</string>
+    <boolean name="default_translation_enabled" value="true" />
+    <int name="active_translation_progress_opacity_percent" value="80" />
+    <boolean name="lyric_ui_translation_progress_enabled" value="false" />
+    <int name="active_opacity_percent" value="100" />
+    <boolean name="lyric_ui_scroll_scale_enabled" value="true" />
+    <int name="active_translation_opacity_percent" value="60" />
+    <boolean name="glow_enabled" value="true" />
+    <int name="main_font_tenths_sp" value="240" />
+    <int name="glow_radius_percent" value="14" />
+    <int name="line_spacing_tenths_dp" value="0" />
+    <boolean name="inactive_translation_follows_main" value="true" />
+    <boolean name="passive_vertical_pan_enabled" value="true" />
+    <int name="glow_intensity_percent" value="60" />
+    <int name="alignment" value="3" />
+    <boolean name="lyric_ui_inactive_blur_enabled" value="true" />
+    <int name="current_unrevealed_opacity_percent" value="50" />
+</map>

@@ -1,0 +1,73 @@
+{
+  "repository": "https://github.com/Kyant0/AndroidLiquidGlass",
+  "commit": "896a94a3ade1cc1a940b92365f942a34971fecda",
+  "license": "Apache-2.0",
+  "license_sha256": "4b9f7e7c2821a5a1822a6cf1e4a34e877bba48a99b9bba1f03e5e2eccf6dec56",
+  "files": [
+    {
+      "path": "components/LiquidBottomTabs.kt",
+      "upstream_url": "https://raw.githubusercontent.com/Kyant0/AndroidLiquidGlass/896a94a3ade1cc1a940b92365f942a34971fecda/catalog/src/main/java/com/kyant/backdrop/catalog/components/LiquidBottomTabs.kt",
+      "upstream_sha256": "4dfbafaf008b058bf71ceebbc568c900f7a74acaf94f2fe774c6155367ff0155",
+      "local_sha256": "e0456a4da7f222535b2ee88c82c9ca608fd0192213baa49b70b503b5027cdbc7",
+      "adaptations": [
+        "Relocate the package and utility imports; add the original copyright and Apache-2.0 identifier.",
+        "Expose Miuix accent/surface colors, shadow visibility and scalable content height; preserve the 64dp/56dp default geometry.",
+        "Observe pager selection without emitting a selection callback; dispatch callbacks only on a completed user drag.",
+        "Restore the external page on drag cancellation; refresh remembered geometry for width/density/RTL changes and bound width calculations.",
+        "Let an active indicator drag own its target; external pager synchronization skips active drags without echoing callbacks."
+      ]
+    },
+    {
+      "path": "components/LiquidBottomTab.kt",
+      "upstream_url": "https://raw.githubusercontent.com/Kyant0/AndroidLiquidGlass/896a94a3ade1cc1a940b92365f942a34971fecda/catalog/src/main/java/com/kyant/backdrop/catalog/components/LiquidBottomTab.kt",
+      "upstream_sha256": "40178a5ab429022e4e5523a39b9feb40c8c04370671361b24ad4ee992eaaeeb0",
+      "local_sha256": "1d99ce78e11184d2cf8be6e30391098dcbb0dbe361a17ac6e63a2bb0d5cca86b",
+      "adaptations": [
+        "Relocate the package and add the original copyright and Apache-2.0 identifier.",
+        "Expose selected/enabled accessibility state and an explicit remembered interaction source for Compose compatibility."
+      ]
+    },
+    {
+      "path": "utils/DampedDragAnimation.kt",
+      "upstream_url": "https://raw.githubusercontent.com/Kyant0/AndroidLiquidGlass/896a94a3ade1cc1a940b92365f942a34971fecda/catalog/src/main/java/com/kyant/backdrop/catalog/utils/DampedDragAnimation.kt",
+      "upstream_sha256": "7d642124498eaf6e92d7101bf409657422d74cc415ad28bd961366e85cc4dc00",
+      "local_sha256": "6281e67ff681f3f52cf6b4c2bba075f8f58f49ac31026b13e752e361f48edf34",
+      "adaptations": [
+        "Relocate the package and add the original copyright and Apache-2.0 identifier.",
+        "Separate completed and cancelled drags; cancel stale release jobs on a fresh press and bound the release threshold.",
+        "Key pointer input to its animation object so old gestures cancel when their geometry is replaced.",
+        "Track active gestures before callbacks and skip queued programmatic animations if a new drag has started."
+      ]
+    },
+    {
+      "path": "utils/DragGestureInspector.kt",
+      "upstream_url": "https://raw.githubusercontent.com/Kyant0/AndroidLiquidGlass/896a94a3ade1cc1a940b92365f942a34971fecda/catalog/src/main/java/com/kyant/backdrop/catalog/utils/DragGestureInspector.kt",
+      "upstream_sha256": "01548ab5604d89bd9a8ee66a69d716036e94559c842461fbee4afc97915770c1",
+      "local_sha256": "4f2193f3bbdf4b1391eea4eefbe4e05923eb35a20adb02abbe005dea6ab83ba3",
+      "adaptations": [
+        "Relocate the package and add the original copyright and Apache-2.0 identifier.",
+        "Dispatch cancellation cleanup before propagating coroutine cancellation."
+      ]
+    },
+    {
+      "path": "utils/InteractiveHighlight.kt",
+      "upstream_url": "https://raw.githubusercontent.com/Kyant0/AndroidLiquidGlass/896a94a3ade1cc1a940b92365f942a34971fecda/catalog/src/main/java/com/kyant/backdrop/catalog/utils/InteractiveHighlight.kt",
+      "upstream_sha256": "d6610bb491db464f8d92e5380e37cac471df963323c9dafe27ca7f9460d9b535",
+      "local_sha256": "401123e0c36ee5ae1fb54d6c887e1c9ac8526aeee6cbad1c55336ff0852c4041",
+      "adaptations": [
+        "Only relocate the package and add the original copyright and Apache-2.0 identifier."
+      ]
+    }
+  ],
+  "dependencies": [
+    "io.github.kyant0:backdrop:1.0.6",
+    "io.github.kyant0:shapes:1.2.0"
+  ],
+  "local_adapters": [
+    {
+      "path": "app/src/main/java/com/naivety/zhicolor/ui/components/navigation/AppNavigationBar.kt",
+      "sha256": "a959ea2bea5870d62c36331db6659d06c03d4e0e9e4d8067e7a03511bb6e637b",
+      "description": "Independent project route/resource/theme/inset/geometry adapter. Dispatch every valid tab selection so the host can cancel an unfinished page transition, including a selection of the currently displayed page."
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="about_navigation">关于</string>
+    <string name="configuration_navigation">歌词</string>
+    <string name="home_navigation">主页</string>
+    <string name="store_navigation">工具</string>
+</resources>

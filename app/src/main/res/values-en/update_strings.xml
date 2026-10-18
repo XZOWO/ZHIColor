@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_check">Check for updates</string>
+    <string name="update_checking">Checking…</string>
+    <string name="update_available">Update available</string>
+    <string name="update_status">Update status</string>
+    <string name="update_ignore">Ignore this version</string>
+    <string name="update_github">GitHub</string>
+    <string name="update_cloud">Cloud update</string>
+    <string name="update_current">You are up to date</string>
+    <string name="update_check_failed">Could not check for updates. Try again later.</string>
+    <string name="update_open_failed">Could not open the link</string>
+    <string name="update_cancel">Cancel download</string>
+    <string name="update_progress_percent">%1$d%%</string>
+    <string name="update_connecting">Connecting</string>
+    <string name="update_downloading">Downloading</string>
+    <string name="update_verifying">Verifying download</string>
+    <string name="update_validating">Checking the package</string>
+    <string name="update_staging">Preparing installation</string>
+    <string name="update_install_scheduled">Installation started. Reopen the app when it finishes.</string>
+    <string name="update_installed">Update installed</string>
+    <string name="update_download_unavailable">No downloadable package is available for this version</string>
+    <string name="update_network_failed">Download failed. Check your connection and try again.</string>
+    <string name="update_verification_failed">Package verification failed</string>
+    <string name="update_apk_invalid">The package does not match this app version</string>
+    <string name="update_signature_mismatch">The signing certificate does not match. The app cannot be updated.</string>
+    <string name="update_root_required">Root access was not granted</string>
+    <string name="update_framework_required">LSPosed access was not detected</string>
+    <string name="update_install_failed">Root installation could not be started. Try again.</string>
+    <string name="update_install_result_failed">The update was not installed. Try again.</string>
+    <string name="update_operation_failed">Update failed. Try again later.</string>
+</resources>

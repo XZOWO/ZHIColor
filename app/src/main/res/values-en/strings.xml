@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">ZHIColor</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_tools">Tools</string>
+    <string name="tab_lyrics">Lyrics</string>
+    <string name="tab_about">About</string>
+    <string name="tool_hide_lockscreen_music_app">Hide lock screen card icon</string>
+    <string name="tool_hide_control_center_music_app">Hide Control Center card icon</string>
+</resources>

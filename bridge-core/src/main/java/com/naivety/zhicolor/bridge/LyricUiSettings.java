@@ -1,0 +1,173 @@
+package com.naivety.zhicolor.bridge;
+
+final class LyricUiSettings {
+    private static long lastSettingsRevision;
+    static final String PREFERENCES_NAME = "zhicolor_lyric_ui";
+    static final String PREF_SETTINGS_LOCALE = "settings_locale";
+    static final String ACTION_STYLE_CHANGED =
+            "com.naivety.zhicolor.action.LYRIC_UI_STYLE_CHANGED";
+    static final String ACTION_REQUEST_MEDIA_SNAPSHOT =
+            "com.naivety.zhicolor.action.REQUEST_MEDIA_SNAPSHOT";
+    static final String ACTION_REQUEST_MODULE_STATUS =
+            "com.naivety.zhicolor.action.REQUEST_MODULE_STATUS";
+    static final String ACTION_PLAYER_TRANSLATION_SETTINGS_CHANGED =
+            "com.naivety.zhicolor.action.PLAYER_TRANSLATION_SETTINGS_CHANGED";
+    static final String ACTION_CONTENT_CLEANUP_CHANGED =
+            "com.naivety.zhicolor.action.CONTENT_CLEANUP_CHANGED";
+    static final String ACTION_DEBUG_SETTINGS_CHANGED =
+            "com.naivety.zhicolor.action.DEBUG_SETTINGS_CHANGED";
+    /** Requests a restart of the main SystemUI process through the protected settings receiver. */
+    static final String ACTION_RESTART_SYSTEM_UI =
+            "com.naivety.zhicolor.action.RESTART_SYSTEM_UI";
+    static final String EXTRA_SYSTEM_UI_RESTART_RESULT_RECEIVER =
+            "system_ui_restart_result_receiver";
+    static final String EXTRA_SYSTEM_UI_RESTART_REQUEST_ID =
+            "system_ui_restart_request_id";
+    static final String RESULT_SYSTEM_UI_RESTART_REQUEST_ID =
+            "system_ui_restart_request_id";
+    static final String RESULT_SYSTEM_UI_RESTART_ACCEPTED =
+            "system_ui_restart_accepted";
+    static final int RESULT_SYSTEM_UI_RESTART_ACKNOWLEDGED = 1;
+    static final String CHANGE_SETTINGS_PERMISSION =
+            "com.naivety.zhicolor.permission.CHANGE_LYRIC_UI_SETTINGS";
+    static final String EXTRA_CLEAR_TRANSLATION_OVERRIDES =
+            "clear_translation_overrides";
+    static final String EXTRA_PLAYER_TRANSLATION_PACKAGES =
+            "player_translation_packages";
+    static final String EXTRA_PLAYER_TRANSLATION_DEFAULTS =
+            "player_translation_defaults";
+    static final String EXTRA_CLEAR_TRANSLATION_PACKAGES =
+            "clear_translation_packages";
+    static final String EXTRA_REPLACE_PLAYER_TRANSLATION_SETTINGS =
+            "replace_player_translation_settings";
+    static final String EXTRA_DEFAULT_TRANSLATION_ENABLED =
+            "default_translation_enabled";
+    static final String EXTRA_TRANSLATION_BUTTON_PACKAGES =
+            "translation_button_packages";
+    static final String EXTRA_TRANSLATION_BUTTON_VALUES =
+            "translation_button_values";
+    static final String EXTRA_DEFAULT_TRANSLATION_BUTTON_ENABLED =
+            "default_translation_button_enabled";
+    static final String EXTRA_RESULT_RECEIVER = "result_receiver";
+    static final String EXTRA_CONFIG_REVISION = "config_revision";
+    static final String EXTRA_SETTINGS_SOURCE = "settings_source";
+    static final String EXTRA_CONTENT_CLEANUP_CONFIG = "content_cleanup_config";
+    static final String RESULT_TITLE = "title";
+    static final String RESULT_ARTIST = "artist";
+    static final String RESULT_ALBUM = "album";
+    static final String RESULT_TRACK_KEY = "track_key";
+    static final String RESULT_RAW_LYRIC = "raw_lyric";
+    static final String RESULT_APPLIED = "applied";
+    static final String RESULT_MODULE_VERSION_CODE = "module_version_code";
+    static final String RESULT_MODULE_TIMESTAMP = "module_timestamp";
+    static final String RESULT_CONFIG_REVISION = "config_revision";
+    static final String RESULT_ALIGNMENT = "alignment";
+    static final String RESULT_PROCESS = "process";
+    static final String RESULT_REASON = "reason";
+    static final int RESULT_SETTINGS_APPLIED = 1;
+    static final int RESULT_SETTINGS_REJECTED = 2;
+    static final String SOURCE_MAIN_SETTINGS = "main-settings";
+    static final String SOURCE_VISUAL_LAYERS = "visual-layers";
+    static final String SOURCE_CONFIG_BACKUP = "config-backup";
+    static final String SOURCE_PLAYER_TRANSLATION = "player-translation";
+    static final String SOURCE_DEBUG_SETTINGS = "debug-settings";
+    static final String TRANSLATION_PREFERENCE_KEY = "lyric_info_translation_enabled";
+    private static final String TRANSLATION_DEFAULT_KEY = "lyric_info_translation_default";
+    private static final String TRANSLATION_BUTTON_KEY = "lyric_info_translation_button";
+    static final String KEY_DEFAULT_TRANSLATION_BUTTON = "lyric_info_translation_button_default";
+    static final int MAX_PLAYER_TRANSLATION_PACKAGES = 256;
+    static final String EXTRA_SCROLL_SCALE_ENABLED = "scroll_scale_enabled";
+    static final String EXTRA_INACTIVE_BLUR_ENABLED = "inactive_blur_enabled";
+    static final String EXTRA_LINE_TIMED_PROGRESS_ENABLED = "line_timed_progress_enabled";
+    static final String EXTRA_TRANSLATION_PROGRESS_ENABLED = "translation_progress_enabled";
+    static final String EXTRA_TRANSLATION_DISPLAY_MODE = LyricUiConfigCodec.TRANSLATION_DISPLAY_MODE;
+    static final String EXTRA_SECONDARY_PROGRESS_ENABLED = LyricUiConfigCodec.SECONDARY_PROGRESS;
+    static final String EXTRA_SCREEN_TIMEOUT_ENABLED = "screen_timeout_enabled";
+    static final String EXTRA_SCREEN_TIMEOUT_SECONDS = "screen_timeout_seconds";
+    static final String KEY_SCROLL_SCALE_ENABLED = LyricUiConfigCodec.SCALE_ENABLED;
+    static final String KEY_INACTIVE_BLUR_ENABLED = LyricUiConfigCodec.BLUR_ENABLED;
+    static final String KEY_LINE_TIMED_PROGRESS_ENABLED = LyricUiConfigCodec.LINE_TIMED_PROGRESS;
+    static final String KEY_TRANSLATION_PROGRESS_ENABLED = LyricUiConfigCodec.TRANSLATION_PROGRESS;
+    static final String KEY_TRANSLATION_DISPLAY_MODE = LyricUiConfigCodec.TRANSLATION_DISPLAY_MODE;
+    static final String KEY_SECONDARY_PROGRESS_ENABLED = LyricUiConfigCodec.SECONDARY_PROGRESS;
+    static final String KEY_SCREEN_TIMEOUT_ENABLED = LyricUiConfigCodec.SCREEN_TIMEOUT_ENABLED;
+    static final String KEY_SCREEN_TIMEOUT_SECONDS = LyricUiConfigCodec.SCREEN_TIMEOUT_SECONDS;
+    static final boolean DEFAULT_LINE_TIMED_PROGRESS_ENABLED = true;
+    static final boolean DEFAULT_TRANSLATION_PROGRESS_ENABLED = false;
+    static final boolean DEFAULT_SECONDARY_PROGRESS_ENABLED = true;
+    static final boolean DEFAULT_CHAR_LIFT_ENABLED = true;
+    static final int DEFAULT_CHAR_LIFT_STRENGTH_PERCENT = 100;
+    static final boolean DEFAULT_SCREEN_TIMEOUT_ENABLED = true;
+    static final int DEFAULT_SCREEN_TIMEOUT_SECONDS = 0;
+    static final int MIN_SCREEN_TIMEOUT_SECONDS = 1;
+    static final int MAX_SCREEN_TIMEOUT_SECONDS = 86_400;
+
+    static int sanitizeScreenTimeoutSeconds(int seconds) {
+        if (seconds <= 0) {
+            return DEFAULT_SCREEN_TIMEOUT_SECONDS;
+        }
+        return Math.min(MAX_SCREEN_TIMEOUT_SECONDS, Math.max(MIN_SCREEN_TIMEOUT_SECONDS, seconds));
+    }
+
+    static int parseScreenTimeoutSeconds(String value) {
+        String text = value == null ? "" : value.trim();
+        if (text.isEmpty()) return DEFAULT_SCREEN_TIMEOUT_SECONDS;
+        try {
+            long parsed = Long.parseLong(text);
+            if (parsed <= 0L) return DEFAULT_SCREEN_TIMEOUT_SECONDS;
+            return (int) Math.min(MAX_SCREEN_TIMEOUT_SECONDS, parsed);
+        } catch (NumberFormatException ignored) {
+            // A digit-only value larger than long still means "maximum", not "keep on".
+            for (int index = 0; index < text.length(); index++) {
+                if (!Character.isDigit(text.charAt(index))) {
+                    return DEFAULT_SCREEN_TIMEOUT_SECONDS;
+                }
+            }
+            return text.isEmpty() ? DEFAULT_SCREEN_TIMEOUT_SECONDS : MAX_SCREEN_TIMEOUT_SECONDS;
+        }
+    }
+
+    static boolean isTranslationOverrideKey(String key) {
+        return key != null && (key.equals(TRANSLATION_PREFERENCE_KEY)
+                || key.startsWith(TRANSLATION_PREFERENCE_KEY + "."));
+    }
+
+    static String translationDefaultKeyForPackage(String packageName) {
+        return TRANSLATION_DEFAULT_KEY + "." + packageName;
+    }
+
+    static boolean isPlayerTranslationDefaultKey(String key) {
+        return key != null && key.startsWith(TRANSLATION_DEFAULT_KEY + ".");
+    }
+
+    static String translationButtonKeyForPackage(String packageName) {
+        return TRANSLATION_BUTTON_KEY + "." + packageName;
+    }
+
+    static boolean isPlayerTranslationButtonKey(String key) {
+        return key != null && key.startsWith(TRANSLATION_BUTTON_KEY + ".");
+    }
+
+    static boolean defaultTranslationButtonEnabled(android.content.SharedPreferences preferences) {
+        if (preferences == null) {
+            return true;
+        }
+        return preferences.getBoolean(KEY_DEFAULT_TRANSLATION_BUTTON, true);
+    }
+
+    static LyricUiConfig withGlobalTranslationDefault(
+            LyricUiConfig baseline,
+            boolean enabled) {
+        LyricUiConfig base = baseline == null ? LyricUiConfig.defaults() : baseline;
+        return base.buildUpon().defaultTranslationEnabled(enabled).build();
+    }
+
+    static synchronized long newSettingsRevision() {
+        long now = System.currentTimeMillis();
+        lastSettingsRevision = Math.max(now, lastSettingsRevision + 1L);
+        return lastSettingsRevision;
+    }
+
+    private LyricUiSettings() {
+    }
+}

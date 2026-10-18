@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">ZHIColor</string>
+    <string name="tab_home">主页</string>
+    <string name="tab_tools">工具</string>
+    <string name="tab_lyrics">歌词</string>
+    <string name="tab_about">关于</string>
+    <string name="tool_hide_lockscreen_music_app">隐藏锁屏卡片图标</string>
+    <string name="tool_hide_control_center_music_app">隐藏控制中心卡片图标</string>
+</resources>
