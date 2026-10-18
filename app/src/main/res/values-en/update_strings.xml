@@ -6,7 +6,7 @@
     <string name="update_status">Update status</string>
     <string name="update_ignore">Ignore this version</string>
     <string name="update_github">GitHub</string>
-    <string name="update_cloud">Cloud update</string>
+    <string name="update_download">Download update</string>
     <string name="update_current">You are up to date</string>
     <string name="update_check_failed">Could not check for updates. Try again later.</string>
     <string name="update_open_failed">Could not open the link</string>

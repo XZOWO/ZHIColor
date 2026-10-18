@@ -110,7 +110,7 @@ fun UpdateDialog(viewModel: UpdateViewModel) {
                         .onFailure { viewModel.feedback(UpdateFeedback.OPEN_FAILED) }
                 })
                 DialogAction(
-                    text = stringResource(R.string.update_cloud),
+                    text = stringResource(R.string.update_download),
                     enabled = state.task?.phase !in setOf(
                         UpdateTaskPhase.DOWNLOADING,
                         UpdateTaskPhase.INSTALLING,

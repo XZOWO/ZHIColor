@@ -27,9 +27,6 @@ android {
         targetSdk = 36
         versionCode = releaseVersion.getProperty("versionCode").toInt()
         versionName = releaseVersion.getProperty("versionName")
-        buildConfigField("String", "UPDATE_MANIFEST_URL", quoted(providers.gradleProperty("updateManifestUrl")
-            .orElse(providers.environmentVariable("ZHICOLOR_UPDATE_MANIFEST_URL"))
-            .getOrElse(updateSettings.getProperty("updateManifestUrl", ""))))
         buildConfigField("String", "GITHUB_UPDATE_MANIFEST_URL", quoted(updateSettings.getProperty("githubUpdateManifestUrl")))
         buildConfigField("String", "GITHUB_RELEASES_URL", quoted(updateSettings.getProperty("githubReleasesUrl")))
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

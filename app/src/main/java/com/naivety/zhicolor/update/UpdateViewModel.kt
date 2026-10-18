@@ -48,7 +48,7 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
     private val session = UpdateCheckSession()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = UpdateRepository(
-        manifestUrls = listOf(BuildConfig.UPDATE_MANIFEST_URL, BuildConfig.GITHUB_UPDATE_MANIFEST_URL),
+        manifestUrl = BuildConfig.GITHUB_UPDATE_MANIFEST_URL,
         githubReleasesUrl = BuildConfig.GITHUB_RELEASES_URL,
     )
     private val apkUpdater = RootApkUpdater(application)
@@ -148,10 +148,6 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
     fun downloadAndInstall() {
         val release = state.release ?: return
         if (!accessAvailable || updateJob?.isActive == true || state.task?.phase == UpdateTaskPhase.SCHEDULED) return
-        if (release.cloudUrl == null || release.sha256 == null) {
-            state = state.copy(task = UpdateTaskUiState(UpdateTaskPhase.FAILED, R.string.update_download_unavailable))
-            return
-        }
         taskRelease = release
         val generation = ++operationGeneration
         state = state.copy(task = UpdateTaskUiState(UpdateTaskPhase.DOWNLOADING, R.string.update_connecting), taskDialogDismissed = false)

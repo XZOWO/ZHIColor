@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -13,7 +12,6 @@ import re
 import shutil
 import sys
 import tempfile
-from urllib.parse import urlsplit
 import zipfile
 
 
@@ -71,7 +69,7 @@ def parse_json(payload: bytes, label: str) -> dict:
 def validate_version(code: object, name: object) -> tuple[int, str]:
     if type(code) is not int or code <= 0:
         raise ReleaseValidationError("versionCode must be a positive integer")
-    if not isinstance(name, str) or not STABLE_VERSION.fullmatch(name):
+    if not isinstance(name, str) or len(name) > 80 or not STABLE_VERSION.fullmatch(name):
         raise ReleaseValidationError("versionName must be a stable major.minor.patch version")
     return code, name
 
@@ -97,87 +95,41 @@ def read_version(path: Path) -> tuple[int, str]:
         raise ReleaseValidationError("version.properties must define a positive versionCode and stable versionName") from error
 
 
-def validate_https_url(value: str, label: str) -> str:
-    if not isinstance(value, str) or any(character.isspace() for character in value):
-        raise ReleaseValidationError(f"{label} must be an HTTPS URL")
-    if any(character in value for character in ("\\", "%")):
-        raise ReleaseValidationError(f"{label} contains an unsupported URL escape")
-    try:
-        parsed = urlsplit(value)
-        port = parsed.port
-    except ValueError as error:
-        raise ReleaseValidationError(f"{label} contains an invalid host or port") from error
-    host = (parsed.hostname or "").lower()
-    if (parsed.scheme != "https" or not host or parsed.username is not None
-            or parsed.password is not None or parsed.query or parsed.fragment
-            or port not in (None, 443)):
-        raise ReleaseValidationError(f"{label} must use public HTTPS without credentials, query, or fragment")
-    if (not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host)
-            or "." not in host or ".." in host or host.endswith((".local", ".localhost", ".invalid", ".test"))):
-        raise ReleaseValidationError(f"{label} must use a public DNS hostname")
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    else:
-        raise ReleaseValidationError(f"{label} must use a public DNS hostname")
-    segments = parsed.path.split("/")
-    if any(segment in (".", "..") for segment in segments) or "//" in parsed.path:
-        raise ReleaseValidationError(f"{label} contains an invalid path")
-    return value
-
-
-def validate_cloud_base(value: str, prefix: str = "zhicolor") -> str:
-    validate_https_url(value, "cloud base URL")
-    parsed = urlsplit(value)
-    host = parsed.hostname.lower()
-    if any(host == domain or host.endswith("." + domain)
-           for domain in ("github.com", "githubusercontent.com", "github.io")):
-        raise ReleaseValidationError("cloud base URL must be independent of GitHub")
-    if (not re.fullmatch(r"[a-z0-9][a-z0-9/_-]*", prefix)
-            or any(part in ("", ".", "..") for part in prefix.split("/"))
-            or prefix.split("/")[-1] != "zhicolor"):
-        raise ReleaseValidationError("OSS_PREFIX must be a relative object prefix ending in zhicolor")
-    if parsed.path != "/" + prefix:
-        raise ReleaseValidationError(f"cloud base URL must end in /{prefix} without a trailing slash")
-    return value
-
-
 def apk_filename(version_name: str) -> str:
     return f"ZHIColor-{version_name}.apk"
 
 
-def validate_manifest(value: dict, cloud_base: str | None = None, prefix: str = "zhicolor") -> tuple[int, str]:
-    cloud_enabled = cloud_base not in (None, "")
-    expected_fields = {"versionCode", "versionName", "changelog", "githubUrl", "sha256"}
-    if cloud_enabled:
-        validate_cloud_base(cloud_base, prefix)
-        expected_fields.add("cloudUrl")
+def github_download_url(version_name: str) -> str:
+    return f"https://github.com/XZOWO/ZHIColor/releases/download/v{version_name}/{apk_filename(version_name)}"
+
+
+def validate_manifest(value: dict) -> tuple[int, str]:
+    expected_fields = {"versionCode", "versionName", "changelog", "githubUrl", "downloadUrl", "sha256"}
     if set(value) != expected_fields:
         raise ReleaseValidationError("update.json fields do not match the release contract")
     code, name = validate_version(value["versionCode"], value["versionName"])
     changelog = value["changelog"]
-    if not isinstance(changelog, str) or not changelog.strip() or len(changelog.encode("utf-8")) > MAX_CHANGELOG_BYTES:
-        raise ReleaseValidationError("changelog must be nonempty and at most 64 KiB")
+    if not isinstance(changelog, str) or not changelog.strip() or len(changelog) > 30_000 or len(changelog.encode("utf-8")) > MAX_CHANGELOG_BYTES:
+        raise ReleaseValidationError("changelog must be nonempty, at most 30000 characters and 64 KiB")
     if value["githubUrl"] != GITHUB_RELEASES + "v" + name:
         raise ReleaseValidationError("githubUrl does not match the official repository and release tag")
-    if cloud_enabled and value["cloudUrl"] != f"{cloud_base}/v{name}/{apk_filename(name)}":
-        raise ReleaseValidationError("cloudUrl does not match the expected immutable version path")
+    if value["downloadUrl"] != github_download_url(name):
+        raise ReleaseValidationError("downloadUrl does not match the official repository, tag and APK filename")
     if not isinstance(value["sha256"], str) or not SHA256.fullmatch(value["sha256"]):
         raise ReleaseValidationError("sha256 must be a lowercase SHA-256 digest")
     return code, name
 
 
 def prepare_release(apk: Path, output: Path, changelog_file: Path,
-                    cloud_base: str | None = None, version_file: Path = ROOT / "version.properties") -> dict:
-    if cloud_base not in (None, ""):
-        validate_cloud_base(cloud_base)
+                    version_file: Path = ROOT / "version.properties") -> dict:
     code, name = read_version(version_file)
     apk = apk.resolve(strict=True)
     if not apk.is_file() or apk.suffix.lower() != ".apk" or not 0 < apk.stat().st_size <= MAX_APK_BYTES:
         raise ReleaseValidationError("APK must be a nonempty regular .apk file of at most 256 MiB")
     try:
         with zipfile.ZipFile(apk) as archive:
+            if archive.testzip() is not None:
+                raise ReleaseValidationError("APK archive integrity check failed")
             if "AndroidManifest.xml" not in archive.namelist():
                 raise ReleaseValidationError("APK does not contain AndroidManifest.xml")
     except zipfile.BadZipFile as error:
@@ -201,11 +153,9 @@ def prepare_release(apk: Path, output: Path, changelog_file: Path,
         raise ReleaseValidationError("changelog must be UTF-8 text") from error
     digest = sha256_file(apk)
     manifest = {"versionCode": code, "versionName": name, "changelog": changelog,
-                "githubUrl": GITHUB_RELEASES + "v" + name}
-    if cloud_base not in (None, ""):
-        manifest["cloudUrl"] = f"{cloud_base}/v{name}/{apk_filename(name)}"
+                "githubUrl": GITHUB_RELEASES + "v" + name, "downloadUrl": github_download_url(name)}
     manifest["sha256"] = digest
-    validate_manifest(manifest, cloud_base)
+    validate_manifest(manifest)
     manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     output = output.resolve()
     if output == apk.parent:
@@ -229,10 +179,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--changelog-file", type=Path, required=True)
-    parser.add_argument("--cloud-base-url", help="Optional public HTTPS base ending in /zhicolor; omit for GitHub-only assets")
     args = parser.parse_args(argv)
     try:
-        manifest = prepare_release(args.apk, args.output, args.changelog_file, args.cloud_base_url)
+        manifest = prepare_release(args.apk, args.output, args.changelog_file)
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

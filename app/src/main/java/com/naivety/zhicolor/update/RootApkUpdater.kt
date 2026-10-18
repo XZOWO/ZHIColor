@@ -83,9 +83,9 @@ internal class RootApkUpdater(
         release: UpdateRelease,
         onProgress: (UpdateDownloadProgress) -> Unit = {},
     ): File = withTimeout(DOWNLOAD_TIMEOUT_MS) {
-        val url = release.cloudUrl ?: throw UpdateOperationException(UpdateOperationFailureCode.MISSING_DOWNLOAD_URL)
-        val expectedSha = release.sha256 ?: throw UpdateOperationException(UpdateOperationFailureCode.MISSING_SHA256)
-        if (!UpdateUrlPolicy.cloudDownload(url)) {
+        val url = release.downloadUrl
+        val expectedSha = release.sha256
+        if (!UpdateUrlPolicy.githubDownload(url, release.versionName)) {
             throw UpdateOperationException(UpdateOperationFailureCode.INVALID_DOWNLOAD_URL)
         }
         val output = File.createTempFile("zhicolor-update-", ".apk", context.cacheDir)
@@ -190,9 +190,9 @@ internal class RootApkUpdater(
     }
 
     private fun validateDownloadedFile(apk: File, release: UpdateRelease) {
-        val expectedSha = release.sha256 ?: throw UpdateOperationException(UpdateOperationFailureCode.MISSING_SHA256)
-        val cloudUrl = release.cloudUrl ?: throw UpdateOperationException(UpdateOperationFailureCode.MISSING_DOWNLOAD_URL)
-        if (!UpdateUrlPolicy.cloudDownload(cloudUrl)) throw UpdateOperationException(UpdateOperationFailureCode.INVALID_DOWNLOAD_URL)
+        val expectedSha = release.sha256
+        val downloadUrl = release.downloadUrl
+        if (!UpdateUrlPolicy.githubDownload(downloadUrl, release.versionName)) throw UpdateOperationException(UpdateOperationFailureCode.INVALID_DOWNLOAD_URL)
         val canonical = runCatching { apk.canonicalFile }.getOrElse {
             throw UpdateOperationException(UpdateOperationFailureCode.INVALID_APK, it)
         }

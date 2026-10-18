@@ -8,8 +8,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     env:
-      ZHICOLOR_UPDATE_MANIFEST_URL: ${{ vars.UPDATE_MANIFEST_URL }}
-      CLOUD_BASE_URL: ${{ vars.CLOUD_BASE_URL }}
       ZHICOLOR_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
       ZHICOLOR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ZHICOLOR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -24,13 +22,6 @@ jobs:
           cmdline-tools-version: '15859902'
           packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Validate update configuration
-        run: |
-          if [ -n "$CLOUD_BASE_URL" ]; then
-            test "$ZHICOLOR_UPDATE_MANIFEST_URL" = "${CLOUD_BASE_URL%/}/update.json"
-          else
-            test -z "$ZHICOLOR_UPDATE_MANIFEST_URL"
-          fi
       - name: Load release signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -49,11 +40,7 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
       - name: Prepare release attachments
         run: |
-          cloud_args=()
-          if [ -n "$CLOUD_BASE_URL" ]; then
-            cloud_args+=(--cloud-base-url "$CLOUD_BASE_URL")
-          fi
-          python scripts/prepare_release.py --apk app/build/outputs/apk/release/app-release.apk --output release-assets --changelog-file docs/release/CHANGELOG.md "${cloud_args[@]}"
+          python scripts/prepare_release.py --apk app/build/outputs/apk/release/app-release.apk --output release-assets --changelog-file docs/release/CHANGELOG.md
       - uses: actions/upload-artifact@v4
         with:
           name: signed-release-assets

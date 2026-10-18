@@ -31,8 +31,11 @@ internal object UpdateDownloadProtocol {
         var connection: HttpURLConnection? = null
         var complete = false
         try {
+            if (!UpdateUrlPolicy.githubDownload(startUrl)) {
+                throw UpdateOperationException(UpdateOperationFailureCode.INVALID_DOWNLOAD_URL)
+            }
             repeat(MAX_REDIRECTS + 1) { redirectCount ->
-                if (!UpdateUrlPolicy.cloudDownload(currentUrl)) {
+                if (!UpdateUrlPolicy.githubDownloadRedirect(currentUrl, startUrl)) {
                     throw UpdateOperationException(UpdateOperationFailureCode.INVALID_DOWNLOAD_URL)
                 }
                 onProgress(UpdateDownloadProgress(UpdateDownloadStage.CONNECTING, received))
