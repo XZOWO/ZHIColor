@@ -398,6 +398,11 @@ class ReleaseToolsTest(unittest.TestCase):
 
 
 class AndroidSdkWorkflowTests(unittest.TestCase):
+    def test_gradle_wrapper_has_unix_line_endings(self):
+        wrapper = (Path(__file__).resolve().parents[1] / "gradlew").read_bytes()
+        self.assertTrue(wrapper.startswith(b"#!/usr/bin/env bash\n"))
+        self.assertNotIn(b"\r", wrapper)
+
     def test_workflows_install_explicit_supported_sdk_packages(self):
         root = Path(__file__).resolve().parents[1]
         for name in ("check.yml", "prepare-release.yml"):
