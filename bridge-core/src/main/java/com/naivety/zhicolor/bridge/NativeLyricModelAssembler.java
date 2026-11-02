@@ -200,6 +200,7 @@ final class NativeLyricModelAssembler {
                 WordLine target = findMetadataLine(model, begin, text, claimed);
                 if (target == null) continue;
                 claimed.put(target, Boolean.TRUE);
+                applyAdvancedMetadata(target, row);
                 if (row.has("translation")) {
                     applyStructuredTranslation(target, row);
                 }
@@ -212,6 +213,14 @@ final class NativeLyricModelAssembler {
                 JSONObject secondary = row.optJSONObject("secondary");
                 if (secondary != null) {
                     target.secondaryLine = parseSecondaryMetadata(secondary, target);
+                    if (target.secondaryLine != null) {
+                        // The payload's nested vocal is an explicit parent relationship.
+                        // This is not an inference based on timing or screen alignment.
+                        target.secondaryLine.parentLineId = target.lineId;
+                        if ("unknown".equals(target.secondaryLine.sourceRole)) {
+                            target.secondaryLine.sourceRole = "background";
+                        }
+                    }
                 }
             }
         } catch (Exception ignored) {
@@ -273,6 +282,7 @@ final class NativeLyricModelAssembler {
             result.sourceAlignmentProvided = owner.sourceAlignmentProvided;
             result.explicitEndTimeProvided = true;
             applyStructuredTranslation(result, source);
+            applyAdvancedMetadata(result, source);
             return result;
         }
         if (isEmpty(fallbackText)) return null;
@@ -285,7 +295,32 @@ final class NativeLyricModelAssembler {
         result.sourceAlignmentProvided = owner.sourceAlignmentProvided;
         result.explicitEndTimeProvided = end > begin;
         applyStructuredTranslation(result, source);
+        applyAdvancedMetadata(result, source);
         return result;
+    }
+
+    private static void applyAdvancedMetadata(WordLine target, JSONObject source) {
+        target.lineId = source.optString("lineId", "");
+        target.translationKey = source.optString("translationKey", "");
+        target.parentLineId = source.optString("parentLineId", "");
+        target.sourceRole = source.optString("role", "unknown");
+        target.vocalAgent = source.optString("agent", "");
+        target.vocalGroup = source.optString("group", "");
+        target.backgroundPosition = source.optString("backgroundPosition", "unknown");
+        target.romanization = TimedLyricTextMapper.clean(source.optString("romanization", ""));
+        target.advancedTranslationProvided = source.has("translationText");
+        target.advancedTranslation = TimedLyricTextMapper.clean(source.optString("translationText", ""));
+        JSONArray words = source.optJSONArray("romanizationWords");
+        target.romanizationLine = null;
+        if (!isEmpty(target.romanization) && words != null && words.length() > 0) {
+            try {
+                JSONObject roman = new JSONObject().put("text", target.romanization).put("words", words);
+                WordLine timed = parseSecondaryMetadata(roman, target);
+                if (timed != null && timed.timingMode == LyricTimingMode.WORD_TIMED) {
+                    target.romanizationLine = timed;
+                }
+            } catch (Exception ignored) { }
+        }
     }
 
     private static void applyStructuredTranslation(WordLine target, JSONObject source) {

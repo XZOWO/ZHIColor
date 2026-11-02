@@ -75,6 +75,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("io.github.libxposed:service:101.0.0")
     compileOnly(project(":libxposed-api-stubs"))
+    debugRuntimeOnly(project(":libxposed-api-stubs"))
     implementation(project(":bridge-core"))
     implementation(project(":lyricon-central"))
     implementation("io.github.proify.lyricon:subscriber:0.1.70")

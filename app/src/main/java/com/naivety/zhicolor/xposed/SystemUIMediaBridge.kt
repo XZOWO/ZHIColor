@@ -6,11 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.naivety.zhicolor.home.PlaybackSessionPolicy
 import com.naivety.zhicolor.home.MediaContract as C
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
@@ -64,13 +67,60 @@ internal object SystemUIMediaBridge {
                 ?: data?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
                 ?: data?.description?.iconBitmap
         }.getOrNull()
+        val audio = activeAudioSession(context, controller.packageName)
         return Intent()
             .putExtra(C.AVAILABLE, true)
             .putExtra(C.PACKAGE, controller.packageName)
             .putExtra(C.TITLE, data?.getText(MediaMetadata.METADATA_KEY_TITLE)?.toString()?.take(1024))
             .putExtra(C.ARTIST, data?.getText(MediaMetadata.METADATA_KEY_ARTIST)?.toString()?.take(1024))
             .putExtra(C.PLAYING, controller.playbackState?.state == PlaybackState.STATE_PLAYING)
+            .putExtra(C.AUDIO_SESSION, audio.sessionId)
+            .putExtra(C.AUDIO_ROUTE, audio.routeKey)
             .putExtra(C.COVER, art?.let(::encodeCover))
+    }
+
+    private data class AudioSessionInfo(val sessionId: Int = 0, val routeKey: String = "")
+
+    private fun activeAudioSession(context: Context, playerPackage: String): AudioSessionInfo = runCatching {
+        val playerUid = context.packageManager.getApplicationInfo(playerPackage, 0).uid
+        val audioManager = context.getSystemService(AudioManager::class.java) ?: return@runCatching AudioSessionInfo()
+        val candidates = audioManager.activePlaybackConfigurations.mapNotNull { configuration ->
+            runCatching candidate@ {
+                val type = configuration.javaClass
+                val clientUid = (type.getMethod("getClientUid").invoke(configuration) as? Number)?.toInt()
+                    ?: return@candidate null
+                val active = type.getMethod("isActive").invoke(configuration) == true
+                // The hidden accessor name varies between platform releases and vendor builds.
+                val accessor = sequenceOf("getAudioSessionId", "getSessionId", "getClientAudioSessionId")
+                    .mapNotNull { name -> runCatching { type.getMethod(name) }.getOrNull() }
+                    .firstOrNull()
+                val sessionId = (accessor?.invoke(configuration) as? Number)?.toInt() ?: 0
+                PlaybackSessionPolicy.Candidate(clientUid, active, sessionId, configuration.audioAttributes.usage) to configuration
+            }.getOrNull()
+        }
+        val sessionId = PlaybackSessionPolicy.select(playerUid, candidates.map { it.first })
+        if (sessionId <= 0) return@runCatching AudioSessionInfo()
+        val selectedConfiguration = candidates.firstOrNull { (candidate, _) ->
+            candidate.clientUid == playerUid && candidate.active && candidate.sessionId == sessionId
+        }?.second
+        AudioSessionInfo(sessionId, selectedConfiguration?.let(::audioRouteKey).orEmpty())
+    }.getOrDefault(AudioSessionInfo())
+
+    private fun audioRouteKey(configuration: Any): String {
+        for (name in listOf("getAudioDeviceInfos", "getAudioDeviceInfo")) {
+            val key = runCatching {
+                val result = configuration.javaClass.getMethod(name).invoke(configuration)
+                val devices = when (result) {
+                    is AudioDeviceInfo -> listOf(result)
+                    is Array<*> -> result.filterIsInstance<AudioDeviceInfo>()
+                    is Iterable<*> -> result.filterIsInstance<AudioDeviceInfo>()
+                    else -> emptyList()
+                }
+                devices.map { it.id }.distinct().sorted().joinToString(",")
+            }.getOrDefault("")
+            if (key.isNotEmpty()) return key
+        }
+        return ""
     }
 
     private fun encodeCover(bitmap: Bitmap): ByteArray? = runCatching {

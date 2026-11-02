@@ -2,10 +2,6 @@
     <string name="scr_lyrics">歌词</string>
     <string name="scr_back">返回</string>
     <string name="scr_more">更多</string>
-    <string name="scr_style">歌词样式</string>
-    <string name="scr_standard">标准</string>
-    <string name="scr_advanced">高级版</string>
-    <string name="scr_in_development">待开发</string>
     <string name="scr_translation">翻译</string>
     <string name="scr_player_translations">各应用翻译</string>
     <string name="scr_cleanup">开头清理</string>
@@ -94,4 +90,11 @@
     <string name="scr_scope_failed">%1$d 个重启失败</string>
     <string name="scr_scope_system">系统框架作用域请重启设备生效</string>
     <string name="scr_separator">；</string>
+    <string name="scr_background">背景</string>
+    <string name="scr_font">字体</string>
+    <string name="scr_follow_system">跟随系统</string>
+    <string name="scr_apple_style">Apple样式</string>
+    <string name="scr_romanization">音译</string>
+    <string name="scr_background_animation">背景随音频动画</string>
+    <string name="scr_background_animation_summary">可能影响功耗</string>
 </resources>

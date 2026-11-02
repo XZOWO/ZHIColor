@@ -230,11 +230,11 @@ fun Modifier.glassOverlaySurface(
             blur(18.dp.toPx())
             lens(28.dp.toPx(), 32.dp.toPx())
         },
-        highlight = { Highlight.Default.copy(alpha = if (light) 0.9f else 0.6f) },
+        highlight = { Highlight.Default.copy(alpha = if (light) 0.65f else 0.42f) },
         shadow = { Shadow.Default.copy(color = Color.Black.copy(alpha = if (light) 0.16f else 0.3f), alpha = 0.8f) },
         innerShadow = { InnerShadow(radius = 12.dp, alpha = if (light) 0.12f else 0.2f) },
         onDrawSurface = {
-            drawRect(tint.copy(alpha = if (light) 0.4f else 0.44f))
+            drawRect(tint.copy(alpha = if (light) 0.23f else 0.27f))
             drawRect(Color.White.copy(alpha = if (light) 0.045f else 0.025f))
         },
     ).clip(shape)

@@ -31,12 +31,14 @@ internal object PredictiveBackMotionPolicy {
 
     fun pageChildFrame(openFraction: Float, widthPx: Float): OpenMotionFrame {
         val q = visualFraction(openFraction)
-        return OpenMotionFrame(alpha = q, scale = 0.98f + 0.02f * q, translationX = (1f - q) * widthPx / 7f)
+        // Glass surfaces cannot conceal another page. Fade the old content out before
+        // showing the new content, without replacing the shared artwork background.
+        return OpenMotionFrame(alpha = (2f * q - 1f).coerceIn(0f, 1f), scale = 0.98f + 0.02f * q, translationX = (1f - q) * widthPx / 7f)
     }
 
     fun pageParentFrame(openFraction: Float, widthPx: Float): OpenMotionFrame {
         val q = visualFraction(openFraction)
-        return OpenMotionFrame(alpha = 1f, scale = 1f - 0.02f * q, translationX = -q * widthPx / 10f)
+        return OpenMotionFrame(alpha = (1f - 2f * q).coerceIn(0f, 1f), scale = 1f - 0.02f * q, translationX = -q * widthPx / 10f)
     }
 
     fun dialogFrame(openFraction: Float, large: Boolean, heightPx: Float, density: Float): OpenMotionFrame {

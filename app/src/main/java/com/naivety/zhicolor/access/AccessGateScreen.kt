@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import com.naivety.zhicolor.ui.components.GlassCard
+import com.naivety.zhicolor.ui.components.LocalCardBackdrop
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,14 +41,14 @@ import com.naivety.zhicolor.ui.components.AppDialog
 import com.naivety.zhicolor.ui.components.DialogBody
 import com.naivety.zhicolor.ui.components.GlassMenuItem
 import com.naivety.zhicolor.ui.components.GlassOverlayHost
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 internal fun AccessGateScreen(state: AccessState) {
     val context = LocalContext.current
-    val surface = MiuixTheme.colorScheme.surface
+    val surface = MiuixTheme.colorScheme.background
+    val cardBackdrop = rememberLayerBackdrop()
     val foreground = MiuixTheme.colorScheme.onSurface
     val secondary = MiuixTheme.colorScheme.onSurfaceVariantSummary
     val backdrop = rememberLayerBackdrop {
@@ -57,8 +60,10 @@ internal fun AccessGateScreen(state: AccessState) {
     val languageLabels = listOf(stringResource(R.string.about_language_system), "简体中文", "English")
 
     GlassOverlayHost(backdrop = backdrop) {
+        Box(Modifier.fillMaxSize().layerBackdrop(cardBackdrop).background(surface))
+        CompositionLocalProvider(LocalCardBackdrop provides cardBackdrop) {
         Column(
-            modifier = Modifier.fillMaxSize().background(surface).layerBackdrop(backdrop)
+            modifier = Modifier.fillMaxSize().layerBackdrop(backdrop)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 22.dp, vertical = 32.dp),
@@ -80,7 +85,7 @@ internal fun AccessGateScreen(state: AccessState) {
                 fontSize = 14.sp,
                 lineHeight = 21.sp,
             )
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 AccessStatusRow(
                     title = stringResource(R.string.access_root),
                     status = when (state.root) {
@@ -114,6 +119,7 @@ internal fun AccessGateScreen(state: AccessState) {
                     textDecoration = TextDecoration.Underline,
                 )
             }
+        }
         }
         AppDialog(
             show = languageVisible,

@@ -82,7 +82,7 @@ public final class ZhiBridgeRuntime {
         if(attempt<=5)new Handler(Looper.getMainLooper()).postDelayed(ZhiBridgeRuntime::refresh,Math.min(1000L<<attempt,30000L));
     }});}
     private static void applyConfig(Context c,Bundle snapshot,String source){
-        // Advanced currently shares the standard renderer until its own pipeline is available.
+        // Both content styles share the provider and native media-session contract.
         boolean next=snapshot.getBoolean(BridgeSettings.MASTER,false);
         ArrayList<String> list=snapshot.getStringArrayList(BridgeSettings.APPS);Set<String> allowed=list==null?Collections.emptySet():new LinkedHashSet<>(list);
         Bundle main=snapshot.getBundle("main");int hash=Objects.hash(next,allowed,stableHash(main),

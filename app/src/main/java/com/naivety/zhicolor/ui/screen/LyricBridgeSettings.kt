@@ -3,6 +3,8 @@ package com.naivety.zhicolor.ui.screen
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
+import com.naivety.zhicolor.ui.components.GlassSectionTitle
+import com.naivety.zhicolor.ui.components.GlassCard
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -21,13 +23,13 @@ internal fun LyricBridgeSettings() {
     val selectedApps=remember(revision,apps){apps.associate {it.packageName to BridgeSettings.playerEnabled(context,it.packageName)}}
     val master=remember(revision){BridgeSettings.enabled(context)}
     Column {
-        Card(Modifier.padding(horizontal=12.dp)) {
+        GlassCard(Modifier.padding(horizontal=12.dp)) {
             SwitchPreference(title=stringResource(R.string.scr_lyric_bridge),checked=master,onCheckedChange={BridgeSettings.setEnabled(context,it)})
         }
         AnimatedVisibility(visible=master,enter=expandVertically(tween(260))+fadeIn(tween(200)),exit=shrinkVertically(tween(220))+fadeOut(tween(160))) {
             Column {
-                SmallTitle(stringResource(R.string.scr_music_apps))
-                Card(Modifier.padding(horizontal=12.dp)) {
+                GlassSectionTitle(stringResource(R.string.scr_music_apps))
+                GlassCard(Modifier.padding(horizontal=12.dp)) {
                     if(apps.isEmpty()) BasicComponent(title=stringResource(R.string.scr_no_music_apps))
                     apps.forEach {app->key(app.packageName) {
                         if(app.providerInstalled) SwitchPreference(title=app.name,checked=selectedApps[app.packageName]==true,onCheckedChange={BridgeSettings.setPlayerEnabled(context,app.packageName,it)})

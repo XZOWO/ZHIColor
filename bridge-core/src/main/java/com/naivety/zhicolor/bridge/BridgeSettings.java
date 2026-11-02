@@ -79,9 +79,7 @@ public final class BridgeSettings {
         return config.defaultTranslationEnabled!=previous.defaultTranslationEnabled;
     }
     public static boolean enabled(Context c) { return controls(c).getBoolean(MASTER,DEFAULT_ENABLED); }
-    public static int style(Context c) { return controls(c).getInt(STYLE,DEFAULT_STYLE)==1?1:0; }
     public static void setEnabled(Context c, boolean v) { controls(c).edit().putBoolean(MASTER,v).apply(); sync(c); }
-    public static void setStyle(Context c,int v) { controls(c).edit().putInt(STYLE,v==1?1:0).apply(); sync(c); }
     public static boolean playerEnabled(Context c,String pkg) { return controls(c).getStringSet(APPS,DEFAULT_APPS).contains(pkg); }
     public static void recordProvider(Context c,String player,String provider) {
         if(player==null||provider==null||player.equals("com.android.systemui")||player.equals(BuildConfig.APPLICATION_ID)||!MusicAppCatalog.isLyriconProvider(c,provider))return;
@@ -229,7 +227,7 @@ public final class BridgeSettings {
     }
     private static Bundle snapshot(Context c,ArrayList<String> enabled) {
         initialize(c); Bundle bundle=new Bundle();
-        bundle.putBoolean(MASTER,enabled(c));bundle.putInt(STYLE,style(c));
+        bundle.putBoolean(MASTER,enabled(c));bundle.putInt(STYLE,DEFAULT_STYLE);
         bundle.putStringArrayList(APPS,enabled);
         Bundle main=preferencesBundle(prefs(c).getAll());
         bundle.putBundle("main",main);
@@ -318,6 +316,7 @@ public final class BridgeSettings {
     public static void sync(Context c) {
         sync(c,false,new String[0]);
     }
+
     private static void sync(Context c,boolean clearTranslationOverrides,String[] clearPackages) {
         sync(c,clearTranslationOverrides,clearPackages,0L);
     }

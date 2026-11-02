@@ -57,6 +57,7 @@ final class TranslationToggleMediaActionBinder {
     private final ActionIdReader actionIdReader;
     private final Host host;
     private final TranslationIconLoader iconLoader;
+    private TranslationIcon cachedTranslationIcon;
     private String lastTranslationToggleConfigLogKey = "";
     private long lastTranslationToggleConfigLogAt;
 
@@ -673,13 +674,17 @@ final class TranslationToggleMediaActionBinder {
         }
     }
 
-    private TranslationIcon findTranslationIcon(
+    private synchronized TranslationIcon findTranslationIcon(
             Context context, String providerPackage) {
         // Host-player packages can expose unrelated resources with the same generic name and
         // different theme tints. Keep one canonical white action icon across every v5 player.
-        return iconLoader.load(
-                context,
-                TranslationActionPresentationPolicy.CANONICAL_ICON_PACKAGE);
+        if (cachedTranslationIcon == null) cachedTranslationIcon = iconLoader.load(
+                context, TranslationActionPresentationPolicy.CANONICAL_ICON_PACKAGE);
+        if (cachedTranslationIcon == null) return null;
+        Drawable drawable = cachedTranslationIcon.drawable;
+        if (drawable != null && drawable.getConstantState() != null)
+            drawable = drawable.getConstantState().newDrawable().mutate();
+        return new TranslationIcon(cachedTranslationIcon.icon, drawable);
     }
 
     private static TranslationIcon findTranslationIconInPackage(
@@ -690,10 +695,7 @@ final class TranslationToggleMediaActionBinder {
             return null;
         }
         try {
-            Context packageContext = context.createPackageContext(
-                    packageName,
-                    Context.CONTEXT_IGNORE_SECURITY);
-            Resources resources = packageContext.getResources();
+            Resources resources = context.getPackageManager().getResourcesForApplication(packageName);
             int resourceId = resources.getIdentifier(
                     TRANSLATION_ICON_RESOURCE_NAME,
                     "drawable",
@@ -701,10 +703,10 @@ final class TranslationToggleMediaActionBinder {
             if (resourceId == 0) {
                 debug("ICON_LOOKUP_RESOURCE0", "canonical icon resource missing, package=" + packageName
                         + ", context=" + context.getPackageName()
-                        + ", packageContext=" + packageContext.getPackageName());
+                        + ", resourcePackage=" + packageName);
                 return null;
             }
-            Drawable drawable = packageContext.getDrawable(resourceId);
+            Drawable drawable = resources.getDrawable(resourceId, null);
             if (drawable == null) {
                 debug("ICON_LOOKUP_DRAWABLE_NULL", "canonical icon drawable missing, package=" + packageName
                         + ", resourceId=" + resourceId);
@@ -712,7 +714,7 @@ final class TranslationToggleMediaActionBinder {
             }
             drawable = drawable.mutate();
             drawable.setTint(Color.WHITE);
-            Icon semanticIcon = Icon.createWithResource(packageContext, resourceId);
+            Icon semanticIcon = Icon.createWithResource(packageName, resourceId);
             return new TranslationIcon(
                     semanticIcon,
                     drawable);

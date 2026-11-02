@@ -7,6 +7,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.naivety.zhicolor.ui.components.GlassSectionTitle
+import com.naivety.zhicolor.ui.components.GlassCard
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -38,9 +40,7 @@ import com.naivety.zhicolor.ui.theme.rememberHeaderBlurStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -97,15 +97,15 @@ fun AboutScreen(
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
             }
-            SmallTitle(stringResource(R.string.about_preferences))
-            Card(Modifier.padding(horizontal = 12.dp)) {
+            GlassSectionTitle(stringResource(R.string.about_preferences))
+            GlassCard(Modifier.padding(horizontal = 12.dp)) {
                 ActionPreference(
                     title = stringResource(R.string.about_language), summary = languageLabels[language.ordinal],
                     onClick = { showPage(AboutPage.LANGUAGE) },
                 )
             }
-            SmallTitle(stringResource(R.string.about_project))
-            Card(Modifier.padding(horizontal = 12.dp)) {
+            GlassSectionTitle(stringResource(R.string.about_project))
+            GlassCard(Modifier.padding(horizontal = 12.dp)) {
                 ActionPreference(
                     title = stringResource(R.string.update_check),
                     summary = if (checkingForUpdates) stringResource(R.string.update_checking) else null,

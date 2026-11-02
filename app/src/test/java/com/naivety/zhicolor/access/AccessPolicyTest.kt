@@ -6,6 +6,45 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AccessPolicyTest {
+    @Test fun successfulForegroundRechecksDoNotUnmountTheApp() {
+        val verified = AccessState(AccessStatus.GRANTED, AccessStatus.GRANTED)
+        val checking = verified.copy(
+            root = AccessPolicy.statusDuringCheck(verified.root),
+            framework = AccessPolicy.statusDuringCheck(verified.framework),
+        )
+        assertEquals(verified, checking)
+        assertTrue(checking.allowed)
+        assertFalse(checking.accessRevoked)
+    }
+
+    @Test fun firstEntryAndRevokedPermissionsStillRequireVerification() {
+        listOf(AccessStatus.UNKNOWN, AccessStatus.CHECKING, AccessStatus.REQUIRED).forEach { previous ->
+            val pending = AccessPolicy.statusDuringCheck(previous)
+            assertEquals(AccessStatus.CHECKING, pending)
+            assertFalse(AccessState(pending, AccessStatus.GRANTED).allowed)
+            assertFalse(AccessState(AccessStatus.GRANTED, pending).allowed)
+        }
+    }
+
+    @Test fun failedForegroundRecheckImmediatelyClosesTheGate() {
+        val verified = AccessState(AccessStatus.GRANTED, AccessStatus.GRANTED)
+        listOf(verified.copy(root = AccessStatus.REQUIRED), verified.copy(framework = AccessStatus.REQUIRED)).forEach {
+            assertFalse(it.allowed)
+            assertTrue(it.accessRevoked)
+        }
+    }
+
+    @Test fun repeatedForegroundChecksPreserveVerifiedAccessWithoutGrantingUnknownAccess() {
+        var verified = AccessState(AccessStatus.GRANTED, AccessStatus.GRANTED)
+        repeat(12) {
+            verified = verified.copy(root = AccessPolicy.statusDuringCheck(verified.root))
+            assertTrue(verified.allowed)
+            verified = verified.copy(framework = AccessPolicy.statusDuringCheck(verified.framework))
+            assertTrue(verified.allowed)
+        }
+        assertFalse(AccessState().allowed)
+    }
+
     @Test fun bothPermissionsAreMandatory() {
         AccessStatus.entries.forEach { root ->
             AccessStatus.entries.forEach { framework ->

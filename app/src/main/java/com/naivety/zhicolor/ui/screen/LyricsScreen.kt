@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronLeft
+import com.naivety.zhicolor.ui.components.GlassSectionTitle
+import com.naivety.zhicolor.ui.components.GlassCard
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -23,11 +25,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.naivety.zhicolor.R
 import com.naivety.zhicolor.bridge.BridgeSettings
+import com.naivety.zhicolor.bridge.LyricAppearanceSettings
 import com.naivety.zhicolor.ui.components.ActionPreference
 import com.naivety.zhicolor.ui.components.DialogBody
 import com.naivety.zhicolor.ui.components.DialogAction
 import com.naivety.zhicolor.ui.components.DialogActions
 import com.naivety.zhicolor.ui.components.AppDialog
+import com.naivety.zhicolor.ui.components.background.LocalArtworkBackgroundActive
 import com.naivety.zhicolor.ui.components.motion.PredictiveBackPage
 import com.naivety.zhicolor.ui.theme.*
 import kotlinx.coroutines.launch
@@ -47,7 +51,7 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
     val context=LocalContext.current
     val resources=LocalResources.current
     val revision=rememberSettingsRevision()
-    val mode=remember(revision){BridgeSettings.style(context)}
+    val appearance=remember(revision){LyricAppearanceSettings.load(context)}
     val groups=lyricGroups()
     val draft=remember {mutableStateMapOf<String,Any>().apply {putAll(BridgeSettings.values(context))}}
     LaunchedEffect(revision){draft.clear();draft.putAll(BridgeSettings.values(context))}
@@ -65,27 +69,32 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
     PredictiveBackPage(targetState=page,backTarget="root",onBack={page="root"},label="lyric-settings-page",onChildActiveChanged=onChildPageActiveChanged) {destination->
     key(destination) {
     val scroll=MiuixScrollBehavior();val haze=rememberHeaderBlurState();val hazeStyle=rememberHeaderBlurStyle()
-    Scaffold(topBar={
+    Scaffold(containerColor=if(LocalArtworkBackgroundActive.current)Color.Transparent else MiuixTheme.colorScheme.background,topBar={
         TopAppBar(title=titles[destination]?:stringResource(R.string.scr_lyrics),scrollBehavior=scroll,color=Color.Transparent,modifier=Modifier.headerBlur(haze,hazeStyle),
             navigationIcon={if(destination!="root")IconButton(onClick={page="root"},minHeight=48.dp,minWidth=48.dp){Icon(Icons.Rounded.ChevronLeft,contentDescription=stringResource(R.string.scr_back),tint=MiuixTheme.colorScheme.onBackground,modifier=Modifier.size(28.dp))}})
     }) {padding->
             LazyColumn(modifier=Modifier.fillMaxSize().overScrollVertical().nestedScroll(scroll.nestedScrollConnection).headerBlurSource(haze),
                 contentPadding=PaddingValues(top=padding.calculateTopPadding()+12.dp,bottom=padding.calculateBottomPadding()+bottomInnerPadding+12.dp),overscrollEffect=null) {
                 if(destination=="root") {
-                    item {Card(Modifier.padding(horizontal=12.dp)){
-                        ChoiceRow(stringResource(R.string.scr_style),if(mode==0)stringResource(R.string.scr_standard) else stringResource(R.string.scr_advanced),listOf(stringResource(R.string.scr_standard),stringResource(R.string.scr_advanced)),mode){runCatching{BridgeSettings.setStyle(context,it)}.onFailure{Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}}
-                        if(mode==1)BasicComponent(title=stringResource(R.string.scr_advanced),summary=stringResource(R.string.scr_in_development))
+                    item {GlassCard(Modifier.padding(horizontal=12.dp)){
+                        AppearanceChoice(R.string.scr_background,appearance.background){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.BACKGROUND,it)}
+                        if(appearance.background==LyricAppearanceSettings.APPLE) {
+                            SwitchPreference(title=stringResource(R.string.scr_background_animation),summary=stringResource(R.string.scr_background_animation_summary),checked=appearance.backgroundAnimation,onCheckedChange={enabled->
+                                runCatching{LyricAppearanceSettings.setBackgroundAnimation(context,enabled)}.onFailure{Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}
+                            })
+                        }
                     }}
                         groups.forEach {group->
-                            item(key="header_"+group.title){SmallTitle(group.title)}
-                            item(key="group_"+group.title){Card(Modifier.padding(horizontal=12.dp)){
+                            item(key="header_"+group.title){GlassSectionTitle(group.title)}
+                            item(key="group_"+group.title){GlassCard(Modifier.padding(horizontal=12.dp)){
+                                if(group.fields.any {it.key=="main_font_tenths_sp"})AppearanceChoice(R.string.scr_font,appearance.font){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.FONT,it)}
                                 group.fields.forEach {field->key(field.key){
                                     LyricFieldEditor(field,draft,onCommit={save()})
                                 }}
                             }}
                         }
-                        item {SmallTitle(stringResource(R.string.scr_more))}
-                        item {Card(Modifier.padding(horizontal=12.dp)){
+                        item {GlassSectionTitle(stringResource(R.string.scr_more))}
+                        item {GlassCard(Modifier.padding(horizontal=12.dp)){
                             ActionPreference(title=stringResource(R.string.scr_lyric_bridge),onClick={page="bridge"})
                             ActionPreference(title=stringResource(R.string.scr_translation),onClick={page="translation"})
                             ActionPreference(title=stringResource(R.string.scr_cleanup),onClick={page="cleanup"})
@@ -112,6 +121,16 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
         DialogActions {
             DialogAction(text=stringResource(R.string.scr_confirm),destructive=true,onClick={runCatching{BridgeSettings.reset(context);reset=false}.onFailure{Toast.makeText(context,resources.getString(R.string.scr_reset_failed),Toast.LENGTH_SHORT).show()}})
         }
+    }
+}
+
+@Composable
+private fun AppearanceChoice(title: Int, selected: Int, save: (Int)->Unit) {
+    val context=LocalContext.current
+    val options=listOf(stringResource(R.string.scr_follow_system),stringResource(R.string.scr_apple_style))
+    val failure=stringResource(R.string.scr_save_failed)
+    ChoiceRow(stringResource(title),options[selected],options,selected){value->
+        runCatching{save(value)}.onFailure{Toast.makeText(context,failure,Toast.LENGTH_SHORT).show()}
     }
 }
 
@@ -150,11 +169,13 @@ private fun TranslationSettings() {
     val draft=remember {mutableStateMapOf<String,Any>().apply{putAll(BridgeSettings.values(context))}}
     LaunchedEffect(revision){draft.clear();draft.putAll(BridgeSettings.values(context))}
     val fields=translationFields()
+    val appearance=remember(revision){LyricAppearanceSettings.load(context)}
     val options=listOf(stringResource(R.string.scr_follow_global),stringResource(R.string.scr_enabled),stringResource(R.string.ov_off))
     fun save(){runCatching{BridgeSettings.save(context,draft.toMap())}.onFailure{draft.clear();draft.putAll(BridgeSettings.values(context));Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}}
     fun update(action:()->Unit){runCatching(action).onFailure{Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}}
     Column {
-        Card(Modifier.padding(horizontal=12.dp)) {
+        GlassCard(Modifier.padding(horizontal=12.dp)) {
+            SwitchPreference(title=stringResource(R.string.scr_romanization),checked=appearance.romanization,onCheckedChange={update{LyricAppearanceSettings.setRomanization(context,it)}})
             fields.forEach {field->key(field.key){
                 LyricFieldEditor(field,draft,onCommit={save()})
                 if(field.key=="default_translation_enabled")SwitchPreference(title=stringResource(R.string.scr_default_translation_button),checked=BridgeSettings.defaultTranslationButton(context),onCheckedChange={update{BridgeSettings.setDefaultTranslationButton(context,it)}})
@@ -163,8 +184,8 @@ private fun TranslationSettings() {
         apps.forEach {app->key(app.packageName){
             val translationMode=if(!BridgeSettings.hasTranslationOverride(context,app.packageName))0 else if(BridgeSettings.translation(context,app.packageName))1 else 2
             val buttonMode=if(!BridgeSettings.hasTranslationButtonOverride(context,app.packageName))0 else if(BridgeSettings.translationButton(context,app.packageName))1 else 2
-            SmallTitle(app.name)
-            Card(Modifier.padding(horizontal=12.dp)) {
+            GlassSectionTitle(app.name)
+            GlassCard(Modifier.padding(horizontal=12.dp)) {
                 ChoiceRow(stringResource(R.string.scr_translation),options[translationMode],options,translationMode){selected->update{if(selected==0)BridgeSettings.followTranslationDefault(context,app.packageName)else BridgeSettings.setTranslationEnabled(context,app.packageName,selected==1)}}
                 ChoiceRow(stringResource(R.string.scr_translation_button),options[buttonMode],options,buttonMode){selected->update{if(selected==0)BridgeSettings.followTranslationButtonDefault(context,app.packageName)else BridgeSettings.setTranslationButton(context,app.packageName,selected==1)}}
             }
@@ -195,7 +216,7 @@ private fun DebugSettings() {
     LaunchedEffect(generation,pending){
         if(pending){val current=generation;delay(5000);if(current==generation&&pending){generation++;pending=false;connected=false;timedOut=true}}
     }
-    Column {Card(Modifier.padding(horizontal=12.dp)) {
+    Column {GlassCard(Modifier.padding(horizontal=12.dp)) {
         ActionPreference(title=stringResource(R.string.scr_status),summary=when{pending->stringResource(R.string.scr_loading);timedOut->stringResource(R.string.scr_request_timeout);connected->stringResource(R.string.scr_connected);else->stringResource(R.string.scr_disconnected)},enabled=!pending,onClick={requestStatus()})
         BridgeSettings.debugKeys().forEachIndexed {index,key -> SwitchPreference(title=labels[index],checked=values[key]==true,onCheckedChange={runCatching{BridgeSettings.setDebug(context,key,it)}.onFailure{Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}})}
     }}
@@ -243,13 +264,13 @@ private fun CleanupSettings() {
         if(request){val current=generation;delay(5000);if(current==generation&&request){generation++;request=false;readMessage=resources.getString(R.string.scr_request_timeout);feedback(R.string.scr_request_timeout)}}
     }
     Column {
-        Card(Modifier.padding(horizontal=12.dp)) {
+        GlassCard(Modifier.padding(horizontal=12.dp)) {
             listOf("copyright" to stringResource(R.string.scr_copyright),"production" to stringResource(R.string.scr_production),"titleArtist" to stringResource(R.string.scr_title_artist)).forEach { (key,label)->
                 SwitchPreference(title=label,checked=config.optBoolean(key),onCheckedChange={persist(JSONObject(config.toString()).put(key,it))})
             }
         }
-        SmallTitle(stringResource(R.string.scr_current_song))
-        Card(Modifier.padding(horizontal=12.dp)) {
+        GlassSectionTitle(stringResource(R.string.scr_current_song))
+        GlassCard(Modifier.padding(horizontal=12.dp)) {
             BasicComponent(title=snapshot.getString("title").orEmpty().ifBlank{noTrack},summary=snapshot.getString("artist").orEmpty().ifBlank{null})
             ActionPreference(title=if(request)stringResource(R.string.scr_loading) else stringResource(R.string.scr_read_lyrics),summary=readMessage,enabled=!request,onClick={readSnapshot()})
             if(lines.isEmpty()) BasicComponent(title=stringResource(R.string.scr_no_lyrics))
@@ -257,8 +278,8 @@ private fun CleanupSettings() {
             ActionPreference(title=stringResource(R.string.scr_clear_current),enabled=!request&&track.isNotBlank(),onClick={readSnapshot(track){verified,_->BridgeSettings.setFirstLine(context,verified,null)}})
             ActionPreference(title=stringResource(R.string.scr_clear_all),enabled=!request&&(config.optJSONArray("tracks")?.length()?:0)>0,onClick={clearAll=true})
         }
-        SmallTitle(stringResource(R.string.scr_cleanup_rules))
-        Card(Modifier.padding(horizontal=12.dp)) {
+        GlassSectionTitle(stringResource(R.string.scr_cleanup_rules))
+        GlassCard(Modifier.padding(horizontal=12.dp)) {
             val rules=config.optJSONArray("learned")?:JSONArray()
             for(i in 0 until rules.length()) {
                 val rule=rules.getJSONObject(i)

@@ -77,7 +77,7 @@ fun AppNavigationBar(
                 tabsCount = AppNavigationPolicy.routes.size,
                 modifier = Modifier.fillMaxWidth().selectableGroup(),
                 accentColor = colors.primary,
-                containerColor = colors.surface.copy(alpha = 0.4f),
+                containerColor = colors.surface.copy(alpha = 0.22f),
                 shadowVisibilityProgress = shadowVisibilityProgress,
                 contentHeight = barHeight,
             ) {

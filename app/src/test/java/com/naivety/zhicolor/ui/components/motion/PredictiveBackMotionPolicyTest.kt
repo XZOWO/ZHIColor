@@ -6,6 +6,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PredictiveBackMotionPolicyTest {
+    @Test fun transparentPagesNeverDrawBothContentLayersAtOnce() {
+        (0..1000).forEach { step ->
+            val q = step / 1000f
+            val parent = PredictiveBackMotionPolicy.pageParentFrame(q, 1080f)
+            val child = PredictiveBackMotionPolicy.pageChildFrame(q, 1080f)
+            assertEquals(0f, parent.alpha * child.alpha, 0f)
+            assertTrue(parent.alpha in 0f..1f)
+            assertTrue(child.alpha in 0f..1f)
+        }
+    }
+
+    @Test fun settledChildHidesParentWhileRootAndBackRestoreIt() {
+        assertEquals(0f, PredictiveBackMotionPolicy.pageParentFrame(1f, 1080f).alpha, 0f)
+        assertEquals(1f, PredictiveBackMotionPolicy.pageChildFrame(1f, 1080f).alpha, 0f)
+        assertEquals(1f, PredictiveBackMotionPolicy.pageParentFrame(0f, 1080f).alpha, 0f)
+        assertEquals(0f, PredictiveBackMotionPolicy.pageChildFrame(0f, 1080f).alpha, 0f)
+    }
+
     private fun frames(q: Float): List<OpenMotionFrame> = listOf(
         PredictiveBackMotionPolicy.pageChildFrame(q, 1080f),
         PredictiveBackMotionPolicy.pageParentFrame(q, 1080f),
@@ -84,8 +102,8 @@ class PredictiveBackMotionPolicyTest {
         val restoreStart = frames(q)
         cancellationStart.zip(restoreStart).forEach { (expected, actual) -> assertFrameEquals(expected, actual) }
         val restored = frames(1f)
-        restored.forEach {
-            assertEquals(1f, it.alpha, 0f)
+        restored.forEachIndexed { index, it ->
+            assertEquals(if (index == 1) 0f else 1f, it.alpha, 0f)
             assertEquals(0f, it.translationY, 0f)
         }
         assertEquals(PredictiveBackMotionPolicy.FullDurationMillis, PredictiveBackMotionPolicy.durationMillis(0f, 1f))

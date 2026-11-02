@@ -78,6 +78,10 @@ final class OfficialLyricMotionController {
         SCROLL_STATES.restoreAll();
     }
 
+    static void restore(View recycler) {
+        SCROLL_STATES.restore(recycler);
+    }
+
     static void observeModelUpdate(View recycler, Object model, boolean requestedAnimate,
                                    boolean modulePositionOwner) {
         if (modelDiagnosticSamples >= 8) return;
@@ -228,6 +232,11 @@ final class OfficialLyricMotionController {
             scrollDuration.setLong(scroller, scrollMillis);
             interpolator.set(scroller, configuredInterpolator);
             return firstConfiguration;
+        }
+
+        synchronized void restore(Object recycler) {
+            ScrollSnapshot original = originals.get(recycler);
+            if (original != null && original.restore(recycler)) originals.remove(recycler);
         }
 
         synchronized void restoreAll() {

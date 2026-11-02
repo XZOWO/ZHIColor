@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="com.naivety.zhicolor.bridge.BackgroundProbeActivity"
+            android:exported="true" android:theme="@android:style/Theme.Material.NoActionBar" />
+        <activity android:name="com.naivety.zhicolor.bridge.LyricsSettingsPreviewActivity"
+            android:exported="true" android:theme="@android:style/Theme.Material.NoActionBar" />
+    </application>
+    <instrumentation android:name="com.naivety.zhicolor.bridge.LyricAppearanceInstrumentation"
+        android:targetPackage="com.naivety.zhicolor" android:functionalTest="true" />
+    <instrumentation android:name="com.naivety.zhicolor.bridge.BackgroundLifecycleInstrumentation"
+        android:targetPackage="com.naivety.zhicolor" android:functionalTest="true" />
+</manifest>

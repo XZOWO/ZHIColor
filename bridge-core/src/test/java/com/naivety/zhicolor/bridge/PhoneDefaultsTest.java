@@ -105,7 +105,7 @@ public final class PhoneDefaultsTest {
         assertEquals(LyricUiConfig.TRANSLATION_CURRENT_ONLY, config.translationDisplayMode);
         assertEquals(0, config.lineSpacingTenthsDp);
         assertFalse(BridgeSettings.enabled(context));
-        assertEquals(1, BridgeSettings.style(context));
+        assertEquals(1, controls.get(BridgeSettings.STYLE)); // Legacy backup value has no mode reader.
         assertFalse(BridgeSettings.playerEnabled(context, "com.apple.android.music"));
         assertEquals("custom.provider", controls.get("provider.com.apple.android.music"));
     }

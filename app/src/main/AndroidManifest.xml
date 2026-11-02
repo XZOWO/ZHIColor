@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Core feature: discover installed audio apps and arbitrary Lyricon Provider manifests locally. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <permission android:name="com.naivety.zhicolor.permission.CHANGE_LYRIC_UI_SETTINGS" android:protectionLevel="signature" />
@@ -27,6 +29,10 @@
             </intent-filter>
         </activity>
         <receiver android:name=".home.MediaSnapshotReceiver" android:exported="false" />
+        <service
+            android:name=".advanced.AudioDynamicsService"
+            android:exported="true"
+            android:permission="android.permission.STATUS_BAR_SERVICE" />
         <provider android:name="com.naivety.zhicolor.bridge.ZhiConfigProvider" android:authorities="com.naivety.zhicolor.bridgeconfig" android:exported="true" />
         <provider android:name="com.naivety.zhicolor.bridge.LyricContentCleanupConfigProvider" android:authorities="com.naivety.zhicolor.contentcleanup" android:exported="false" android:grantUriPermissions="true" />
     </application>

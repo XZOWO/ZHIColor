@@ -20,7 +20,10 @@ internal data class HomePlayback(
     val artist: String? = null,
     val playerPackage: String? = null,
     val playing: Boolean = false,
+    val mediaAvailable: Boolean = false,
     val cover: ByteArray? = null,
+    val audioSessionId: Int = 0,
+    val audioRouteKey: String = "",
 )
 
 internal object HomeRepository {
@@ -28,6 +31,7 @@ internal object HomeRepository {
     val playback = playbackState.asStateFlow()
     private val connectedState = MutableStateFlow(false)
     val lyricConnected = connectedState.asStateFlow()
+    private val presence = MediaPresencePolicy()
     private var subscriber: LyriconSubscriber? = null
     private var callback: PendingIntent? = null
     private var scope: CoroutineScope? = null
@@ -54,17 +58,18 @@ internal object HomeRepository {
                 if (pkg != providerPackage) {
                     providerPackage = pkg
                     lyricSong = null
-                    playbackState.value = HomePlayback(playerPackage = pkg)
+                    // Provider loss is not media-session removal; the SystemUI snapshot owns presence.
+                    if (pkg != null && playbackState.value.playerPackage != pkg) {
+                        playbackState.value = playbackState.value.copy(playing = false, audioSessionId = 0)
+                    }
                 }
             }
             override fun onSongChanged(song: Song?) {
                 if (!current()) return
-                val previous = lyricSong
-                val changed = previous?.id != song?.id || previous?.name != song?.name || previous?.artist != song?.artist
                 lyricSong = song
                 val old = playbackState.value
                 playbackState.value = old.copy(title = song?.name ?: old.title, artist = song?.artist ?: old.artist,
-                    playerPackage = providerPackage ?: old.playerPackage, cover = if (changed) null else old.cover)
+                    playerPackage = providerPackage ?: old.playerPackage, cover = old.cover)
             }
             override fun onPlaybackStateChanged(isPlaying: Boolean) {
                 if (current()) playbackState.value = playbackState.value.copy(playing = isPlaying)
@@ -95,7 +100,7 @@ internal object HomeRepository {
                     .putExtra(MediaContract.CALLBACK, callback)
                     .putExtra(MediaContract.NONCE, id)
                     .putExtra(MediaContract.PREFERRED_PACKAGE, providerPackage))
-                delay(2000)
+                delay(800)
             }
         }
     }
@@ -111,21 +116,26 @@ internal object HomeRepository {
     fun acceptSnapshot(intent: Intent) {
         if (scope == null || intent.getStringExtra(MediaContract.NONCE) != nonce) return
         if (!intent.getBooleanExtra(MediaContract.AVAILABLE, false)) {
-            if (lyricSong == null) playbackState.value = HomePlayback()
-            else playbackState.value = playbackState.value.copy(cover = null)
+            val old = playbackState.value
+            playbackState.value = if (presence.retainMissingSession(android.os.SystemClock.elapsedRealtime(), old.mediaAvailable))
+                old.copy(playing = false, audioSessionId = 0, audioRouteKey = "") else HomePlayback()
             return
         }
+        presence.sessionAvailable()
         val pkg = intent.getStringExtra(MediaContract.PACKAGE)
         val song = lyricSong.takeIf { providerPackage == pkg }
         val bytes = intent.getByteArrayExtra(MediaContract.COVER)?.takeIf { it.size <= MediaContract.MAX_COVER_BYTES }
         val old = playbackState.value
-        val cover = if (bytes != null && old.cover != null && bytes.contentEquals(old.cover)) old.cover else bytes
+        val cover = presence.artwork(old.cover, bytes)
         playbackState.value = HomePlayback(
             title = song?.name ?: intent.getStringExtra(MediaContract.TITLE),
             artist = song?.artist ?: intent.getStringExtra(MediaContract.ARTIST),
             playerPackage = pkg,
             playing = intent.getBooleanExtra(MediaContract.PLAYING, false),
             cover = cover,
+            mediaAvailable = true,
+            audioSessionId = intent.getIntExtra(MediaContract.AUDIO_SESSION, 0).coerceAtLeast(0),
+            audioRouteKey = intent.getStringExtra(MediaContract.AUDIO_ROUTE)?.take(256).orEmpty(),
         )
     }
 }

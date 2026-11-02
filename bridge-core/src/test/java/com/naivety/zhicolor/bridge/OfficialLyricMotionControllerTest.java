@@ -87,6 +87,31 @@ public class OfficialLyricMotionControllerTest {
         assertSame(replacementNativeInterpolator, recycler.l.mDecelerateInterpolator);
     }
 
+    @Test
+    public void switchingOneSurfaceToAdvancedKeepsOtherSurfaceConfigured() throws Exception {
+        OfficialLyricMotionController.ScrollStateStore store =
+                new OfficialLyricMotionController.ScrollStateStore();
+        Recycler advanced = new Recycler(340L, 440L);
+        Recycler standard = new Recycler(280L, 380L);
+        Object nativeInterpolator = advanced.l.mDecelerateInterpolator;
+        Object standardInterpolator = new Object();
+        configure(store, advanced, new Object(), 300L, 620L);
+        configure(store, standard, standardInterpolator, 200L, 500L);
+        store.restore(advanced);
+        assertEquals(340L, advanced.k);
+        assertEquals(440L, advanced.l.a);
+        assertSame(nativeInterpolator, advanced.l.mDecelerateInterpolator);
+        assertEquals(200L, standard.k);
+        assertEquals(500L, standard.l.a);
+        assertSame(standardInterpolator, standard.l.mDecelerateInterpolator);
+        advanced.k = 360L;
+        store.restore(advanced);
+        assertEquals(360L, advanced.k);
+        store.restoreAll();
+        assertEquals(280L, standard.k);
+        assertEquals(380L, standard.l.a);
+    }
+
     private static void configure(
             OfficialLyricMotionController.ScrollStateStore store,
             Recycler recycler,

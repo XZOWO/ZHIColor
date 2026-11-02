@@ -5,6 +5,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
+import com.naivety.zhicolor.ui.components.background.LocalArtworkBackgroundActive
 import dev.chrisbanes.haze.ExperimentalHazeApi
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeInputScale
@@ -20,7 +21,7 @@ fun rememberHeaderBlurState(): HazeState = rememberHazeState()
 
 @Composable
 fun rememberHeaderBlurStyle(): HazeStyle {
-    val surface = MiuixTheme.colorScheme.surface
+    val surface = MiuixTheme.colorScheme.background
     val tint = HazeTint(surface.copy(alpha = if (surface.luminance() < 0.5f) 0.72f else 0.82f))
     return remember(surface) {
         HazeStyle(backgroundColor = surface, tint = tint, blurRadius = 24.dp, noiseFactor = 0f)
@@ -28,10 +29,16 @@ fun rememberHeaderBlurStyle(): HazeStyle {
 }
 
 /** Pair a scrolling content source with the header drawn above that content. */
+@Composable
 @OptIn(ExperimentalHazeApi::class)
-fun Modifier.headerBlur(state: HazeState, style: HazeStyle): Modifier = hazeEffect(state = state, style = style) {
-    inputScale = HazeInputScale.Fixed(0.35f)
-    forceInvalidateOnPreDraw = false
+fun Modifier.headerBlur(state: HazeState, style: HazeStyle): Modifier {
+    // The shared TextureView already renders a Gaussian backdrop. Haze's separate list source
+    // cannot sample that sibling surface and substitutes an opaque theme-color rectangle.
+    if (LocalArtworkBackgroundActive.current) return this
+    return hazeEffect(state = state, style = style) {
+        inputScale = HazeInputScale.Fixed(0.35f)
+        forceInvalidateOnPreDraw = false
+    }
 }
 
 @OptIn(ExperimentalHazeApi::class)

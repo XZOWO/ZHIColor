@@ -2,10 +2,6 @@
     <string name="scr_lyrics">Lyrics</string>
     <string name="scr_back">Back</string>
     <string name="scr_more">More</string>
-    <string name="scr_style">Lyric style</string>
-    <string name="scr_standard">Standard</string>
-    <string name="scr_advanced">Advanced</string>
-    <string name="scr_in_development">Not yet available</string>
     <string name="scr_translation">Translation</string>
     <string name="scr_player_translations">Per-app translation</string>
     <string name="scr_cleanup">Intro cleanup</string>
@@ -94,4 +90,11 @@
     <string name="scr_scope_failed">Failed to restart %1$d scopes</string>
     <string name="scr_scope_system">Restart the device to apply system framework scopes</string>
     <string name="scr_separator">;\u0020</string>
+    <string name="scr_background">Background</string>
+    <string name="scr_font">Font</string>
+    <string name="scr_follow_system">Follow system</string>
+    <string name="scr_apple_style">Apple style</string>
+    <string name="scr_romanization">Romanization</string>
+    <string name="scr_background_animation">Audio-reactive background</string>
+    <string name="scr_background_animation_summary">May increase power consumption</string>
 </resources>

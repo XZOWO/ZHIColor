@@ -31,6 +31,19 @@ public final class WordLine {
 
     public String displayText = "";
     public String translation = "";
+    /** Rich metadata is optional. Unknown source semantics are never inferred from overlap. */
+    public String lineId = "";
+    public String translationKey = "";
+    public String parentLineId = "";
+    public String sourceRole = "unknown";
+    public String vocalAgent = "";
+    public String vocalGroup = "";
+    public String backgroundPosition = "unknown";
+    public String romanization = "";
+    public WordLine romanizationLine;
+    /** Separates real translation from the legacy translation-or-romanization display lane. */
+    public String advancedTranslation = "";
+    public boolean advancedTranslationProvided;
     /** Optional translation word clock supplied by this exact lyric lane. */
     public WordLine translationLine;
     /** False for line ends inferred from the next LRC row or a display fallback. */

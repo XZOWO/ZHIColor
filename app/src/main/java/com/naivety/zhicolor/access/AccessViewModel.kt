@@ -38,7 +38,11 @@ internal class AccessViewModel(application: Application) : AndroidViewModel(appl
     init {
         scope.launch {
             FrameworkBridge.active.collect { connected ->
-                if (!connected) state = state.copy(framework = AccessStatus.REQUIRED)
+                if (!connected) {
+                    // A completed result from an older connection must not undo disconnection.
+                    frameworkJob?.cancel()
+                    state = state.copy(framework = AccessStatus.REQUIRED)
+                }
                 else if (foreground) checkFramework()
             }
         }
@@ -64,7 +68,7 @@ internal class AccessViewModel(application: Application) : AndroidViewModel(appl
 
     private fun checkFramework() {
         frameworkJob?.cancel()
-        state = state.copy(framework = AccessStatus.CHECKING)
+        state = state.copy(framework = AccessPolicy.statusDuringCheck(state.framework))
         frameworkJob = scope.launch {
             val granted = withContext(Dispatchers.IO) {
                 AccessPolicy.frameworkGranted(FrameworkBridge.active.value, FrameworkBridge.selectedScope())
@@ -86,7 +90,7 @@ internal class AccessViewModel(application: Application) : AndroidViewModel(appl
         // Keep the first attempt process-wide across Activity recreation and permission UI lifecycles.
         if (initialRequest && !rootCheckAttempted.compareAndSet(false, true)) return
         rootCheckAttempted.set(true)
-        state = state.copy(root = AccessStatus.CHECKING)
+        state = state.copy(root = AccessPolicy.statusDuringCheck(state.root))
         rootJob = scope.launch {
             val session = AtomicReference<RootSession?>()
             val timeout = if (initialRequest) 45_000L else 6_000L

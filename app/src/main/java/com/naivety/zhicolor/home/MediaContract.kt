@@ -13,6 +13,8 @@ object MediaContract {
     const val TITLE = "title"
     const val ARTIST = "artist"
     const val PLAYING = "playing"
+    const val AUDIO_SESSION = "audio_session"
+    const val AUDIO_ROUTE = "audio_route"
     const val COVER = "cover"
     const val MAX_COVER_BYTES = 240_000
 }

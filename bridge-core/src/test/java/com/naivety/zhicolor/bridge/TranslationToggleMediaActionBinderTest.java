@@ -28,6 +28,17 @@ import org.junit.Test;
  * fully covered here.</p>
  */
 public class TranslationToggleMediaActionBinderTest {
+    @Test public void repeatedMediaRebindReusesCanonicalIconWithoutPackageContextRecreation() throws Exception {
+        int[] loads={0}; Object icon=new Object();
+        TranslationToggleMediaActionBinder binder=new TranslationToggleMediaActionBinder(new FakeHost(),
+                (context,pkg)->{loads[0]++; return new TranslationToggleMediaActionBinder.TranslationIcon(icon,null);});
+        java.lang.reflect.Method find=TranslationToggleMediaActionBinder.class.getDeclaredMethod(
+                "findTranslationIcon",Context.class,String.class);
+        find.setAccessible(true);
+        for(int i=0;i<40;i++) assertSame(icon,
+                ((TranslationToggleMediaActionBinder.TranslationIcon)find.invoke(binder,null,"com.apple.android.music")).icon);
+        assertEquals(1,loads[0]);
+    }
 
     public static final class FakeMediaAction {
         Runnable action;

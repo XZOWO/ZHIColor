@@ -21,12 +21,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import com.naivety.zhicolor.ui.components.LocalGlassOverlayActive
+import com.naivety.zhicolor.ui.components.background.LocalArtworkBackgroundActive
 import kotlinx.coroutines.flow.collect
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -177,7 +179,7 @@ fun <T> PredictiveBackPage(
             }
         }
     }
-    val pageColor = MiuixTheme.colorScheme.surface
+    val pageColor = if (LocalArtworkBackgroundActive.current) Color.Transparent else MiuixTheme.colorScheme.background
     Box(modifier.fillMaxSize().clipToBounds().background(pageColor)) {
         Box(
             Modifier.fillMaxSize()

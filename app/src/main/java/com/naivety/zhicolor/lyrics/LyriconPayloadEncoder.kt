@@ -18,7 +18,7 @@ object LyriconPayloadEncoder {
         val metadata=JSONArray()
         // Match FullLyricView: Apple/duet direction is per line; ordinary sources are centered.
         val honorDirection=player=="com.apple.android.music" || lines.any { it.isAlignedRight }
-        for(line in lines) {
+        for((lineIndex,line) in lines.withIndex()) {
             val main=line.text?.takeIf { it.isNotBlank() } ?: line.words.orEmpty().joinToString("") { it.text.orEmpty() }
             display.append('[').append(time(line.begin)).append(']').append(clean(main)).append('\n')
             raw.append('[').append(time(line.begin)).append(']').append(words(line.words,main,line.end)).append('\n')
@@ -26,6 +26,13 @@ object LyriconPayloadEncoder {
                 .put("end",line.end).put("words",wordMetadata(line.words))
                 .put("alignment",if(honorDirection) { if(line.isAlignedRight) 2 else 0 } else 1)
                 .put("alignmentProvided",honorDirection)
+            val lineId=line.metadata?.get("lineId")?.takeIf(String::isNotBlank) ?: "${line.begin}:$lineIndex"
+            row.put("lineId",lineId)
+                .put("translationText",line.translation?.let(::clean).orEmpty())
+                .put("romanization",line.roma?.let(::clean).orEmpty())
+            for(key in listOf("parentLineId","role","agent","group","backgroundPosition","translationKey")) {
+                line.metadata?.get(key)?.takeIf(String::isNotBlank)?.let { row.put(key,it) }
+            }
             val secondary=line.secondary?.takeIf(String::isNotBlank)
                 ?: line.secondaryWords.orEmpty().joinToString("") { it.text.orEmpty() }
             if(secondary.isNotBlank()) {
@@ -34,10 +41,19 @@ object LyriconPayloadEncoder {
                     .put("begin",if(secondaryWords.length()>0) secondaryWords.getJSONObject(0).getLong("begin") else line.begin)
                     .put("end",if(secondaryWords.length()>0) (0 until secondaryWords.length()).maxOf { secondaryWords.getJSONObject(it).getLong("end") } else line.end)
                     .put("words",secondaryWords)
+                    .put("lineId","$lineId:background").put("parentLineId",lineId)
+                    .put("role","background")
+                line.metadata?.get("backgroundPosition")?.takeIf(String::isNotBlank)?.let {
+                    secondaryRow.put("backgroundPosition",it)
+                }
                 // AppleSongMapper publishes this only from the same native row's real
                 // htmlTranslatedBackgroundVocalsLineText. It carries no word clock.
                 line.metadata?.get("secondaryTranslation")?.takeIf(String::isNotBlank)?.let {
                     secondaryRow.put("translation",clean(it))
+                    secondaryRow.put("translationText",clean(it))
+                }
+                line.metadata?.get("secondaryRomanization")?.takeIf(String::isNotBlank)?.let {
+                    secondaryRow.put("romanization",clean(it))
                 }
                 row.put("secondary",secondaryRow)
             }

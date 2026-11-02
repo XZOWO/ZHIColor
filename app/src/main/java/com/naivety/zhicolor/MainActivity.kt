@@ -17,6 +17,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,8 +37,14 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.naivety.zhicolor.access.AccessGateScreen
 import com.naivety.zhicolor.access.AccessViewModel
 import com.naivety.zhicolor.home.HomeRepository
+import com.naivety.zhicolor.home.BackgroundMotionPolicy
+import com.naivety.zhicolor.home.rememberHomeArtwork
+import com.naivety.zhicolor.home.rememberHomeAudio
 import com.naivety.zhicolor.localization.AppLanguage
+import com.naivety.zhicolor.ui.components.LocalCardBackdrop
 import com.naivety.zhicolor.ui.components.GlassOverlayHost
+import com.naivety.zhicolor.ui.components.background.ArtworkMusicBackground
+import com.naivety.zhicolor.ui.components.background.LocalArtworkBackgroundActive
 import com.naivety.zhicolor.ui.components.LocalGlassOverlayActive
 import com.naivety.zhicolor.ui.components.motion.AppNavigationEntrance
 import com.naivety.zhicolor.ui.components.motion.LocalMainTabActive
@@ -81,8 +88,8 @@ class MainActivity : ComponentActivity() {
                     AppShell(updates)
                 } else {
                     LaunchedEffect(access.state.accessRevoked) {
-                        // CHECKING intentionally gates the UI while a permission is being
-                        // revalidated. Only a confirmed REQUIRED state revokes active work.
+                        // First entry remains gated. Successful foreground rechecks preserve
+                        // AppShell and its navigation state; confirmed failures revoke access.
                         HomeRepository.stop()
                         if (access.state.accessRevoked) updates.onAccessRevoked()
                     }
@@ -107,6 +114,14 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppShell(updates: UpdateViewModel) {
+    val playback by HomeRepository.playback.collectAsState()
+    val cover by rememberHomeArtwork(playback.cover, playback.mediaAvailable)
+    var displayedCover by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(playback.mediaAvailable) { if (!playback.mediaAvailable) displayedCover = null }
+    val artworkBackgroundActive = BackgroundMotionPolicy.showArtwork(playback.mediaAvailable, cover != null)
+    val backgroundTrackKey = "${playback.playerPackage}|${playback.title}|${playback.artist}"
+    val audio = rememberHomeAudio(playback.playing, playback.audioSessionId, playback.audioRouteKey,
+        backgroundTrackKey, playback.playerPackage.orEmpty())
     val routes = AppNavigationPolicy.routes
     val pager = rememberPagerState { routes.size }
     val scope = rememberCoroutineScope()
@@ -125,7 +140,8 @@ private fun AppShell(updates: UpdateViewModel) {
         label = "navigationShadow",
     )
 
-    val surface = MiuixTheme.colorScheme.surface
+    val surface = MiuixTheme.colorScheme.background
+    val cardBackdrop = rememberLayerBackdrop()
     val backdrop = rememberLayerBackdrop {
         drawRect(surface)
         drawContent()
@@ -134,17 +150,29 @@ private fun AppShell(updates: UpdateViewModel) {
         val modalActive = LocalGlassOverlayActive.current
         val childPageActive = routes[pager.settledPage] == "lyrics" && lyricsHasChildPage
         Box(Modifier.fillMaxSize().clipToBounds().background(surface)) {
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
+            Box(Modifier.fillMaxSize().layerBackdrop(cardBackdrop)) {
+            ArtworkMusicBackground(
+                artwork = if (artworkBackgroundActive) cover else null, bands = audio.bands, playing = playback.playing,
+                active = audio.visible, modifier = Modifier.fillMaxSize(),
+                onArtworkReady = { displayedCover = it },
+                backgroundAudio = audio.backgroundAudio,
+                trackKey = backgroundTrackKey,
+            )
+            }
             HorizontalPager(
                 state = pager,
-                modifier = Modifier.fillMaxSize().layerBackdrop(backdrop),
+                modifier = Modifier.fillMaxSize(),
                 key = { index -> routes[index] },
                 userScrollEnabled = !modalActive && !childPageActive,
             ) { index ->
                 CompositionLocalProvider(
+                    LocalCardBackdrop provides cardBackdrop,
                     LocalMainTabActive provides (index == pager.currentPage && !pager.isScrollInProgress),
+                    LocalArtworkBackgroundActive provides artworkBackgroundActive,
                 ) {
                     when (routes[index]) {
-                        "home" -> HomeScreen(bottomInnerPadding = navigationHeight)
+                        "home" -> HomeScreen(bottomInnerPadding = navigationHeight, cover = displayedCover.takeIf { playback.mediaAvailable }, audio = audio)
                         "tools" -> ToolsScreen(bottomInnerPadding = navigationHeight)
                         "lyrics" -> LyricsScreen(
                             bottomInnerPadding = navigationHeight,
@@ -157,6 +185,7 @@ private fun AppShell(updates: UpdateViewModel) {
                         )
                     }
                 }
+            }
             }
             AppNavigationEntrance(
                 visible = navigationVisible,

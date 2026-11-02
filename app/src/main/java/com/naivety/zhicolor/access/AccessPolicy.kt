@@ -9,11 +9,15 @@ internal data class AccessState(
     val framework: AccessStatus = AccessStatus.UNKNOWN,
 ) {
     val allowed: Boolean get() = AccessPolicy.mayEnter(root, framework)
-    /** A pending foreground verification hides the app, but does not prove revocation. */
+    /** Only a completed negative check or a disconnected framework revokes access. */
     val accessRevoked: Boolean get() = root == AccessStatus.REQUIRED || framework == AccessStatus.REQUIRED
 }
 
 internal object AccessPolicy {
+    /** Keep this process's verified result visible while a foreground recheck is pending. */
+    fun statusDuringCheck(previous: AccessStatus): AccessStatus =
+        if (previous == AccessStatus.GRANTED) AccessStatus.GRANTED else AccessStatus.CHECKING
+
     fun mayEnter(root: AccessStatus, framework: AccessStatus): Boolean =
         root == AccessStatus.GRANTED && framework == AccessStatus.GRANTED
 

@@ -1,7 +1,8 @@
 /* Home cards adapted from ZHITool (GPL-3.0; see NOTICE). */
 package com.naivety.zhicolor.ui.screen
 
-import android.graphics.BitmapFactory
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.naivety.zhicolor.ui.components.BurningCover
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -9,6 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Security
+import com.naivety.zhicolor.ui.components.GlassSectionTitle
+import com.naivety.zhicolor.ui.components.GlassCard
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,7 +19,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -34,42 +36,40 @@ import com.naivety.zhicolor.R
 import com.naivety.zhicolor.core.ScopeRestartController
 import com.naivety.zhicolor.home.*
 import com.naivety.zhicolor.ui.components.AppListPage
+import com.naivety.zhicolor.ui.components.AlbumSpectrum
+import com.naivety.zhicolor.ui.components.AlbumSpectrumMotion
 import com.naivety.zhicolor.ui.components.GlassDropdownMenu
 import com.naivety.zhicolor.ui.components.GlassMenuItem
+import com.naivety.zhicolor.ui.components.motion.LocalMainTabActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
-fun HomeScreen(bottomInnerPadding: Dp = 0.dp) {
+internal fun HomeScreen(bottomInnerPadding: Dp = 0.dp, cover: ImageBitmap?, audio: HomeAudioState) {
     val playing by HomeRepository.playback.collectAsState()
     val lyricConnected by HomeRepository.lyricConnected.collectAsState()
     val frameworkActive by FrameworkBridge.active.collectAsState()
     val device by produceState<DeviceInfo?>(DeviceInfoLoader.cached()) {
         if (value == null) value = withContext(Dispatchers.IO) { DeviceInfoLoader.load() }
     }
-    val cover by produceState<ImageBitmap?>(null, playing.cover) {
-        value = withContext(Dispatchers.Default) {
-            playing.cover?.let { bytes ->
-                runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
-            }
-        }
-    }
-    AppListPage(title = "ZHIColor", bottomPadding = bottomInnerPadding, actions = { HomeActions() }) {
-        item { SongCard(playing, cover) }
-        item { SmallTitle(stringResource(R.string.scr_status)) }
+    AppListPage(
+        title = "ZHIColor", bottomPadding = bottomInnerPadding, actions = { HomeActions() },
+    ) {
+        item { SongCard(playing, cover, audio) }
+        item { GlassSectionTitle(stringResource(R.string.scr_status)) }
         item {
-            Card(Modifier.padding(horizontal = 12.dp)) {
+            GlassCard(Modifier.padding(horizontal = 12.dp)) {
                 StatusRow(Icons.Rounded.Security, stringResource(R.string.scr_framework_permission),
                     stringResource(if (frameworkActive) R.string.scr_connected else R.string.scr_inactive), frameworkActive)
                 StatusRow(Icons.Rounded.GraphicEq, stringResource(R.string.scr_lyric_source),
                     stringResource(if (lyricConnected) R.string.scr_connected else R.string.scr_waiting), lyricConnected)
             }
         }
-        item { SmallTitle(stringResource(R.string.scr_device_info)) }
+        item { GlassSectionTitle(stringResource(R.string.scr_device_info)) }
         item {
-            Card(Modifier.padding(horizontal = 12.dp)) {
+            GlassCard(Modifier.padding(horizontal = 12.dp)) {
                 InfoRow(stringResource(R.string.scr_device), device?.device ?: stringResource(R.string.scr_loading))
                 InfoRow(stringResource(R.string.scr_android_version), device?.android ?: stringResource(R.string.scr_loading))
                 InfoRow(stringResource(R.string.scr_coloros_version), device?.colorOs?.let {
@@ -100,15 +100,11 @@ private fun HomeActions() {
 }
 
 @Composable
-private fun SongCard(song: HomePlayback, cover: ImageBitmap?) {
-    Card(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
-        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (cover != null) {
-                RotatingCover(cover, song.playing, 56.dp)
-            } else {
-                Image(painterResource(R.drawable.ic_brand_generated), contentDescription = stringResource(R.string.scr_cover), modifier = Modifier.size(54.dp).clip(CircleShape))
-            }
-            Spacer(Modifier.size(14.dp))
+private fun SongCard(song: HomePlayback, cover: ImageBitmap?, audio: HomeAudioState) {
+    GlassCard(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            SongAlbum(cover, song, audio)
+            Spacer(Modifier.size(8.dp))
             Column(Modifier.weight(1f)) {
                 Text(song.title?.takeIf(String::isNotBlank) ?: stringResource(R.string.scr_no_track), fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     color = MiuixTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -121,11 +117,7 @@ private fun SongCard(song: HomePlayback, cover: ImageBitmap?) {
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(if (song.playing) stringResource(R.string.scr_playing) else stringResource(R.string.scr_paused), fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                            color = if (song.playing) Color(0xFF34C759) else Color(0xFFFFB84D))
-                        song.playerPackage?.let { pkg ->
-                            Text(" · $pkg", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+                            color = if (song.playing) statusGreen() else if (isSystemInDarkTheme()) Color(0xFFFFC46B) else Color(0xFF855000))
                     }
                 }
             }
@@ -134,20 +126,38 @@ private fun SongCard(song: HomePlayback, cover: ImageBitmap?) {
 }
 
 @Composable
-private fun RotatingCover(bitmap: ImageBitmap, playing: Boolean, size: Dp) {
-    var angle by remember(bitmap) { mutableFloatStateOf(0f) }
-    LaunchedEffect(bitmap, playing) {
-        if (!playing) return@LaunchedEffect
+private fun SongAlbum(cover: ImageBitmap?, song: HomePlayback, audio: HomeAudioState) {
+    val playing = song.playing
+    val bands = audio.bands
+    val loudness = audio.loudness
+    val captureActive = audio.visible && LocalMainTabActive.current
+    val rotation = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(playing, captureActive, cover != null) {
+        if (!playing || !captureActive || cover == null) return@LaunchedEffect
         var last = 0L
         while (true) {
             withFrameNanos { now ->
-                if (last != 0L) angle = (angle + (360f / 16f) * ((now - last) / 1_000_000_000f)) % 360f
+                if (last != 0L) rotation.floatValue = (rotation.floatValue + (360f / 16f) * ((now - last) / 1_000_000_000f)) % 360f
                 last = now
             }
         }
     }
-    Image(bitmap, contentDescription = stringResource(R.string.scr_cover), contentScale = ContentScale.Crop,
-        modifier = Modifier.size(size).graphicsLayer { rotationZ = angle }.clip(CircleShape))
+    Box(Modifier.size(AlbumSpectrumMotion.CANVAS_DP.dp), contentAlignment = Alignment.Center) {
+        AlbumSpectrum(
+            bands = bands,
+            loudness = loudness,
+            active = playing && audio.active && captureActive,
+            color = MiuixTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxSize(),
+            resetKey = listOf(song.playerPackage, song.audioSessionId, song.audioRouteKey, song.title, song.artist)
+        )
+        if (cover != null) {
+            BurningCover(cover, { rotation.floatValue }, AlbumSpectrumMotion.COVER_DIAMETER_DP.dp)
+        } else {
+            Image(painterResource(R.drawable.ic_brand_generated), contentDescription = stringResource(R.string.scr_cover),
+                modifier = Modifier.size(AlbumSpectrumMotion.COVER_DIAMETER_DP.dp).clip(CircleShape))
+        }
+    }
 }
 
 @Composable
@@ -161,6 +171,9 @@ private fun StatusRow(icon: ImageVector, title: String, value: String, ok: Boole
         Icon(icon, contentDescription = null, tint = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.size(22.dp))
         Spacer(Modifier.size(12.dp))
         Text(title, fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (ok) Color(0xFF34C759) else Color(0xFFFF6B6B))
+        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (ok) statusGreen() else if (isSystemInDarkTheme()) Color(0xFFFF8B8B) else Color(0xFFB4232B))
     }
 }
+
+@Composable
+private fun statusGreen() = if (isSystemInDarkTheme()) Color(0xFF73E49A) else Color(0xFF146C35)

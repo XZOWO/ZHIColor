@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import com.naivety.zhicolor.ui.components.GlassCard
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -21,6 +22,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.naivety.zhicolor.R
 import com.naivety.zhicolor.bridge.ToolsSettings
+import com.naivety.zhicolor.ui.components.background.LocalArtworkBackgroundActive
 import com.naivety.zhicolor.ui.theme.headerBlur
 import com.naivety.zhicolor.ui.theme.headerBlurSource
 import com.naivety.zhicolor.ui.theme.rememberHeaderBlurState
@@ -28,8 +30,8 @@ import com.naivety.zhicolor.ui.theme.rememberHeaderBlurStyle
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 fun ToolsScreen(bottomInnerPadding: Dp = 0.dp) {
@@ -54,6 +56,7 @@ fun ToolsScreen(bottomInnerPadding: Dp = 0.dp) {
     }
 
     Scaffold(
+        containerColor = if (LocalArtworkBackgroundActive.current) Color.Transparent else MiuixTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = stringResource(R.string.tab_tools),
@@ -75,7 +78,7 @@ fun ToolsScreen(bottomInnerPadding: Dp = 0.dp) {
             overscrollEffect = null,
         ) {
             item {
-                Card(Modifier.padding(horizontal = 12.dp)) {
+                GlassCard(Modifier.padding(horizontal = 12.dp)) {
                     SwitchPreference(
                         title = stringResource(R.string.tool_hide_lockscreen_music_app),
                         checked = hideLockscreenIcon,
