@@ -133,8 +133,11 @@ internal fun lyricGroups(): List<LyricGroup> = listOf(
         LyricField("line_spacing_tenths_dp",stringResource(R.string.ov_line_spacing),min=-50,max=200,step=5,factor=10f,unit="dp"),
         LyricField("wrapped_line_spacing_tenths_dp",stringResource(R.string.ov_wrapped_spacing),min=-10,max=80,step=5,factor=10f,unit="dp"))),
     LyricGroup(stringResource(R.string.ov_group_color),listOf(
-        LyricField("primary_color",stringResource(R.string.ov_lyric_color),"color"),LyricField("glow_color",stringResource(R.string.ov_glow_color),"color"),
-        LyricField("glow_intensity_percent",stringResource(R.string.ov_glow_intensity)),LyricField("glow_radius_percent",stringResource(R.string.ov_glow_radius),min=10,max=24))),
+        LyricField("primary_color",stringResource(R.string.ov_lyric_color),"color"),
+        LyricField("glow_enabled",stringResource(R.string.ov_glow),"switch"),
+        LyricField("glow_color",stringResource(R.string.ov_glow_color),"color",dependsOn="glow_enabled"),
+        LyricField("glow_intensity_percent",stringResource(R.string.ov_glow_intensity),dependsOn="glow_enabled"),
+        LyricField("glow_radius_percent",stringResource(R.string.ov_glow_radius),min=10,max=24,dependsOn="glow_enabled"))),
     LyricGroup(stringResource(R.string.ov_group_hierarchy),listOf(
         LyricField("active_opacity_percent",stringResource(R.string.ov_active_lyric),min=50,max=100),
         LyricField("current_unrevealed_opacity_percent",stringResource(R.string.ov_unrevealed_lyric),min=20,max=100),
@@ -150,7 +153,9 @@ internal fun lyricGroups(): List<LyricGroup> = listOf(
         LyricField("lyric_ui_scroll_scale_enabled",stringResource(R.string.ov_inactive_scale),"switch"),
         LyricField("inactive_scale_percent",stringResource(R.string.ov_scale_ratio),min=75,max=100,dependsOn="lyric_ui_scroll_scale_enabled"),
         LyricField("char_lift_enabled",stringResource(R.string.ov_char_lift),"switch"),
-        LyricField("char_lift_strength_percent",stringResource(R.string.ov_lift_strength),min=0,max=200,dependsOn="char_lift_enabled"))),
+        LyricField("char_lift_strength_percent",stringResource(R.string.ov_lift_strength),min=0,max=200,dependsOn="char_lift_enabled"),
+        LyricField("word_emphasis_enabled",stringResource(R.string.ov_word_emphasis),"switch"),
+        LyricField("chinese_tail_emphasis_enabled",stringResource(R.string.ov_chinese_tail_emphasis),"switch",dependsOn="word_emphasis_enabled"))),
     LyricGroup(stringResource(R.string.ov_group_playback),listOf(
         LyricField("lyric_ui_line_timed_progress_enabled",stringResource(R.string.ov_line_progress),"switch"),
         LyricField("secondary_progress_enabled",stringResource(R.string.ov_secondary_progress),"switch"),

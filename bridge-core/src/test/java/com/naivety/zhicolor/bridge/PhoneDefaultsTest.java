@@ -31,7 +31,7 @@ public final class PhoneDefaultsTest {
                 LyricUiConfigCodec.encode(LyricUiConfig.defaults()));
         actual.remove(LyricUiConfigCodec.SCHEMA);
 
-        assertEquals(39, expected.size());
+        assertEquals(41, expected.size());
         assertEquals(expected, actual);
     }
 
@@ -48,7 +48,7 @@ public final class PhoneDefaultsTest {
     }
 
     @Test
-    public void emptyPreferencesAndRestoreDefaultsReadTheSamePhoneValues() throws Exception {
+    public void restoreDefaultsRestoresSwitchesButPreservesParametersAndProviderChoices() throws Exception {
         MemoryContext context = new MemoryContext();
         BridgeSettings.initialize(context);
         Map<String, Object> installed = new LinkedHashMap<>(BridgeSettings.values(context));
@@ -65,6 +65,10 @@ public final class PhoneDefaultsTest {
 
         BridgeSettings.restoreDefaults(context);
 
+        installed.put(LyricUiConfigCodec.MAIN_FONT_SIZE,190);
+        controls.put("provider.com.apple.android.music","custom.provider");
+        controls.put(LyricAppearanceSettings.BACKGROUND_ANIMATION,true);
+        controls.put(LyricAppearanceSettings.ROMANIZATION,true);
         assertEquals(installed, BridgeSettings.values(context));
         assertEquals(controls, context.values(BridgeSettings.CONTROL_PREFS));
         Map<String, Object> expectedDebug = fixture("zhicolor_lyrics_debug.xml");
@@ -74,7 +78,9 @@ public final class PhoneDefaultsTest {
         assertEquals(expectedDebug, BridgeSettings.debug(context));
         Map<String, Object> actual = new LinkedHashMap<>(BridgeSettings.values(context));
         actual.remove(LyricUiConfigCodec.SCHEMA);
-        assertEquals(lyricFixture(), actual);
+        Map<String,Object> expected=lyricFixture();
+        expected.put(LyricUiConfigCodec.MAIN_FONT_SIZE,190);
+        assertEquals(expected, actual);
     }
 
     @Test
@@ -151,6 +157,9 @@ public final class PhoneDefaultsTest {
         assertEquals(Boolean.TRUE, expected.remove("passive_vertical_pan_enabled"));
         assertNull(expected.put(LyricUiConfigCodec.SECONDARY_FONT_RATIO,
                 expected.get(LyricUiConfigCodec.TRANSLATION_FONT_RATIO)));
+        expected.put(LyricUiConfigCodec.LINE_TIMED_PROGRESS,false);
+        expected.put(LyricUiConfigCodec.WORD_EMPHASIS_ENABLED,true);
+        expected.put(LyricUiConfigCodec.CHINESE_TAIL_EMPHASIS_ENABLED,true);
         return expected;
     }
 

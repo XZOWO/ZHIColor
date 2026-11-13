@@ -9,20 +9,25 @@ public final class LyricAppearanceSettings {
     public static final String BACKGROUND_ANIMATION = "lyric_background_animation";
     public static final String FONT = "lyric_font";
     public static final String ROMANIZATION = "lyric_romanization";
-    public static final int SYSTEM = 0, APPLE = 1;
+    public static final int SYSTEM = 0, APPLE = 1, SYSTEM_SHAPED = 2;
     public final int background, font;
-    public final boolean appleBackground, backgroundAnimation, romanization;
+    public final boolean appleBackground, systemShapedArtwork, backgroundAnimation, romanization;
 
     LyricAppearanceSettings(SharedPreferences preferences) {
-        background = choice(preferences.getInt(BACKGROUND, APPLE));
+        background = backgroundChoice(preferences.getInt(BACKGROUND, SYSTEM_SHAPED));
         font = choice(preferences.getInt(FONT, APPLE));
         backgroundAnimation = preferences.getBoolean(BACKGROUND_ANIMATION, true);
-        appleBackground = preferences.getBoolean(BridgeSettings.MASTER, true) && background == APPLE;
+        boolean enabled = preferences.getBoolean(BridgeSettings.MASTER, true);
+        appleBackground = enabled && background == APPLE;
+        systemShapedArtwork = enabled && background == SYSTEM_SHAPED;
         romanization = preferences.getBoolean(ROMANIZATION,
                 preferences.getBoolean("advanced_romanization", true));
     }
 
     private static int choice(int value) { return value == SYSTEM ? SYSTEM : APPLE; }
+    private static int backgroundChoice(int value) {
+        return value == SYSTEM || value == APPLE ? value : SYSTEM_SHAPED;
+    }
 
     public static LyricAppearanceSettings load(Context context) {
         return new LyricAppearanceSettings(BridgeSettings.controls(context));
@@ -34,7 +39,8 @@ public final class LyricAppearanceSettings {
     }
 
     static void saveChoice(SharedPreferences preferences, String key, int value) {
-        if ((!BACKGROUND.equals(key) && !FONT.equals(key)) || (value != SYSTEM && value != APPLE))
+        if ((!BACKGROUND.equals(key) && !FONT.equals(key))
+                || (value != SYSTEM && value != APPLE && !(BACKGROUND.equals(key) && value == SYSTEM_SHAPED)))
             throw new IllegalArgumentException("Unknown appearance choice");
         preferences.edit().putInt(key, value).apply();
     }

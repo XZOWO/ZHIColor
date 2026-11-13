@@ -30,7 +30,7 @@ object LyriconPayloadEncoder {
             row.put("lineId",lineId)
                 .put("translationText",line.translation?.let(::clean).orEmpty())
                 .put("romanization",line.roma?.let(::clean).orEmpty())
-            for(key in listOf("parentLineId","role","agent","group","backgroundPosition","translationKey")) {
+            for(key in listOf("parentLineId","role","agent","group","backgroundPosition","translationKey","language","languageTag","languageCode")) {
                 line.metadata?.get(key)?.takeIf(String::isNotBlank)?.let { row.put(key,it) }
             }
             val secondary=line.secondary?.takeIf(String::isNotBlank)

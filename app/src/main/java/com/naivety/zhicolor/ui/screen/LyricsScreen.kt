@@ -52,6 +52,7 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
     val resources=LocalResources.current
     val revision=rememberSettingsRevision()
     val appearance=remember(revision){LyricAppearanceSettings.load(context)}
+    val takeover=remember(revision){BridgeSettings.enabled(context)}
     val groups=lyricGroups()
     val draft=remember {mutableStateMapOf<String,Any>().apply {putAll(BridgeSettings.values(context))}}
     LaunchedEffect(revision){draft.clear();draft.putAll(BridgeSettings.values(context))}
@@ -65,7 +66,7 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
     val import=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->
         if(uri!=null)coroutine.launch {val result=withContext(Dispatchers.IO){runCatching{val bytes=context.contentResolver.openInputStream(uri)?.use {readBackupBytes(it)}?:error("stream");require(bytes.size<=4*1024*1024);BridgeSettings.importSettings(context,bytes.toString(Charsets.UTF_8))}};Toast.makeText(context,if(result.isSuccess)resources.getString(R.string.scr_imported) else resources.getString(R.string.scr_import_failed),Toast.LENGTH_SHORT).show()}
     }
-    val titles=mapOf("root" to stringResource(R.string.scr_lyrics),"translation" to stringResource(R.string.scr_translation),"cleanup" to stringResource(R.string.scr_cleanup),"debug" to stringResource(R.string.scr_logs),"bridge" to stringResource(R.string.scr_lyric_bridge))
+    val titles=mapOf("root" to stringResource(R.string.scr_lyrics),"translation" to stringResource(R.string.scr_translation),"cleanup" to stringResource(R.string.scr_cleanup),"debug" to stringResource(R.string.scr_logs),"bridge" to stringResource(R.string.scr_music_apps))
     PredictiveBackPage(targetState=page,backTarget="root",onBack={page="root"},label="lyric-settings-page",onChildActiveChanged=onChildPageActiveChanged) {destination->
     key(destination) {
     val scroll=MiuixScrollBehavior();val haze=rememberHeaderBlurState();val hazeStyle=rememberHeaderBlurStyle()
@@ -76,8 +77,13 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
             LazyColumn(modifier=Modifier.fillMaxSize().overScrollVertical().nestedScroll(scroll.nestedScrollConnection).headerBlurSource(haze),
                 contentPadding=PaddingValues(top=padding.calculateTopPadding()+12.dp,bottom=padding.calculateBottomPadding()+bottomInnerPadding+12.dp),overscrollEffect=null) {
                 if(destination=="root") {
+                    item(key="lyric_takeover") {GlassCard(Modifier.padding(start=12.dp,end=12.dp,bottom=12.dp)){
+                        SwitchPreference(title=stringResource(R.string.scr_lyric_bridge),checked=takeover,onCheckedChange={enabled->
+                            runCatching{BridgeSettings.setEnabled(context,enabled)}.onFailure{Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}
+                        })
+                    }}
                     item {GlassCard(Modifier.padding(horizontal=12.dp)){
-                        AppearanceChoice(R.string.scr_background,appearance.background){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.BACKGROUND,it)}
+                        AppearanceChoice(R.string.scr_background,appearance.background,includeSystemShapedArtwork=true){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.BACKGROUND,it)}
                         if(appearance.background==LyricAppearanceSettings.APPLE) {
                             SwitchPreference(title=stringResource(R.string.scr_background_animation),summary=stringResource(R.string.scr_background_animation_summary),checked=appearance.backgroundAnimation,onCheckedChange={enabled->
                                 runCatching{LyricAppearanceSettings.setBackgroundAnimation(context,enabled)}.onFailure{Toast.makeText(context,resources.getString(R.string.scr_save_failed),Toast.LENGTH_SHORT).show()}
@@ -95,7 +101,7 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
                         }
                         item {GlassSectionTitle(stringResource(R.string.scr_more))}
                         item {GlassCard(Modifier.padding(horizontal=12.dp)){
-                            ActionPreference(title=stringResource(R.string.scr_lyric_bridge),onClick={page="bridge"})
+                            ActionPreference(title=stringResource(R.string.scr_music_apps),onClick={page="bridge"})
                             ActionPreference(title=stringResource(R.string.scr_translation),onClick={page="translation"})
                             ActionPreference(title=stringResource(R.string.scr_cleanup),onClick={page="cleanup"})
                             ActionPreference(title=stringResource(R.string.scr_import),onClick={import.launch(arrayOf("text/plain","application/octet-stream","*/*"))})
@@ -125,9 +131,10 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
 }
 
 @Composable
-private fun AppearanceChoice(title: Int, selected: Int, save: (Int)->Unit) {
+private fun AppearanceChoice(title: Int, selected: Int, includeSystemShapedArtwork: Boolean = false, save: (Int)->Unit) {
     val context=LocalContext.current
-    val options=listOf(stringResource(R.string.scr_follow_system),stringResource(R.string.scr_apple_style))
+    val options=listOf(stringResource(R.string.scr_follow_system),stringResource(R.string.scr_apple_style)) +
+        if(includeSystemShapedArtwork) listOf(stringResource(R.string.scr_system_shaped_artwork)) else emptyList()
     val failure=stringResource(R.string.scr_save_failed)
     ChoiceRow(stringResource(title),options[selected],options,selected){value->
         runCatching{save(value)}.onFailure{Toast.makeText(context,failure,Toast.LENGTH_SHORT).show()}
@@ -137,7 +144,7 @@ private fun AppearanceChoice(title: Int, selected: Int, save: (Int)->Unit) {
 @Composable
 private fun LyricFieldEditor(field:LyricField,draft:MutableMap<String,Any>,onCommit:()->Unit) {
     val dependency=field.dependsOn
-    val visible=dependency==null || if(dependency.startsWith("!"))draft[dependency.drop(1)]!=true else draft[dependency]==true
+    val visible=LyricFieldValuePolicy.isVisible(dependency,draft)
     val maximum=LyricFieldValuePolicy.maximum(field.key,draft,field.max).coerceAtLeast(field.min)
     AnimatedVisibility(visible=visible,enter=expandVertically(tween(220))+fadeIn(tween(160)),exit=shrinkVertically(tween(180))+fadeOut(tween(120))) {
         LyricFieldRow(field.copy(max=maximum),draft[field.key],onChange={LyricFieldValuePolicy.update(draft,field.key,it)},onCommit=onCommit)

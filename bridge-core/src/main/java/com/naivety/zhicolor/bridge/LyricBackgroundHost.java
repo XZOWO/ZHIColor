@@ -39,6 +39,7 @@ final class LyricBackgroundHost {
     }
     private static final String TAG = "ZHIBackground";
     private final Runtime runtime;
+    private final SystemShapedArtworkPolicy systemShapedArtwork = new SystemShapedArtworkPolicy();
     private String reportedState = "";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService mediaWorker = Executors.newSingleThreadExecutor(r -> {
@@ -84,6 +85,7 @@ final class LyricBackgroundHost {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             main.removeCallbacks(immediateRefresh); main.post(immediateRefresh); return;
         }
+        systemShapedArtwork.setEnabled(options != null && options.systemShapedArtwork && runtime.active());
         if (!backgrounds.isEmpty() || !sections.isEmpty()) {
             main.removeCallbacks(immediateRefresh); main.post(immediateRefresh);
         }
@@ -98,6 +100,7 @@ final class LyricBackgroundHost {
             if (displays != null) displays.registerDisplayListener(displayListener, main);
         }
         options = LyricAppearanceSettings.load(context);
+        systemShapedArtwork.setEnabled(options.systemShapedArtwork && runtime.active());
         reportState();
         for (View target : backgrounds.keySet()) target.invalidate();
         refreshSlots();
@@ -179,7 +182,11 @@ final class LyricBackgroundHost {
         stateChanged();
     }
     void reset() {
-        if (Looper.myLooper() != Looper.getMainLooper()) { main.post(this::reset); return; }
+        systemShapedArtwork.reset();
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post(this::resetViews); return; }
+        resetViews();
+    }
+    private void resetViews() {
         generation++;
         main.removeCallbacks(pulse);
         main.removeCallbacks(immediateRefresh);
@@ -192,6 +199,12 @@ final class LyricBackgroundHost {
         mediaGeneration++; metadataRevision++;
     }
     private boolean enabled() { return options != null && options.appleBackground && runtime.active(); }
+    Object nativeBackgroundModelBuilt(Object builder, Object nativeModel) {
+        if (Looper.myLooper() == Looper.getMainLooper())
+            systemShapedArtwork.setEnabled(options != null && options.systemShapedArtwork && runtime.active());
+        else main.post(immediateRefresh);
+        return systemShapedArtwork.modelBuilt(builder, nativeModel);
+    }
     private boolean interactive() {
         return power != null && power.isInteractive();
     }
@@ -234,6 +247,7 @@ final class LyricBackgroundHost {
 
 
     private void refreshSlots() {
+        systemShapedArtwork.setEnabled(options != null && options.systemShapedArtwork && runtime.active());
         synchronizeMediaController();
         long now = SystemClock.uptimeMillis();
         for (SectionSlot slot : new ArrayList<>(sections.values())) {

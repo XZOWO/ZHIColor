@@ -604,4 +604,43 @@ public class TranslationToggleMediaActionBinderTest {
         assertEquals(List.of(desktop, favorite), button.ex.rule0CustomActions);
     }
 
+    @Test
+    public void restoreAllReturnsEveryLivePlayerActionAndReleasesOldSnapshots() {
+        FakeHost host = new FakeHost();
+        TranslationToggleMediaActionBinder binder = nativeBinder(host);
+        List<FakeMediaButton> buttons = new ArrayList<>();
+        List<FakeMediaAction> hearts = new ArrayList<>();
+        List<Runnable> clicks = new ArrayList<>();
+        List<Object> icons = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            FakeMediaButton button = new FakeMediaButton();
+            FakeMediaAction heart = nativeAction("favorite" + i);
+            button.ex.heartAction = heart;
+            buttons.add(button); hearts.add(heart); clicks.add(heart.action); icons.add(heart.ex.icon);
+            binder.applyTranslationToggle(PlayerSystemUiPolicy.APPLE_MUSIC, button, true, true,
+                    PlayerSystemUiPolicy.APPLE_MUSIC, 5, 120);
+            assertEquals(List.of(heart), button.ex.rule0CustomActions);
+            assertTrue(button.ex.hasCustomAction);
+            assertEquals("翻译：开启", heart.contentDescription);
+        }
+        binder.restoreAll();
+        for (int i = 0; i < 2; i++) {
+            assertTrue(buttons.get(i).ex.rule0CustomActions.isEmpty());
+            assertFalse(buttons.get(i).ex.hasCustomAction);
+            assertSame(clicks.get(i), hearts.get(i).action);
+            assertSame(icons.get(i), hearts.get(i).ex.icon);
+            assertEquals("favorite" + i, hearts.get(i).contentDescription);
+        }
+        FakeMediaAction first = hearts.get(0);
+        first.contentDescription = "native update";
+        Runnable newerClick = () -> { };
+        first.action = newerClick;
+        binder.applyTranslationToggle(PlayerSystemUiPolicy.APPLE_MUSIC, buttons.get(0), true, true,
+                PlayerSystemUiPolicy.APPLE_MUSIC, 5, 120);
+        binder.restoreAll();
+        binder.restoreAll();
+        assertEquals("native update", first.contentDescription);
+        assertSame(newerClick, first.action);
+    }
+
 }

@@ -28,6 +28,16 @@ public final class WordLine {
     public final String textMatchKey;
     public final ArrayList<WordRange> words;
     public final LyricTimingMode timingMode;
+    public final SyllableLiftMotion syllableLift;
+    public final WordEmphasisMotion wordEmphasis;
+    /** Render-only line-progress springs; ordinary and compact layouts keep separate clocks. */
+    public LineProgressLiftMotion lineProgressLift;
+    public LineProgressLiftMotion compactLineProgressLift;
+
+    public void resetLineProgressLift() {
+        if (lineProgressLift != null) lineProgressLift.motion.reset();
+        if (compactLineProgressLift != null) compactLineProgressLift.motion.reset();
+    }
 
     public String displayText = "";
     public String translation = "";
@@ -36,6 +46,8 @@ public final class WordLine {
     public String translationKey = "";
     public String parentLineId = "";
     public String sourceRole = "unknown";
+    /** Real lyric-source language metadata; empty means absent, never the UI locale. */
+    public String sourceLanguage = "";
     public String vocalAgent = "";
     public String vocalGroup = "";
     public String backgroundPosition = "unknown";
@@ -140,6 +152,8 @@ public final class WordLine {
         this.normalizedText = WordLyricRenderSupport.normalizeLine(text);
         this.textMatchKey = WordLyricRenderSupport.lyricMatchKeyFromNormalized(normalizedText);
         this.words = words;
+        this.syllableLift = new SyllableLiftMotion(words);
+        this.wordEmphasis = new WordEmphasisMotion(text, words);
         this.timingMode = timingMode == null
                 ? LyricTimingMode.LINE_TIMED
                 : timingMode;

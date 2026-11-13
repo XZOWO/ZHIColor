@@ -1,9 +1,44 @@
 package com.naivety.zhicolor.ui.screen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LyricFieldValuePolicyTest {
+    @Test fun emphasisChildVisibilityFollowsOnlyItsParentAndKeepsItsSelection() {
+        val values = mutableMapOf<String, Any>(
+            "char_lift_enabled" to false,
+            "word_emphasis_enabled" to true,
+            "chinese_tail_emphasis_enabled" to true,
+        )
+        assertTrue(LyricFieldValuePolicy.isVisible("word_emphasis_enabled", values))
+        LyricFieldValuePolicy.update(values, "word_emphasis_enabled", false)
+        assertFalse(LyricFieldValuePolicy.isVisible("word_emphasis_enabled", values))
+        assertEquals(true, values["chinese_tail_emphasis_enabled"])
+        assertEquals(false, values["char_lift_enabled"])
+        LyricFieldValuePolicy.update(values, "word_emphasis_enabled", true)
+        assertTrue(LyricFieldValuePolicy.isVisible("word_emphasis_enabled", values))
+    }
+
+    @Test fun hidingGlowControlsPreservesTheirValuesAndOtherControlsStayVisible() {
+        val values = mutableMapOf<String, Any>(
+            "glow_enabled" to true,
+            "glow_intensity_percent" to 73,
+            "glow_radius_percent" to 19,
+            "glow_color" to "#123456",
+        )
+        LyricFieldValuePolicy.update(values, "glow_enabled", false)
+        assertFalse(LyricFieldValuePolicy.isVisible("glow_enabled", values))
+        assertEquals(73, values["glow_intensity_percent"])
+        assertEquals(19, values["glow_radius_percent"])
+        assertEquals("#123456", values["glow_color"])
+        assertTrue(LyricFieldValuePolicy.isVisible(null, values))
+        LyricFieldValuePolicy.update(values, "glow_enabled", true)
+        assertTrue(LyricFieldValuePolicy.isVisible("glow_enabled", values))
+        assertEquals(73, values["glow_intensity_percent"])
+    }
+
     @Test fun editorLimitsRespectTheConfiguredOpacityHierarchy() {
         val values = mapOf<String, Any>(
             "active_opacity_percent" to 80,

@@ -8,8 +8,8 @@
     <string name="scr_logs">日志</string>
     <string name="scr_import">导入设置</string>
     <string name="scr_export">导出设置</string>
-    <string name="scr_reset">恢复默认设置</string>
-    <string name="scr_reset_summary">恢复全部歌词设置的默认值。</string>
+    <string name="scr_reset">恢复默认</string>
+    <string name="scr_reset_summary">恢复所有开关的预设状态。</string>
     <string name="scr_cancel">取消</string>
     <string name="scr_confirm">确定</string>
     <string name="scr_save_failed">保存失败</string>
@@ -63,7 +63,7 @@
     <string name="scr_rule_not_found">未识别到清理格式</string>
     <string name="scr_invalid_prefix_rule">前缀需为 2～40 个字符</string>
     <string name="scr_invalid_exact_rule">完整格式需为 1～160 个字符</string>
-    <string name="scr_lyric_bridge">歌词桥</string>
+    <string name="scr_lyric_bridge">歌词接管</string>
     <string name="scr_music_apps">音乐应用</string>
     <string name="scr_no_music_apps">暂无音乐应用</string>
     <string name="scr_install_provider">请安装歌词数据源</string>
@@ -94,6 +94,7 @@
     <string name="scr_font">字体</string>
     <string name="scr_follow_system">跟随系统</string>
     <string name="scr_apple_style">Apple样式</string>
+    <string name="scr_system_shaped_artwork">系统异形封面</string>
     <string name="scr_romanization">音译</string>
     <string name="scr_background_animation">背景随音频动画</string>
     <string name="scr_background_animation_summary">可能影响功耗</string>

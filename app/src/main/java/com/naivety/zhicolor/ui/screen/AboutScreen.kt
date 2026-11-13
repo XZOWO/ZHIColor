@@ -47,6 +47,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private enum class AboutPage { LANGUAGE, LICENSES, CREDITS, GPL, APACHE, LGPL, NOTICES }
 
+private const val URL_GITHUB = "https://github.com/XZOWO/ZHIColor"
+private const val URL_AFDIAN = "https://www.ifdian.net/a/XZOWO"
+private const val URL_QQ_GROUP = "https://qun.qq.com/universal-share/share?ac=1&authKey=XF%2BPdk7snLnIgNXJcJ%2Fk%2BgnnnhqkaZMGQj7zTMsbs0t%2BaIxusC7x9%2BzROdVGelJW&busi_data=eyJncm91cENvZGUiOiIyMjg1Njc3NDIiLCJ0b2tlbiI6IkdKK0xGZHRXbnhkc1VrNFJNdERLQWttWG5qbFNONmhicSsrRXNRNTM1d1VOTXZYL29Hejd1WHh3ZUdVbGx2cSsiLCJ1aW4iOiIyNjgxODA5ODA1In0%3D&data=ivy2g_RE6L62kuuQqxNI6oE1DuBEAFES2wj_7aR59T55mKrCSDw7nYPPmgOtS1AUOz9rSkqzBW7hAdv2WyTsaQ&svctype=4&tempid=h5_group_info"
+private const val URL_COOLAPK = "https://www.coolapk.com/u/12965336"
+
 @Composable
 fun AboutScreen(
     bottomInnerPadding: Dp = 0.dp,
@@ -110,6 +115,22 @@ fun AboutScreen(
                     title = stringResource(R.string.update_check),
                     summary = if (checkingForUpdates) stringResource(R.string.update_checking) else null,
                     onClick = onCheckForUpdates,
+                )
+                ActionPreference(
+                    title = stringResource(R.string.about_github), summary = stringResource(R.string.about_github_summary),
+                    onClick = { visit(URL_GITHUB) },
+                )
+                ActionPreference(
+                    title = stringResource(R.string.about_afdian), summary = stringResource(R.string.about_afdian_summary),
+                    onClick = { visit(URL_AFDIAN) },
+                )
+                ActionPreference(
+                    title = stringResource(R.string.about_qq_group), summary = stringResource(R.string.about_qq_group_summary),
+                    onClick = { visit(URL_QQ_GROUP) },
+                )
+                ActionPreference(
+                    title = stringResource(R.string.about_coolapk), summary = stringResource(R.string.about_coolapk_summary),
+                    onClick = { visit(URL_COOLAPK) },
                 )
                 BasicComponent(title = stringResource(R.string.about_application_id), summary = BuildConfig.APPLICATION_ID)
                 ActionPreference(title = stringResource(R.string.about_licenses), onClick = { showPage(AboutPage.LICENSES) })

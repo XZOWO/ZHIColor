@@ -53,7 +53,12 @@ import org.json.JSONObject;
 
 import com.naivety.zhicolor.bridge.render.CachedDrawFrame;
 import com.naivety.zhicolor.bridge.render.CharLiftGeometry;
+import com.naivety.zhicolor.bridge.render.SyllableLiftMotion;
+import com.naivety.zhicolor.bridge.render.WordEmphasisMotion;
+import com.naivety.zhicolor.bridge.render.WordEmphasisGeometry;
 import com.naivety.zhicolor.bridge.render.DrawFrame;
+import com.naivety.zhicolor.bridge.render.LineTimedProgress;
+import com.naivety.zhicolor.bridge.render.LineProgressLiftMotion;
 import com.naivety.zhicolor.bridge.render.LyricDrawLine;
 import com.naivety.zhicolor.bridge.render.LyricDrawLayoutEngine;
 import com.naivety.zhicolor.bridge.render.LyricSecondaryWindowPolicy;
@@ -557,6 +562,8 @@ public final class LockscreenLyricsModule extends XposedModule {
     private final ArrayList<WeakReference<View>> lyricRootViews = new ArrayList<>();
     private final Object translationActionViewsLock = new Object();
     private final WeakHashMap<View, Boolean> translationActionViews = new WeakHashMap<>();
+    private final WeakHashMap<View, NativeTranslationActionDefaults> nativeTranslationActionDefaults =
+            new WeakHashMap<>();
     private final WeakHashMap<ImageView, Boolean> translationActionPresentationStates =
             new WeakHashMap<>();
     private final WeakHashMap<ImageView, Boolean> translationActionPresentationInFlight =
@@ -975,12 +982,25 @@ public final class LockscreenLyricsModule extends XposedModule {
             reapplyCurrentTranslationButtonSetting();
         }
         if(!enabled || !ZhiBridgeRuntime.active()) {
+            lyricRecyclerForceAlignGeneration++;
+            systemUiLyricPublicationGate.invalidate();
+            translationLayoutGeneration++;
+            cancelLyricSurfaceReactivationCallbacks();
+            cancelActiveLyricRefreshCallbacks(true);
+            resetOfficialRowScaleState();
             currentWordLyricModel=null;
             clearCurrentLyricProvider();
-            resetOfficialRowScaleState();
+            OfficialLyricMotionController.restoreAll();
+            NativeLyricsAnchorPolicy.restoreAll();
+            restoreNativeLyricContentDefaults();
+            restoreNativeTranslationActionDefaults();
+            translationToggleActionBinder.restoreAll();
+            latestTranslationMediaButtons.clear();
             restoreSuppressedLyricsRecyclerViews(false);
             restoreOriginalPkgActionsRules();
-
+            releaseScreenTimeoutWakeLock("lyric takeover disabled");
+            officialLyricTextRenderer.clearGlowCache();
+            if (!enabled) rebindNativeLyricRows();
         } else {
             if ((ZhiBridgeRuntime.hasPendingLyricHandoff() && !ZhiBridgeRuntime.hasCurrentPayload())
                     || (currentWordLyricModel != null
@@ -2267,7 +2287,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                 lineTimedProgress,
                 translationProgress);
         officialLyricTextRenderer.setConfig(lyricUiConfig);
-        if (!changed) {
+        if (!ZhiBridgeRuntime.enabled() || !changed) {
             return;
         }
         if (screenTimeoutChanged) {
@@ -2543,6 +2563,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void reapplyCurrentTranslationButtonSetting() {
+        if (!ZhiBridgeRuntime.enabled()) return;
         String packageName = currentTranslationPreferencePackage();
         WeakReference<Object> reference = latestTranslationMediaButtons.get(packageName);
         Object mediaButton = reference == null ? null : reference.get();
@@ -2717,6 +2738,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void refreshLyricViewsAfterTranslationToggle(int generation, boolean preserveAnchor) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         if (generation != translationLayoutGeneration) {
             return;
         }
@@ -2784,7 +2806,7 @@ public final class LockscreenLyricsModule extends XposedModule {
             View recycler,
             int targetIndex,
             int desiredCenter) {
-        if (generation != translationLayoutGeneration
+        if (!ZhiBridgeRuntime.enabled() || generation != translationLayoutGeneration
                 || recycler == null
                 || !recycler.isAttachedToWindow()
                 || isAodLowFrameRateLyricMode()) {
@@ -2804,6 +2826,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void redrawLyricRenderTargets(boolean requestLayout, boolean syncRecyclerHeights) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         for (View recycler : snapshotLyricsRecyclerViews()) {
             configureOfficialLyricScaleOwnership(recycler);
             if (syncRecyclerHeights) {
@@ -3517,6 +3540,7 @@ public final class LockscreenLyricsModule extends XposedModule {
             String reason,
             boolean confirmedLyricTextView,
             boolean settleSurfaceReactivation) {
+        if (!ZhiBridgeRuntime.enabled()) return false;
         if ((currentWordLyricModel == null && !systemUiHasOfficialLyric)
                 || (!confirmedLyricTextView && !hasStableActiveLyricRefreshSurface())) {
             return false;
@@ -5217,13 +5241,15 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void rememberTranslationActionView(View view, boolean iconMatched) {
-        if (view == null) {
+        if (!ZhiBridgeRuntime.enabled() || view == null) {
             return;
         }
         boolean added;
         synchronized (translationActionViewsLock) {
             Boolean previous = translationActionViews.get(view);
             added = previous == null;
+            if (!nativeTranslationActionDefaults.containsKey(view))
+                nativeTranslationActionDefaults.put(view, new NativeTranslationActionDefaults(view));
             translationActionViews.put(view, iconMatched || Boolean.TRUE.equals(previous));
             translationActionTrackingActive = true;
         }
@@ -5253,6 +5279,43 @@ public final class LockscreenLyricsModule extends XposedModule {
         synchronized (translationActionViewsLock) {
             translationActionViews.clear();
             translationActionTrackingActive = false;
+        }
+    }
+
+    private void restoreNativeTranslationActionDefaults() {
+        synchronized (translationActionViewsLock) {
+            for (Map.Entry<View, NativeTranslationActionDefaults> entry :
+                    new ArrayList<>(nativeTranslationActionDefaults.entrySet())) {
+                if (entry.getKey() != null) entry.getValue().restore(entry.getKey());
+            }
+            nativeTranslationActionDefaults.clear();
+            translationActionViews.clear();
+            translationActionPresentationStates.clear();
+            translationActionPresentationInFlight.clear();
+            translationActionTrackingActive = false;
+        }
+    }
+
+    private static final class NativeTranslationActionDefaults {
+        final int visibility;
+        final CharSequence description;
+        final Drawable drawable;
+        final int imageAlpha;
+
+        NativeTranslationActionDefaults(View view) {
+            visibility = view.getVisibility();
+            description = view.getContentDescription();
+            drawable = view instanceof ImageView ? ((ImageView) view).getDrawable() : null;
+            imageAlpha = view instanceof ImageView ? ((ImageView) view).getImageAlpha() : 255;
+        }
+
+        void restore(View view) {
+            view.setVisibility(visibility);
+            view.setContentDescription(description);
+            if (view instanceof ImageView) {
+                ((ImageView) view).setImageDrawable(drawable);
+                ((ImageView) view).setImageAlpha(imageAlpha);
+            }
         }
     }
 
@@ -5298,6 +5361,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void applyTranslationActionViewVisibility(View view) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         if (view == null || !isRememberedTranslationActionView(view)) {
             return;
         }
@@ -5370,6 +5434,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void applyTranslationActionViewPresentation(View view) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         if (view == null) return;
         boolean enabled = isLyricInfoTranslationEnabled(
                 currentTranslationPreferencePackage());
@@ -5385,6 +5450,8 @@ public final class LockscreenLyricsModule extends XposedModule {
                         || isRememberedTranslationActionView(view));
         if (imageView == null) return;
         synchronized (translationActionViewsLock) {
+            if (!nativeTranslationActionDefaults.containsKey(imageView))
+                nativeTranslationActionDefaults.put(imageView, new NativeTranslationActionDefaults(imageView));
             if (Boolean.TRUE.equals(translationActionPresentationInFlight.get(imageView))) {
                 return;
             }
@@ -6385,7 +6452,8 @@ public final class LockscreenLyricsModule extends XposedModule {
             String reason,
             boolean scheduleRetries,
             boolean allowNativeAdaptiveRecovery) {
-        if (recycler == null
+        if (!ZhiBridgeRuntime.enabled()
+                || recycler == null
                 || targetIndex < 0
                 || !recycler.isAttachedToWindow()
                 || (!shouldModulePositionLyricsRecycler()
@@ -6444,7 +6512,8 @@ public final class LockscreenLyricsModule extends XposedModule {
             boolean allowNativeAdaptiveRecovery) {
         boolean generationMatches = generation == lyricRecyclerForceAlignGeneration;
         boolean attached = recycler != null && recycler.isAttachedToWindow();
-        if (!generationMatches
+        if (!ZhiBridgeRuntime.enabled()
+                || !generationMatches
                 || recycler == null
                 || targetIndex < 0
                 || !attached
@@ -6465,7 +6534,8 @@ public final class LockscreenLyricsModule extends XposedModule {
             WordLyricModel model,
             WordLine activeLine,
             TextView activeView) {
-        if (model == null
+        if (!ZhiBridgeRuntime.enabled()
+                || model == null
                 || activeLine == null
                 || activeView == null
                 || activeLine.timingMode != LyricTimingMode.LINE_TIMED
@@ -6721,6 +6791,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void applyVisibleLyricBlockHeights(View root) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         refreshLyricUiStyleSettingsIfNeeded();
         officialLyricTextRenderer.setTranslationEnabled(isCurrentPlayerTranslationEnabled());
         applyVisibleLyricBlockHeights(root, currentSettlingOfficialLyricIndex());
@@ -6734,6 +6805,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void applyVisibleLyricBlockHeights(View root, int activeSlotIndex) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         WordLyricModel model = currentWordLyricModel;
         if (model == null || root == null || !root.isAttachedToWindow()) {
             return;
@@ -7124,6 +7196,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private boolean shouldInspectLyricTextViewHooks() {
+        if (!ZhiBridgeRuntime.enabled()) return false;
         // Render ownership is independent from keep-awake/visibility lifecycle. SystemUI builds
         // the next immersive lyric surface while alpha=0; the row still needs a complete custom
         // display list before the parent fade begins.
@@ -7284,6 +7357,22 @@ public final class LockscreenLyricsModule extends XposedModule {
 
     private void installBackgroundPluginHooks(ClassLoader loader) {
         infoAlways(BridgeDebugArea.BOOTSTRAP, "BACKGROUND_PLUGIN_HOOKS", "Installing native background plugin callbacks");
+        try {
+            Class<?> builder = Class.forName("com.oplus.systemui.plugins.shared.template.section.media.MPImmersiveSectionViewModel$bgModel$1", false, loader);
+            Method build = builder.getDeclaredMethod("invokeSuspend", Object.class);
+            build.setAccessible(true);
+            rememberPluginHookHandle(loader, hook(build).setId("zhi-system-shaped-background-model")
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        Object nativeModel = chain.proceed();
+                        return ZhiBridgeRuntime.enabled()
+                                ? backgroundHost.nativeBackgroundModelBuilt(chain.getThisObject(), nativeModel)
+                                : nativeModel;
+                    }));
+            infoAlways(BridgeDebugArea.BOOTSTRAP, "SYSTEM_SHAPED_ARTWORK_READY", "Native artwork background model hooked");
+        } catch (ReflectiveOperationException | RuntimeException failure) {
+            error("System artwork background model unavailable for this plugin", failure);
+        }
         try {
             Class<?> lyric = Class.forName(LYRICS_RECYCLER_VIEW_CLASS, false, loader);
             Method mode = lyric.getDeclaredMethod("setAodModeStyle", boolean.class);
@@ -9212,6 +9301,25 @@ public final class LockscreenLyricsModule extends XposedModule {
                 new NativeLyricContentDefaults(recycler, binding));
     }
 
+    private void rebindNativeLyricRows() {
+        // Rebinding also lets the OEM own RenderEffect and its internal row styling again.
+        // View exposes no RenderEffect getter, so guessing a prior blur would lose native state.
+        for (View recycler : snapshotLyricsRecyclerViews()) {
+            Object adapter = invokeNoArgByName(recycler, "getAdapter");
+            if (adapter != null) invokeNoArgByName(adapter, "notifyDataSetChanged");
+            recycler.requestLayout();
+            recycler.invalidate();
+        }
+    }
+
+    private void restoreNativeLyricContentDefaults() {
+        for (Map.Entry<View, NativeLyricContentDefaults> entry :
+                new ArrayList<>(nativeLyricContentDefaults.entrySet())) {
+            if (entry.getKey() != null) entry.getValue().restore(entry.getKey());
+        }
+        nativeLyricContentDefaults.clear();
+    }
+
     private static final class NativeLyricContentDefaults {
         final OfficialLyricsRecyclerCompatibility.Binding binding;
         final Integer spacing;
@@ -9239,6 +9347,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void configureOfficialLyricLineSpacing(View recyclerView) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         rememberNativeLyricContentDefaults(recyclerView);
         if (recyclerView == null) {
             return;
@@ -9290,6 +9399,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private void configureOfficialLyricScaleOwnership(View recyclerView) {
+        if (!ZhiBridgeRuntime.enabled()) return;
         rememberNativeLyricContentDefaults(recyclerView);
         if (recyclerView == null) {
             return;
@@ -9611,7 +9721,7 @@ public final class LockscreenLyricsModule extends XposedModule {
             View view,
             float inactiveBlurRadius,
             boolean keepZeroBlurEffect) {
-        if (view == null) {
+        if (!ZhiBridgeRuntime.enabled() || view == null) {
             return;
         }
         float blurRadius = Math.max(0f, inactiveBlurRadius);
@@ -11295,7 +11405,7 @@ public final class LockscreenLyricsModule extends XposedModule {
     }
 
     private boolean hasScreenTimeoutWakeLockBaseConditions(Context context) {
-        return screenTimeoutSmartEnabled
+        return ZhiBridgeRuntime.enabled() && screenTimeoutSmartEnabled
                 && systemUiLyricModeKeepAwakeActive
                 && !screenTimeoutPausedByScreenOff
                 && !screenTimeoutPausedByUserPresent
@@ -13304,6 +13414,10 @@ public final class LockscreenLyricsModule extends XposedModule {
         private final Paint.FontMetrics secondaryTranslationFontMetrics = new Paint.FontMetrics();
         private final Paint.FontMetrics glowFontMetrics = new Paint.FontMetrics();
         private final Rect opticalTextBounds = new Rect();
+        private final Rect emphasisInkBounds = new Rect();
+        private final Rect emphasisClipBounds = new Rect();
+        private BlurMaskFilter emphasisMaskFilter;
+        private int emphasisMaskRadiusKey;
         private final Matrix activeFeatherShaderMatrix = new Matrix();
         private final Matrix glowFeatherMaskShaderMatrix = new Matrix();
         private final LyricDrawLayoutEngine drawLayoutEngine =
@@ -13338,6 +13452,12 @@ public final class LockscreenLyricsModule extends XposedModule {
                 Shader.TileMode.CLAMP);
         private final PorterDuffXfermode glowFeatherMaskXfermode =
                 new PorterDuffXfermode(PorterDuff.Mode.DST_IN);
+        private final GlowSegmentCache[] emphasisGlowSegmentCaches = createEmphasisGlowCaches();
+        private static GlowSegmentCache[] createEmphasisGlowCaches() {
+            GlowSegmentCache[] result = new GlowSegmentCache[32];
+            for (int i = 0; i < result.length; i++) result[i] = new GlowSegmentCache();
+            return result;
+        }
         private final GlowSegmentCache[] glowSegmentCaches = {
                 new GlowSegmentCache(),
                 new GlowSegmentCache(),
@@ -13355,12 +13475,9 @@ public final class LockscreenLyricsModule extends XposedModule {
         };
         private long graphemeCacheUseCounter;
         private final CharLiftState charLift = new CharLiftState();
-        /**
-         * Canvas y of the translation row's glyph top for the group being drawn,
-         * or 0 when the row has no translation. Sunk main text has to stay above
-         * it: the translation does not sink with the main line.
-         */
-        private float charLiftFloorY;
+        private final LyricDrawLine compactLiftLine = new LyricDrawLine();
+        private final int[] compactLiftStarts = {0}, compactLiftEnds = {0};
+        private final float[] compactLiftWidths = {0f};
         /**
          * Sticky after a lifted draw throws. A draw error reaching the
          * coordinator blacklists the binding and falls back to native rendering
@@ -13905,6 +14022,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                         position,
                         glowPosition,
                         visualActiveLine,
+                        frame.active,
                         focusAmount,
                         aodLineFillAmount,
                         availableWidth,
@@ -13920,6 +14038,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                     position,
                     glowPosition,
                     visualActiveLine,
+                    frame.active,
                     availableWidth,
                     availableHeight,
                     focusAmount,
@@ -14086,14 +14205,9 @@ public final class LockscreenLyricsModule extends XposedModule {
                     && LyricMotionPolicy.animate(uiConfig.motionMode, aodLowFrameRateMode,
                     android.animation.ValueAnimator.areAnimatorsEnabled());
             boolean timedHighlight = !WordLyricRenderSupport.shouldUseTimestampHighlight(frame.model, line)
-                    && shouldDrawWordProgressForVisual(line, 0f)
-                    && line.words != null && !line.words.isEmpty();
+                    && shouldDrawWordProgressForVisual(line, 0f);
             long completionPosition = timedHighlight
                     ? resolveCharLiftLineRevealEnd(frame.model, line) : frame.position;
-            if (timedHighlight && charLiftEnabled && !charLiftUnavailable
-                    && charLiftStrengthPercent > 0) {
-                completionPosition += WordLyricRenderConstants.CHAR_LIFT_FINISH_MS;
-            }
             boolean wasExiting = line.highlightExit.isExiting();
             line.highlightExit.sample(frame.active, frame.position, now, animate,
                     completionPosition, LyricMotionPolicy.focusMillis(uiConfig.motionMode));
@@ -14198,6 +14312,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                 long position,
                 long glowPosition,
                 boolean activeLine,
+                boolean sourceSelected,
                 float availableWidth,
                 float availableHeight,
                 float focusAmount,
@@ -14224,6 +14339,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                 return;
             }
 
+            state.liftSelected = sourceSelected;
             int save = canvas.save();
             try {
                 canvas.clipRect(
@@ -14389,10 +14505,6 @@ public final class LockscreenLyricsModule extends XposedModule {
             state.secondaryTranslationAmount = secondaryTranslationAmount;
             state.secondaryTranslationGap = secondaryTranslationGap;
             state.secondaryTranslationMetricsTop = secondaryTranslationFontMetrics.top;
-            // Where drawTranslationPass puts the translation's outward font top.
-            // Unsung main text sinks toward it and must stop short of it.
-            charLiftFloorY = (state.romanizationHeight > 0f || translationLayoutAmount > 0.001f || secondaryAmount > 0.001f)
-                    ? top + mainHeight + dp(textView.getContext(), 2f) : 0f;
             return true;
         }
 
@@ -14424,6 +14536,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                         state.position,
                         state.glowPosition,
                         state.activeLine,
+                        state.liftSelected,
                         state.drawProgress,
                         state.fullLineOverlayAmount,
                         lineWindow.previousStart,
@@ -14447,6 +14560,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                         state.position,
                         state.glowPosition,
                         state.activeLine,
+                        state.liftSelected,
                         state.drawProgress,
                         state.fullLineOverlayAmount,
                         lineWindow.currentStart,
@@ -14475,6 +14589,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                     state.position,
                     state.glowPosition,
                     state.activeLine,
+                    state.liftSelected,
                     state.drawProgress,
                     state.fullLineOverlayAmount,
                     windowStart,
@@ -14628,7 +14743,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                         drawSecondaryTextRows(canvas, textView, state, secondary, baseline,
                                 window.currentStart, count, appearance);
                     }
-                
+
                 if (playbackAdvancing && state.activeLine && !aodLowFrameRateMode
                         && state.position < secondary.endTimeMillis
                         && (secondaryDrawLines.size() > count || uiConfig.secondaryProgressEnabled)) {
@@ -15170,11 +15285,11 @@ public final class LockscreenLyricsModule extends XposedModule {
         }
 
         private boolean canDrawWordProgress(WordLine line) {
-            return line != null
-                    && line.words != null
-                    && !line.words.isEmpty()
-                    && (line.timingMode != LyricTimingMode.LINE_TIMED
-                    || lineTimedProgressEnabled);
+            if (line == null) return false;
+            if (line.timingMode == LyricTimingMode.LINE_TIMED) {
+                return lineTimedProgressEnabled && !TextUtils.isEmpty(line.text);
+            }
+            return line.words != null && !line.words.isEmpty();
         }
 
         private void drawMainLineWindow(
@@ -15194,6 +15309,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                 long position,
                 long glowPosition,
                 boolean activeLine,
+                boolean liftSelected,
                 boolean drawProgress,
                 float fullLineOverlayAmount,
                 int windowStart,
@@ -15203,6 +15319,8 @@ public final class LockscreenLyricsModule extends XposedModule {
             if (alpha <= 0.01f || count <= 0) {
                 return;
             }
+            // Lift uses real source timing and selection, never the highlight completion clock.
+            long liftPosition = position;
             boolean exitingHighlight = line.highlightExit.isExiting();
             if (exitingHighlight) {
                 // Each text lane consumes this row's shared exit sample while retaining
@@ -15223,21 +15341,11 @@ public final class LockscreenLyricsModule extends XposedModule {
             mainProgressAodAmount = fullLineOverlayAmount;
             int start = Math.max(0, Math.min(windowStart, drawLines.size()));
             int end = Math.min(drawLines.size(), start + count);
-            beginCharLiftLine(
-                    model,
-                    line,
-                    text,
-                    activeWord,
-                    wordIndex,
-                    position,
-                    activeLine,
-                    drawProgress,
-                    fullLineOverlayAmount,
-                    start,
-                    canvas.getHeight(),
-                    dp(
-                            textView.getContext(),
-                            WordLyricRenderConstants.CHAR_LIFT_MIN_CLEARANCE_DP));
+            if (line.timingMode == LyricTimingMode.LINE_TIMED) {
+                liftPosition = position;
+                liftSelected |= exitingHighlight;
+            }
+            beginCharLiftLine(model, line, textView, text, liftPosition, liftSelected, false);
             float lineY = y;
             for (int i = start; i < end; i++) {
                 LyricDrawLine drawLine = drawLines.get(i);
@@ -15267,122 +15375,108 @@ public final class LockscreenLyricsModule extends XposedModule {
                         activeLine,
                         drawProgress,
                         fullLineOverlayAmount);
-                charLift.flowSegmentStart += drawLine.width;
                 lineY += lineHeight + lineGap;
             }
-            // Active lift follows playback, so a paused word owns no animation loop.
-            // A deactivated row uses its bounded completion clock until the last
-            // grapheme lands while the same exit clock fades its highlight.
-            if (charLift.lineActive && (playbackAdvancing || exitingHighlight)
-                    && (charLift.ramp < 1f || charLift.finishing)) {
+            // An already-triggered spring can finish during pause, then owns no more frames.
+            if (charLift.lineActive && (charLift.motion.isRunning() || charLift.emphasis.isRunning())) {
                 requestLyricAnimationFrame(textView);
             }
         }
 
-        /**
-         * Line-level lift state for one {@link #drawMainLineWindow} pass. The
-         * reveal front is resolved once per line in flow coordinates (advance
-         * width accumulated across wrapped segments) because a per-segment front
-         * pins itself to the right edge of any segment that sits entirely before
-         * the active word, which would park that segment's trailing grapheme at
-         * the envelope peak for the rest of the row.
-         */
+        /** Source syllables and line-progress crossings both trigger independent UI-clock springs. */
         private void beginCharLiftLine(
-                WordLyricModel model,
-                WordLine line,
-                String text,
-                WordRange activeWord,
-                int wordIndex,
-                long position,
-                boolean activeLine,
-                boolean drawProgress,
-                float fullLineOverlayAmount,
-                int windowStart,
-                float canvasHeight,
-                float minClearance) {
+                WordLyricModel model, WordLine line, TextView textView, String text,
+                long position, boolean selected, boolean compact) {
             charLift.reset();
-            if (!charLiftEnabled
-                    || charLiftUnavailable
-                    || !activeLine
-                    || !rowBrightActive
-                    || !drawProgress
-                    // drawProgress alone does not rule out AOD: the low frame
-                    // rate path still draws word progress while the fill
-                    // transition runs, and an animation there costs battery for
-                    // motion nobody is watching.
+            if (line == null) return;
+            boolean liftEnabled = charLiftEnabled && charLiftStrengthPercent > 0;
+            boolean emphasisEnabled = uiConfig.wordEmphasisEnabled
+                    && line.timingMode == LyricTimingMode.WORD_TIMED;
+            if ((!liftEnabled && !emphasisEnabled) || charLiftUnavailable
                     || aodLowFrameRateMode
-                    || uiConfig.motionMode == LyricUiConfig.MOTION_OFF
+                    || uiConfig.motionMode != LyricUiConfig.MOTION_STANDARD
                     || !android.animation.ValueAnimator.areAnimatorsEnabled()
-                    || line == null
-                    || (line.timingMode != LyricTimingMode.WORD_TIMED
-                    && (line.timingMode != LyricTimingMode.LINE_TIMED
-                    || !lineTimedProgressEnabled))
-                    || line.words == null
-                    || line.words.isEmpty()
-                    || TextUtils.isEmpty(text)
+                    || (line.timingMode == LyricTimingMode.LINE_TIMED && !lineTimedProgressEnabled)
+                    || "transliteration".equals(line.sourceRole) || "romanization".equals(line.sourceRole)
+                    || (line.timingMode == LyricTimingMode.WORD_TIMED
+                    && (line.words == null || line.words.isEmpty())) || TextUtils.isEmpty(text)
                     || WordLyricRenderSupport.shouldUseTimestampHighlight(model, line)) {
+                line.syllableLift.reset();
+                line.wordEmphasis.reset();
+                line.resetLineProgressLift();
                 return;
             }
             try {
-                // activeWord == null keeps the front at the start during pre-roll.
-                float textSize = inactivePaint.getTextSize();
-                float maxSink = textSize
-                        * WordLyricRenderConstants.CHAR_LIFT_MAX_FACTOR
-                        * charLiftStrengthPercent
-                        / 100f;
-                // Fill and progress use the same displaced glyphs. Wake reveals the
-                // normal lift geometry continuously instead of switching it on at the end.
-                maxSink = LyricWakeTransitionPolicy.liftAmount(maxSink, frameAodAmount);
-                maxSink *= line.highlightExit.liftActivationAmount();
-                if (maxSink <= CHAR_LIFT_FRAME_EPSILON) {
-                    return;
+                if (line.timingMode == LyricTimingMode.WORD_TIMED) {
+                    if (liftEnabled) line.syllableLift.sample(position, lyricAnimationTimeMillis(), selected, true);
+                    else line.syllableLift.reset();
+                    charLift.motion = line.syllableLift;
+                    if (emphasisEnabled) line.wordEmphasis.sample(position, lyricAnimationTimeMillis(), selected, true,
+                            line.sourceLanguage, uiConfig.chineseTailEmphasisEnabled);
+                    else line.wordEmphasis.reset();
+                } else {
+                    line.wordEmphasis.reset();
+                    charLift.motion = resolveLineProgressLift(model, line, text, compact).motion;
+                    charLift.motion.sample(position, lyricAnimationTimeMillis(), selected, true);
                 }
-                float ramp = CharLiftGeometry.sinkRamp(
-                        position,
-                        line.timeMillis,
-                        WordLyricRenderConstants.CHAR_LIFT_SINK_IN_MS);
-                if (ramp <= 0f) {
-                    return;
-                }
-                float waveWidth =
-                        textSize * WordLyricRenderConstants.CHAR_LIFT_WAVE_WIDTH_FACTOR;
-                // Before the first word the row is entirely unsung, so the front
-                // sits at the start of the text rather than being absent.
-                float revealFront = activeWord == null
-                        ? 0f
-                        : resolveLineFlowFront(model, line, text, activeWord, wordIndex, position);
-                long lineRevealEndMillis = resolveCharLiftLineRevealEnd(model, line);
-                charLift.flowFront = revealFront
-                        + CharLiftGeometry.finishOvershoot(
-                        position,
-                        lineRevealEndMillis,
-                        WordLyricRenderConstants.CHAR_LIFT_FINISH_MS,
-                        waveWidth);
-                charLift.finishing = position < lineRevealEndMillis
-                        + WordLyricRenderConstants.CHAR_LIFT_FINISH_MS;
-                charLift.flowSegmentStart = flowOffsetBeforeSegment(windowStart);
-                charLift.waveWidth = waveWidth;
-                charLift.maxSink = maxSink;
-                charLift.ramp = ramp;
-                charLift.floorY = charLiftFloorY > 0f ? charLiftFloorY : canvasHeight;
-                charLift.minClearance = minClearance;
-                charLift.lineActive = true;
+                charLift.emphasis = line.wordEmphasis;
+                charLift.emphasisStrength = emphasisEnabled
+                        ? LyricWakeTransitionPolicy.liftAmount(1f, frameAodAmount) : 0f;
+                charLift.emphasisGlowRadius = dp(textView.getContext(), WordEmphasisGeometry.EMPHASIS_GLOW_RADIUS_DP);
+                charLift.line = line;
+                charLift.maxLift = liftEnabled ? LyricWakeTransitionPolicy.liftAmount(
+                        dp(textView.getContext(), SyllableLiftMotion.LIFT_DP)
+                                * charLiftStrengthPercent / 100f, frameAodAmount) : 0f;
+                charLift.lineActive = charLift.maxLift > CHAR_LIFT_FRAME_EPSILON
+                        || charLift.emphasisStrength > CHAR_LIFT_FRAME_EPSILON;
             } catch (RuntimeException error) {
-                StructuredBridgeLog.warn(
-                        BridgeDebugArea.RENDERER,
-                        BridgeEvents.CHAR_LIFT_UNAVAILABLE,
-                        "Character lift disabled until the next cache reset: " + error);
+                StructuredBridgeLog.warn(BridgeDebugArea.RENDERER, BridgeEvents.CHAR_LIFT_UNAVAILABLE,
+                        "Syllable lift disabled until the next cache reset: " + error);
                 charLiftUnavailable = true;
                 charLift.reset();
             }
         }
 
-        /**
-         * Resolves the endpoint of the reveal that the lift front follows. A
-         * line-timed row has one synthetic whole-row range, but its linear
-         * reveal runs until the display end (normally the next row's start),
-         * rather than until the word-timing fallback would infer.
-         */
+        /** Layout misses alone measure visual crossing thresholds; canonical words stay untouched. */
+        private LineProgressLiftMotion resolveLineProgressLift(
+                WordLyricModel model, WordLine line, String text, boolean compact) {
+            int[] starts = line.rendererLayoutStarts, ends = line.rendererLayoutEnds;
+            float[] widths = line.rendererLayoutWidths;
+            int count = line.rendererLayoutCount;
+            if (compact) {
+                compactLiftStarts[0] = 0;
+                compactLiftEnds[0] = text.length();
+                compactLiftWidths[0] = compactLiftLine.width;
+                starts = compactLiftStarts; ends = compactLiftEnds; widths = compactLiftWidths; count = 1;
+            }
+            long end = resolveLineDisplayEndMillis(model, line);
+            int textSizeKey = Math.max(1, Math.round(inactivePaint.getTextSize() * 10f));
+            Typeface typeface = inactivePaint.getTypeface();
+            LineProgressLiftMotion cached = compact ? line.compactLineProgressLift : line.lineProgressLift;
+            if (cached != null && cached.matches(line.timeMillis, end, textSizeKey, typeface,
+                    starts, ends, widths, count)) return cached;
+            int[] boundaries = CharLiftGeometry.graphemeBoundaries(text, 0, text.length());
+            float[] flowStarts = new float[Math.max(0, boundaries.length - 1)];
+            float totalWidth = 0f;
+            for (int i = 0; i < count; i++) totalWidth += widths[i];
+            int segment = 0;
+            float beforeWidth = 0f;
+            for (int i = 0; i < flowStarts.length && count > 0; i++) {
+                while (segment + 1 < count && boundaries[i] >= ends[segment]) {
+                    beforeWidth += widths[segment++];
+                }
+                int boundary = Math.max(starts[segment], Math.min(ends[segment], boundaries[i]));
+                flowStarts[i] = beforeWidth + Math.max(0f, Math.min(widths[segment],
+                        inactivePaint.measureText(text, starts[segment], boundary)));
+            }
+            cached = new LineProgressLiftMotion(line.timeMillis, end, textSizeKey, typeface,
+                    starts, ends, widths, count, boundaries, flowStarts, totalWidth);
+            if (compact) line.compactLineProgressLift = cached;
+            else line.lineProgressLift = cached;
+            return cached;
+        }
+
+        /** Reveal completion remains a property of the highlight, not the lift spring. */
         private long resolveCharLiftLineRevealEnd(WordLyricModel model, WordLine line) {
             if (line.timingMode == LyricTimingMode.LINE_TIMED) {
                 return resolveLineDisplayEndMillis(model, line);
@@ -15391,52 +15485,6 @@ public final class LockscreenLyricsModule extends XposedModule {
                     model,
                     line,
                     line.words.size() - 1);
-        }
-
-        /**
-         * Flow coordinate of the reveal front: the total revealed advance across
-         * the wrapped segments. A segment before the active word reports its
-         * full width, the segment holding the front reports a partial width, and
-         * later segments report zero, so the sum is the front itself and it
-         * stays monotonic across a wrap.
-         */
-        private float resolveLineFlowFront(
-                WordLyricModel model,
-                WordLine line,
-                String text,
-                WordRange activeWord,
-                int wordIndex,
-                long position) {
-            // Sum, never max: a segment after the front reports zero reveal,
-            // and its flow offset alone would otherwise pin the front to the end
-            // of every segment before it (observed on device: the wave parked
-            // at the end of the first wrapped line for the whole line).
-            float front = 0f;
-            for (int i = 0; i < drawLines.size(); i++) {
-                LyricDrawLine candidate = drawLines.get(i);
-                front = CharLiftGeometry.accumulateFlowFront(
-                        front,
-                        resolveWordRevealWidthForSegment(
-                                model,
-                                line,
-                                text,
-                                candidate,
-                                activeWord,
-                                wordIndex,
-                                position,
-                                candidate.width),
-                        candidate.width);
-            }
-            return front;
-        }
-
-        private float flowOffsetBeforeSegment(int windowStart) {
-            float flow = 0f;
-            int limit = Math.max(0, Math.min(windowStart, drawLines.size()));
-            for (int i = 0; i < limit; i++) {
-                flow += drawLines.get(i).width;
-            }
-            return flow;
         }
 
         private static float smoothStep(float progress) {
@@ -15455,19 +15503,11 @@ public final class LockscreenLyricsModule extends XposedModule {
         }
 
         private void drawCompactLine(
-                Canvas canvas,
-                TextView textView,
-                WordLyricModel model,
-                WordLine line,
-                long position,
-                long glowPosition,
-                boolean activeLine,
-                float focusAmount,
-                float aodLineFillAmount,
-                float availableWidth,
-                float availableHeight) {
-            boolean exitingHighlight = line.highlightExit.isExiting();
-            if (exitingHighlight) {
+                Canvas canvas, TextView textView, WordLyricModel model, WordLine line,
+                long position, long glowPosition, boolean activeLine, boolean sourceSelected,
+                float focusAmount, float aodLineFillAmount, float availableWidth, float availableHeight) {
+            long liftPosition = position;
+            if (line.highlightExit.isExiting()) {
                 activeLine = true;
                 position = line.highlightExit.renderPosition();
                 glowPosition = position;
@@ -15476,145 +15516,40 @@ public final class LockscreenLyricsModule extends XposedModule {
             float originalSize = inactivePaint.getTextSize();
             fitSingleLineText(textView, line.text, availableWidth, originalSize, sp(textView.getContext(), 10f));
             applyFade(1f, focusAmount);
-
             inactivePaint.getFontMetrics(mainFontMetrics);
-            Paint.FontMetrics metrics = mainFontMetrics;
-            float outerHeight = LyricUiLayoutPolicy.fontOuterHeight(
-                    metrics.top,
-                    metrics.bottom);
-            float y = textView.getPaddingTop()
-                    + Math.max(0f, (availableHeight - outerHeight) / 2f)
-                    - LyricUiLayoutPolicy.outwardFontTop(metrics.top);
-            float compactWidth = inactivePaint.measureText(line.text);
-            float x = resolveTextX(
-                    textView,
-                    line.text,
-                    0,
-                    line.text.length(),
-                    inactivePaint,
-                    compactWidth,
-                    availableWidth);
-
-            int compactSave = canvas.save();
+            float outerHeight = LyricUiLayoutPolicy.fontOuterHeight(mainFontMetrics.top, mainFontMetrics.bottom);
+            float y = textView.getPaddingTop() + Math.max(0f, (availableHeight - outerHeight) / 2f)
+                    - LyricUiLayoutPolicy.outwardFontTop(mainFontMetrics.top);
+            compactLiftLine.start = 0;
+            compactLiftLine.end = line.text.length();
+            compactLiftLine.width = inactivePaint.measureText(line.text);
+            float x = resolveTextX(textView, line.text, 0, line.text.length(), inactivePaint,
+                    compactLiftLine.width, availableWidth);
+            if (line.timingMode == LyricTimingMode.LINE_TIMED) {
+                liftPosition = position;
+                sourceSelected |= line.highlightExit.isExiting();
+            }
+            beginCharLiftLine(model, line, textView, line.text, liftPosition, sourceSelected, true);
+            int save = canvas.save();
             try {
-                canvas.clipRect(
-                        textView.getPaddingLeft(),
-                        0f,
-                        textView.getWidth() - textView.getPaddingRight(),
-                        textView.getHeight());
-                boolean timestampHighlight = WordLyricRenderSupport.shouldUseTimestampHighlight(
-                    model,
-                    line);
-            boolean drawProgress = activeLine && !timestampHighlight && shouldDrawWordProgressForVisual(
-                    line,
-                    aodLineFillAmount);
-                if (drawProgress) {
-                    mainProgressAodAmount = aodLineFillAmount;
-                    drawProgressLine(canvas, model, line, position, glowPosition, x, y);
-                } else if (activeLine && timestampHighlight) {
-                    canvas.drawText(line.text, x, y, inactivePaint);
-                    drawProgressGlow(
-                        canvas,
-                        line,
-                        line.text,
-                        0,
-                        line.text.length(),
-                        x,
-                        y,
-                        compactWidth,
-                        compactWidth);
-                    canvas.drawText(line.text, x, y, activePaint);
-                } else {
-                // The active line keeps full-opacity highlight even when it has no word
-                // timing to draw a reveal for. In AOD low frame rate this branch is only
-                // reached once the fill transition completes or for wordless lines, which
-                // preserves the AOD fill behavior.
-                    if (activeLine && rowWakeActivation < 1f) {
-                        int baseColor = inactivePaint.getColor();
-                        inactivePaint.setColor(scaleAlpha(baseColor, 1f - rowWakeActivation));
-                        canvas.drawText(line.text, x, y, inactivePaint);
-                        inactivePaint.setColor(baseColor);
-                    }
-                    canvas.drawText(
-                            line.text,
-                            x,
-                            y,
-                            activeLine ? activePaint : inactivePaint);
-                }
+                canvas.clipRect(textView.getPaddingLeft(), 0f,
+                        textView.getWidth() - textView.getPaddingRight(), textView.getHeight());
+                boolean drawProgress = activeLine
+                        && !WordLyricRenderSupport.shouldUseTimestampHighlight(model, line)
+                        && shouldDrawWordProgressForVisual(line, aodLineFillAmount);
+                int wordIndex = drawProgress ? line.findWordIndex(position) : -1;
+                int glowIndex = drawProgress ? line.findWordIndex(glowPosition) : -1;
+                WordRange word = wordIndex >= 0 ? line.words.get(wordIndex) : null;
+                WordRange glowWord = glowIndex >= 0 ? line.words.get(glowIndex) : null;
+                mainProgressAodAmount = aodLineFillAmount;
+                drawSegment(canvas, model, line, line.text, compactLiftLine, word, wordIndex,
+                        glowWord, glowIndex, x, y, position, glowPosition,
+                        activeLine, drawProgress, aodLineFillAmount);
+                if (charLift.lineActive && (charLift.motion.isRunning() || charLift.emphasis.isRunning())) requestLyricAnimationFrame(textView);
             } finally {
-                canvas.restoreToCount(compactSave);
-                if (inactivePaint.getTextSize() != originalSize) {
-                    setTextSize(originalSize);
-                }
+                canvas.restoreToCount(save);
+                if (inactivePaint.getTextSize() != originalSize) setTextSize(originalSize);
             }
-        }
-
-        private void drawProgressLine(
-                Canvas canvas,
-                WordLyricModel model,
-                WordLine line,
-                long position,
-                long glowPosition,
-                float x,
-                float y) {
-            int baseColor = inactivePaint.getColor();
-            float baseAodAmount = mainProgressAodAmount * rowWakeActivation;
-            inactivePaint.setColor(scaleAlpha(baseColor, 1f - baseAodAmount));
-            canvas.drawText(line.text, x, y, inactivePaint);
-            inactivePaint.setColor(baseColor);
-            int wordIndex = line.findWordIndex(position);
-            if (wordIndex < 0 || wordIndex >= line.words.size()) {
-                // Word-timed intro: keep the inactive base until the first word
-                // actually starts. Filling the whole line here made karaoke snap
-                // backwards from a full highlight to word 0.
-                if (line.timingMode != LyricTimingMode.WORD_TIMED) {
-                    canvas.drawText(line.text, x, y, activePaint);
-                } else {
-                    drawRevealedText(canvas, line.text, 0, line.text.length(), x, y,
-                            inactivePaint.measureText(line.text), 0f);
-                }
-                return;
-            }
-            WordRange activeWord = line.words.get(wordIndex);
-            float revealWidth = inactivePaint.measureText(line.text, 0, Math.max(0, Math.min(activeWord.start, line.text.length())));
-            int start = Math.max(0, Math.min(activeWord.start, line.text.length()));
-            int end = Math.max(start, Math.min(activeWord.end, line.text.length()));
-            revealWidth += inactivePaint.measureText(line.text, start, end)
-                    * resolveWordRevealProgress(model, line, wordIndex, position);
-            float segmentWidth = inactivePaint.measureText(line.text);
-            float glowRevealWidth = revealWidth;
-            if (glowPosition != position) {
-                int glowWordIndex = line.findWordIndex(glowPosition);
-                if (glowWordIndex >= 0 && glowWordIndex < line.words.size()) {
-                    WordRange glowWord = line.words.get(glowWordIndex);
-                    int glowStart = Math.max(0, Math.min(glowWord.start, line.text.length()));
-                    int glowEnd = Math.max(glowStart, Math.min(glowWord.end, line.text.length()));
-                    glowRevealWidth = inactivePaint.measureText(line.text, 0, glowStart)
-                            + inactivePaint.measureText(line.text, glowStart, glowEnd)
-                            * resolveWordRevealProgress(model, line, glowWordIndex, glowPosition);
-                } else {
-                    glowRevealWidth = 0f;
-                }
-            }
-            drawProgressGlow(
-                    canvas,
-                    line,
-                    line.text,
-                    0,
-                    line.text.length(),
-                    x,
-                    y,
-                    segmentWidth,
-                    glowRevealWidth);
-            drawRevealedText(
-                    canvas,
-                    line.text,
-                    0,
-                    line.text.length(),
-                    x,
-                    y,
-                    segmentWidth,
-                    revealWidth);
         }
 
         private void fitSingleLineText(TextView textView, String text, float availableWidth, float originalSize, float minimumSize) {
@@ -15656,7 +15591,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                             && rowWakeActivation >= 1f
                     ? activePaint : inactivePaint;
             float segmentWidth = drawLine.width;
-            float revealWidth = drawProgress && activeWord != null
+            float revealWidth = drawProgress
                     ? resolveWordRevealWidthForSegment(
                     model,
                     line,
@@ -15668,7 +15603,7 @@ public final class LockscreenLyricsModule extends XposedModule {
                     segmentWidth)
                     : 0f;
             boolean lifted = charLift.lineActive
-                    && prepareCharLiftZone(line, text, drawLine, x, segmentWidth);
+                    && prepareSyllableLiftSegment(line, text, drawLine);
             int baseColor = basePaint.getColor();
             float baseAodAmount = fullLineOverlayAmount * rowWakeActivation;
             if (drawProgress) basePaint.setColor(scaleAlpha(baseColor, 1f - baseAodAmount));
@@ -15676,7 +15611,6 @@ public final class LockscreenLyricsModule extends XposedModule {
                     && (rowWakeActivation < 1f || line.highlightExit.isExiting());
             if (fadingPlainActive) basePaint.setColor(scaleAlpha(baseColor, 1f - rowWakeActivation));
             if (lifted) {
-                drawTextOutsideCharLiftZone(canvas, text, drawLine, x, y, basePaint);
                 drawLiftedGraphemes(
                         canvas,
                         text,
@@ -15711,17 +15645,16 @@ public final class LockscreenLyricsModule extends XposedModule {
                             y,
                             activePaint);
                 } else if (line.highlightExit.isExiting() || fadingPlainActive) {
-                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, activePaint);
+                    if (lifted) drawLiftedGraphemes(canvas, text, drawLine, x, y, activePaint,
+                            segmentWidth, revealWidth, false);
+                    else canvas.drawText(text, drawLine.start, drawLine.end, x, y, activePaint);
                 }
                 return;
             }
 
-            if (activeWord == null) {
-                if (activeLine && line.timingMode != LyricTimingMode.WORD_TIMED) {
-                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, activePaint);
-                } else if (fullLineOverlayAmount > 0f) {
+            if (activeWord == null && line.timingMode != LyricTimingMode.LINE_TIMED) {
+                if (fullLineOverlayAmount > 0f) {
                     if (lifted) {
-                        drawRevealedTextOutsideCharLiftZone(canvas, text, drawLine, x, y, segmentWidth, 0f);
                         drawLiftedGraphemes(canvas, text, drawLine, x, y, basePaint, segmentWidth, 0f, true);
                     } else {
                         drawRevealedText(canvas, text, drawLine.start, drawLine.end, x, y, segmentWidth, 0f);
@@ -15743,6 +15676,10 @@ public final class LockscreenLyricsModule extends XposedModule {
                         segmentWidth);
             }
             if (glowRevealWidth > 0f) {
+                if (lifted) {
+                    drawSyllableLiftLayer(canvas, line, text, drawLine, x, y, basePaint,
+                            segmentWidth, glowRevealWidth, 2);
+                } else {
                 drawProgressGlow(
                         canvas,
                         line,
@@ -15753,17 +15690,10 @@ public final class LockscreenLyricsModule extends XposedModule {
                         y,
                         segmentWidth,
                         glowRevealWidth);
+                }
             }
             if (revealWidth > 0f || fullLineOverlayAmount > 0f) {
                 if (lifted) {
-                    drawRevealedTextOutsideCharLiftZone(
-                            canvas,
-                            text,
-                            drawLine,
-                            x,
-                            y,
-                            segmentWidth,
-                            revealWidth);
                     drawLiftedGraphemes(
                             canvas,
                             text,
@@ -15790,9 +15720,8 @@ public final class LockscreenLyricsModule extends XposedModule {
 
         /**
          * Revealed width of {@code drawLine} for one word, including the cheap
-         * fully-before / fully-after answers. Shared by the draw path and by
-         * {@link #resolveLineFlowFront} so the lift and the clip reveal can
-         * never disagree about where the front is.
+         * fully-before / fully-after answers. Only the highlight uses reveal width;
+         * syllable transforms have their own finite animation clock.
          */
         private float resolveWordRevealWidthForSegment(
                 WordLyricModel model,
@@ -15803,6 +15732,21 @@ public final class LockscreenLyricsModule extends XposedModule {
                 int wordIndex,
                 long position,
                 float segmentWidth) {
+            // A line-only reveal does not depend on the synthetic whole-row WordRange.
+            // In particular, an early selected row remains dark until its own timestamp.
+            if (line.timingMode == LyricTimingMode.LINE_TIMED && lineTimedProgressEnabled) {
+                float totalWidth = 0f, beforeWidth = 0f;
+                if (drawLine == compactLiftLine) {
+                    totalWidth = segmentWidth;
+                } else {
+                    for (LyricDrawLine candidate : drawLines) {
+                        totalWidth += candidate.width;
+                        if (candidate.start < drawLine.start) beforeWidth += candidate.width;
+                    }
+                }
+                return LineTimedProgress.revealWidth(position, line.timeMillis,
+                        resolveLineDisplayEndMillis(model, line), totalWidth, beforeWidth, segmentWidth);
+            }
             if (word == null) {
                 return 0f;
             }
@@ -15822,287 +15766,147 @@ public final class LockscreenLyricsModule extends XposedModule {
                     position);
         }
 
-        /**
-         * Splits this segment into the sung head, the transition the wave is
-         * crossing, and the unsung tail, in canvas x. Returns false when the
-         * whole segment is already sung, in which case the caller keeps the
-         * untouched whole-segment draw — which is also what makes a settled row
-         * pixel-identical to the effect being off.
-         */
-        private boolean prepareCharLiftZone(
-                WordLine line,
-                String text,
-                LyricDrawLine drawLine,
-                float x,
-                float segmentWidth) {
-            if (segmentWidth <= 0f || drawLine.start >= drawLine.end) {
-                return false;
+        /** Resolve shaping geometry on cache misses; waiting segments keep one whole draw. */
+        private boolean prepareSyllableLiftSegment(WordLine line, String text, LyricDrawLine drawLine) {
+            float[] widths = resolveGraphemePrefixWidths(line, text, drawLine);
+            if (widths == null || charLift.boundaries == null) return false;
+            charLift.prefixWidths = widths;
+            for (int i = 0; i + 1 < charLift.boundaries.length; i++) {
+                if (Math.abs(charLift.motion.amountForCharacter(charLift.boundaries[i])
+                        * charLift.maxLift) > CHAR_LIFT_FRAME_EPSILON
+                        || charLift.emphasis.amountForCharacter(charLift.boundaries[i])
+                        * charLift.emphasisStrength > CHAR_LIFT_FRAME_EPSILON
+                        || charLift.emphasis.glowAmountForCharacter(charLift.boundaries[i])
+                        * charLift.emphasisStrength > CHAR_LIFT_FRAME_EPSILON) return true;
             }
-            try {
-                float flowSegmentStart = charLift.flowSegmentStart;
-                float flowSegmentEnd = flowSegmentStart + segmentWidth;
-                float zoneStart = CharLiftGeometry.waveZoneStart(
-                        charLift.flowFront,
-                        charLift.waveWidth,
-                        flowSegmentStart,
-                        flowSegmentEnd);
-                float zoneEnd = CharLiftGeometry.waveZoneEnd(
-                        charLift.flowFront,
-                        charLift.waveWidth,
-                        flowSegmentStart,
-                        flowSegmentEnd);
-                charLift.segmentLeft = x;
-                charLift.segmentRight = x + segmentWidth;
-                charLift.prefixWidths = null;
-                charLift.firstGrapheme = 0;
-                charLift.lastGrapheme = 0;
-                if (zoneEnd <= zoneStart) {
-                    // No transition here: the segment is entirely sung or
-                    // entirely unsung. Only the latter still needs drawing work.
-                    float edge = x + (zoneEnd - flowSegmentStart);
-                    charLift.zoneLeft = edge;
-                    charLift.zoneRight = edge;
-                    return charLift.hasTail();
-                }
-                float[] prefixWidths = resolveGraphemePrefixWidths(line, text, drawLine);
-                if (prefixWidths == null || prefixWidths.length < 2) {
-                    return false;
-                }
-                float localStart = zoneStart - flowSegmentStart;
-                float localEnd = zoneEnd - flowSegmentStart;
-                int first = -1;
-                int last = -1;
-                for (int i = 0; i + 1 < prefixWidths.length; i++) {
-                    if (prefixWidths[i + 1] <= localStart) {
-                        continue;
-                    }
-                    if (prefixWidths[i] >= localEnd) {
-                        break;
-                    }
-                    if (first < 0) {
-                        first = i;
-                    }
-                    last = i + 1;
-                }
-                if (first < 0 || last <= first) {
-                    return false;
-                }
-                charLift.prefixWidths = prefixWidths;
-                charLift.firstGrapheme = first;
-                charLift.lastGrapheme = last;
-                charLift.zoneLeft = x + prefixWidths[first];
-                charLift.zoneRight = x + prefixWidths[last];
-                return true;
-            } catch (RuntimeException error) {
-                StructuredBridgeLog.warn(
-                        BridgeDebugArea.RENDERER,
-                        BridgeEvents.CHAR_LIFT_UNAVAILABLE,
-                        "Character lift disabled until the next cache reset: " + error);
-                charLiftUnavailable = true;
-                return false;
-            }
+            return false;
         }
 
-        /** Sink shared by every grapheme past the wave, clamped to the floor. */
-        private float resolveTailSink(float y) {
-            return CharLiftGeometry.clampSink(
-                    charLift.maxSink * charLift.ramp,
-                    y + inactivePaint.descent(),
-                    charLift.floorY,
-                    charLift.minClearance);
-        }
-
-        /**
-         * Draws the sung head at the normal baseline and the unsung tail
-         * uniformly sunk. The tail is one clipped draw rather than a per-grapheme
-         * walk: past the wave every grapheme carries the same displacement.
-         */
-        private void drawTextOutsideCharLiftZone(
-                Canvas canvas,
-                String text,
-                LyricDrawLine drawLine,
-                float x,
-                float y,
-                TextPaint paint) {
-            float canvasWidth = canvas.getWidth();
-            float canvasHeight = canvas.getHeight();
-            if (charLift.hasHead()) {
-                int save = canvas.save();
-                try {
-                    canvas.clipRect(0f, 0f, charLift.zoneLeft, canvasHeight);
-                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, paint);
-                } finally {
-                    canvas.restoreToCount(save);
-                }
-            }
-            if (charLift.hasTail()) {
-                float sink = resolveTailSink(y);
-                int save = canvas.save();
-                try {
-                    canvas.clipRect(charLift.zoneRight, 0f, canvasWidth, canvasHeight);
-                    if (sink > 0f) {
-                        canvas.translate(0f, sink);
-                    }
-                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, paint);
-                } finally {
-                    canvas.restoreToCount(save);
-                }
-            }
-        }
-
-        /**
-         * The revealed layer only ever reaches the sung head: the reveal front is
-         * the centre of the wave, so nothing past the wave has been revealed.
-         */
-        private void drawRevealedTextOutsideCharLiftZone(
-                Canvas canvas,
-                String text,
-                LyricDrawLine drawLine,
-                float x,
-                float y,
-                float segmentWidth,
-                float revealWidth) {
-            // During wake the unsung tail also carries fading full-line ink. It
-            // must follow the very same displacement as its inactive base.
-            if (mainProgressAodAmount > 0f && charLift.hasTail()) {
-                int tailSave = canvas.save();
-                try {
-                    canvas.clipRect(charLift.zoneRight, 0f, canvas.getWidth(), canvas.getHeight());
-                    canvas.translate(0f, resolveTailSink(y));
-                    drawRevealedText(canvas, text, drawLine.start, drawLine.end,
-                            x, y, segmentWidth, revealWidth);
-                } finally {
-                    canvas.restoreToCount(tailSave);
-                }
-            }
-            if (!charLift.hasHead()) return;
-            int save = canvas.save();
-            try {
-                canvas.clipRect(0f, 0f, charLift.zoneLeft, canvas.getHeight());
-                drawRevealedText(
-                        canvas,
-                        text,
-                        drawLine.start,
-                        drawLine.end,
-                        x,
-                        y,
-                        segmentWidth,
-                        revealWidth);
-            } finally {
-                canvas.restoreToCount(save);
-            }
-        }
-
-        /**
-         * Repaints the transition one grapheme at a time. Every pass draws the
-         * whole segment string at its original x and lets the clip box select
-         * one grapheme, so shaping and kerning stay identical to the whole
-         * segment draw and the glyph is only displaced.
-         *
-         * <p>The clip boxes tile exactly, without the bleed the plan first
-         * proposed: overlapping boxes would blend the same partly transparent
-         * ink twice and darken the seam, which is worse than the hairline it
-         * would hide.
-         *
-         * <p>{@code revealedLayer} selects the layer being repainted. Base and
-         * revealed text are two separate passes so the progress glow keeps its
-         * original place between them.
-         */
         private void drawLiftedGraphemes(
-                Canvas canvas,
-                String text,
-                LyricDrawLine drawLine,
-                float x,
-                float y,
-                TextPaint basePaint,
-                float segmentWidth,
-                float revealWidth,
-                boolean revealedLayer) {
-            float canvasHeight = canvas.getHeight();
-            float glyphBottomY = y + inactivePaint.descent();
-            float[] prefixWidths = charLift.prefixWidths;
-            if (prefixWidths == null) {
+                Canvas canvas, String text, LyricDrawLine drawLine, float x, float y,
+                TextPaint basePaint, float segmentWidth, float revealWidth, boolean revealedLayer) {
+            drawSyllableLiftLayer(canvas, charLift.line, text, drawLine, x, y, basePaint,
+                    segmentWidth, revealWidth, revealedLayer ? 1 : 0);
+        }
+
+        /**
+         * Adjacent glyphs sharing one source-syllable transform are clipped as a group.
+         * Every pass draws the original shaped segment; base, glow and reveal share
+         * the exact same sample, including across a wrap. No letter clocks are invented.
+         */
+        private void drawSyllableLiftLayer(
+                Canvas canvas, WordLine line, String text, LyricDrawLine drawLine,
+                float x, float y, TextPaint basePaint, float segmentWidth, float revealWidth, int layer) {
+            float[] widths = charLift.prefixWidths;
+            int[] boundaries = charLift.boundaries;
+            if (widths == null || boundaries == null) return;
+            if (!charLift.lineActive) {
+                if (layer == 2) drawProgressGlow(canvas, line, text, drawLine.start, drawLine.end, x, y, segmentWidth, revealWidth);
+                else if (layer == 1) drawRevealedText(canvas, text, drawLine.start, drawLine.end, x, y, segmentWidth, revealWidth);
+                else canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
                 return;
             }
+            inactivePaint.getFontMetrics(mainFontMetrics);
+            float headroom = Math.max(0f, y + mainFontMetrics.top);
+            canvas.getClipBounds(emphasisClipBounds);
             try {
-                for (int i = charLift.firstGrapheme; i < charLift.lastGrapheme; i++) {
-                    float left = x + prefixWidths[i];
-                    float right = x + prefixWidths[i + 1];
-                    if (right <= left) {
-                        continue;
+                int count = boundaries.length - 1;
+                for (int first = 0; first < count;) {
+                    float amount = charLift.motion.amountForCharacter(boundaries[first]);
+                    float emphasis = Math.max(0f, charLift.emphasis.amountForCharacter(boundaries[first])
+                            * charLift.emphasisStrength);
+                    float emphasisGlow = Math.max(0f, charLift.emphasis.glowAmountForCharacter(boundaries[first])
+                            * charLift.emphasisStrength);
+                    int end = first + 1;
+                    while (emphasis <= CHAR_LIFT_FRAME_EPSILON && emphasisGlow <= CHAR_LIFT_FRAME_EPSILON && end < count
+                            && charLift.motion.amountForCharacter(boundaries[end]) == amount
+                            && charLift.emphasis.amountForCharacter(boundaries[end])
+                            * charLift.emphasisStrength <= CHAR_LIFT_FRAME_EPSILON
+                            && charLift.emphasis.glowAmountForCharacter(boundaries[end])
+                            * charLift.emphasisStrength <= CHAR_LIFT_FRAME_EPSILON) end++;
+                    float left = first == 0 ? 0f : x + widths[first];
+                    float right = end == count ? canvas.getWidth() : x + widths[end];
+                    float pivotX = x + (widths[first] + widths[end]) / 2f;
+                    if (emphasis > CHAR_LIFT_FRAME_EPSILON) {
+                        int wordStart = charLift.emphasis.wordStartForCharacter(boundaries[first]);
+                        int wordEnd = charLift.emphasis.wordEndForCharacter(boundaries[first]);
+                        int a = first, b = end;
+                        while (a > 0 && boundaries[a] > wordStart) a--;
+                        while (b < count && boundaries[b] < wordEnd) b++;
+                        pivotX = x + (widths[a] + widths[b]) / 2f;
                     }
-                    float flowCenter = charLift.flowSegmentStart
-                            + (prefixWidths[i] + prefixWidths[i + 1]) * 0.5f;
-                    float sink = CharLiftGeometry.clampSink(
-                            CharLiftGeometry.sinkFor(
-                                    charLift.flowFront,
-                                    flowCenter,
-                                    charLift.waveWidth,
-                                    charLift.maxSink,
-                                    charLift.ramp),
-                            glyphBottomY,
-                            charLift.floorY,
-                            charLift.minClearance);
+                    float pivotY = y + (mainFontMetrics.ascent + mainFontMetrics.descent) / 2f;
+                    float topDistance = Math.max(1f, pivotY - y - mainFontMetrics.top);
+                    float lift = Math.min(charLift.maxLift * amount, headroom);
+                    float scale = 1f + Math.min(0.14f * emphasis, Math.max(0f, headroom - lift) / topDistance);
+                    float outwardOffset = 0f;
+                    if (emphasis > CHAR_LIFT_FRAME_EPSILON && charLift.spacingSafe
+                            && charLift.emphasis.isChineseTailForCharacter(boundaries[first])
+                            && end == first + 1) {
+                        float inkLeft = x + charLift.inkLefts[first];
+                        float inkRight = x + charLift.inkRights[first];
+                        float inkWidth = inkRight - inkLeft;
+                        boolean preceding = charLift.hasPrecedingInk[first];
+                        float limit = emphasisClipBounds.right;
+                        for (int next = end; next < count; next++) {
+                            if (charLift.inkRights[next] <= charLift.inkLefts[next]) continue;
+                            float followingLeft = x + charLift.inkLefts[next];
+                            float gap = Math.max(0f, followingLeft - inkRight);
+                            limit = Math.min(limit, followingLeft - Math.min(1f, gap * 0.25f));
+                            break;
+                        }
+                        if (preceding) {
+                            scale = WordEmphasisGeometry.fitScale(scale, inkWidth,
+                                    Math.max(0f, limit - inkRight), true);
+                        } else {
+                            scale = WordEmphasisGeometry.fitCenteredScale(scale,
+                                    Math.max(0f, pivotX - inkLeft), Math.max(0f, inkRight - pivotX),
+                                    Math.max(0f, inkLeft - emphasisClipBounds.left),
+                                    Math.max(0f, limit - inkRight));
+                        }
+                        outwardOffset = WordEmphasisGeometry.outwardOffset(scale,
+                                widths[end] - widths[first], charLift.inkLefts[first] - widths[first], preceding);
+                    }
                     int save = canvas.save();
                     try {
-                        canvas.clipRect(left, 0f, right, canvasHeight);
-                        if (sink > 0f) {
-                            canvas.translate(0f, sink);
-                            // Mid-transition only: defeat Skia's whole-pixel
-                            // baseline snapping so a slow rise (held note) is
-                            // continuous instead of one-pixel steps. Fully sunk
-                            // graphemes are static and keep the crisp path.
-                            if (sink < charLift.maxSink * charLift.ramp - CHAR_LIFT_FRAME_EPSILON) {
-                                canvas.rotate(
-                                        WordLyricRenderConstants.CHAR_LIFT_SUBPIXEL_TILT_DEGREES,
-                                        left,
-                                        y);
-                            }
+                        canvas.translate(outwardOffset, -lift);
+                        if (emphasis > CHAR_LIFT_FRAME_EPSILON) {
+                            canvas.scale(scale, scale, pivotX, pivotY);
                         }
-                        if (revealedLayer) {
-                            drawRevealedText(
-                                    canvas,
-                                    text,
-                                    drawLine.start,
-                                    drawLine.end,
-                                    x,
-                                    y,
-                                    segmentWidth,
-                                    revealWidth);
+                        if (amount > 0f && amount < 1f) {
+                            canvas.rotate(WordLyricRenderConstants.CHAR_LIFT_SUBPIXEL_TILT_DEGREES, left, y);
+                        }
+                        // Blur an isolated source mask before applying the ink-cell clip.
+                        if (layer == 1 && emphasisGlow > CHAR_LIFT_FRAME_EPSILON) {
+                            drawWordEmphasisGlow(canvas, line, text, drawLine, boundaries[first], boundaries[end],
+                                    x, y, widths[first], widths[end] - widths[first], emphasisGlow);
+                        }
+                        canvas.clipRect(left, 0f, right, canvas.getHeight());
+                        if (layer == 2) {
+                            drawProgressGlow(canvas, line, text, drawLine.start, drawLine.end,
+                                    x, y, segmentWidth, revealWidth);
+                        } else if (layer == 1) {
+                            drawRevealedText(canvas, text, drawLine.start, drawLine.end,
+                                    x, y, segmentWidth, revealWidth);
                         } else {
                             canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
                         }
                     } finally {
                         canvas.restoreToCount(save);
                     }
+                    first = end;
                 }
             } catch (RuntimeException error) {
-                // Never let this reach the coordinator: one draw error there
-                // blacklists the binding and drops the row back to native
-                // rendering permanently. Repaint the layer whole so the frame
-                // stays complete, and stop lifting until the next cache reset.
-                StructuredBridgeLog.warn(
-                        BridgeDebugArea.RENDERER,
-                        BridgeEvents.CHAR_LIFT_UNAVAILABLE,
-                        "Character lift disabled until the next cache reset: " + error);
+                StructuredBridgeLog.warn(BridgeDebugArea.RENDERER, BridgeEvents.CHAR_LIFT_UNAVAILABLE,
+                        "Syllable lift disabled until the next cache reset: " + error);
                 charLiftUnavailable = true;
-                int save = canvas.save();
-                try {
-                    if (revealedLayer) {
-                        drawRevealedText(
-                                canvas,
-                                text,
-                                drawLine.start,
-                                drawLine.end,
-                                x,
-                                y,
-                                segmentWidth,
-                                revealWidth);
-                    } else {
-                        canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
-                    }
-                } finally {
-                    canvas.restoreToCount(save);
+                charLift.lineActive = false;
+                if (layer == 2) {
+                    drawProgressGlow(canvas, line, text, drawLine.start, drawLine.end, x, y, segmentWidth, revealWidth);
+                } else if (layer == 1) {
+                    drawRevealedText(canvas, text, drawLine.start, drawLine.end, x, y, segmentWidth, revealWidth);
+                } else {
+                    canvas.drawText(text, drawLine.start, drawLine.end, x, y, basePaint);
                 }
             }
         }
@@ -16127,6 +15931,11 @@ public final class LockscreenLyricsModule extends XposedModule {
                 if (cache.matches(
                         line, text, drawLine.start, drawLine.end, textSizeKey, typeface)) {
                     cache.lastUsed = ++graphemeCacheUseCounter;
+                    charLift.boundaries = cache.boundaries;
+                    charLift.inkLefts = cache.inkLefts;
+                    charLift.inkRights = cache.inkRights;
+                    charLift.hasPrecedingInk = cache.hasPrecedingInk;
+                    charLift.spacingSafe = cache.spacingSafe;
                     return cache.prefixWidths;
                 }
                 if (target == null || cache.lastUsed < target.lastUsed) {
@@ -16145,6 +15954,24 @@ public final class LockscreenLyricsModule extends XposedModule {
             for (int i = 1; i < boundaries.length; i++) {
                 prefixWidths[i] = inactivePaint.measureText(text, drawLine.start, boundaries[i]);
             }
+            int glyphCount = boundaries.length - 1;
+            float[] inkLefts = new float[glyphCount], inkRights = new float[glyphCount];
+            boolean[] hasPrecedingInk = new boolean[glyphCount];
+            boolean inkSeen = false;
+            for (int i = 0; i < glyphCount; i++) {
+                inactivePaint.getTextBounds(text, boundaries[i], boundaries[i + 1], emphasisInkBounds);
+                inkLefts[i] = prefixWidths[i] + emphasisInkBounds.left;
+                inkRights[i] = emphasisInkBounds.isEmpty() ? inkLefts[i]
+                        : prefixWidths[i] + emphasisInkBounds.right;
+                hasPrecedingInk[i] = inkSeen;
+                inkSeen |= !emphasisInkBounds.isEmpty();
+            }
+            boolean spacingSafe = new java.text.Bidi(text.substring(drawLine.start, drawLine.end),
+                    java.text.Bidi.DIRECTION_DEFAULT_LEFT_TO_RIGHT).isLeftToRight();
+            target.inkLefts = charLift.inkLefts = inkLefts;
+            target.inkRights = charLift.inkRights = inkRights;
+            target.hasPrecedingInk = charLift.hasPrecedingInk = hasPrecedingInk;
+            target.spacingSafe = charLift.spacingSafe = spacingSafe;
             target.line = line;
             target.text = text;
             target.start = drawLine.start;
@@ -16152,6 +15979,8 @@ public final class LockscreenLyricsModule extends XposedModule {
             target.textSizeKey = textSizeKey;
             target.typeface = typeface;
             target.prefixWidths = prefixWidths;
+            target.boundaries = boundaries;
+            charLift.boundaries = boundaries;
             target.lastUsed = ++graphemeCacheUseCounter;
             return prefixWidths;
         }
@@ -16218,9 +16047,6 @@ public final class LockscreenLyricsModule extends XposedModule {
                 long position) {
             if (line == null) {
                 return 0f;
-            }
-            if (line.timingMode == LyricTimingMode.LINE_TIMED && lineTimedProgressEnabled) {
-                return resolveLineElapsedProgress(model, line, position);
             }
             return WordLyricRenderSupport.wordRevealProgress(model, line, wordIndex, position);
         }
@@ -16448,6 +16274,80 @@ public final class LockscreenLyricsModule extends XposedModule {
             }
         }
 
+        /** A glyph-local mask keeps the full shaping context, then lets the bloom extend beyond its cell. */
+        private void drawWordEmphasisGlow(Canvas canvas, WordLine line, String text, LyricDrawLine row,
+                int start, int end, float x, float y, float prefix, float advance, float amount) {
+            if (!uiConfig.glowEnabled || uiConfig.glowIntensityPercent <= 0) return;
+            GlowSegmentCache cache = obtainEmphasisGlowCache(line, text, row, start, end, prefix, advance);
+            if (cache == null || cache.bitmap == null) return;
+            int alpha = Math.round(((activePaint.getColor() >>> 24) & 255)
+                    * WordEmphasisGeometry.EMPHASIS_GLOW_ALPHA * amount * uiConfig.glowIntensityPercent / 100f);
+            glowBitmapPaint.setAlpha(Math.max(0, Math.min(255, alpha)));
+            canvas.drawBitmap(cache.bitmap, x + prefix - cache.padding, y - cache.baseline, glowBitmapPaint);
+        }
+
+        private GlowSegmentCache obtainEmphasisGlowCache(WordLine line, String text, LyricDrawLine row,
+                int start, int end, float prefix, float advance) {
+            if (advance <= 0f || start >= end) return null;
+            int sizeKey = Math.max(1, Math.round(activePaint.getTextSize() * 10f));
+            int widthKey = Math.max(1, Math.round(advance * 10f));
+            int radiusKey = Math.max(1, Math.round(charLift.emphasisGlowRadius * 10f));
+            Typeface typeface = activePaint.getTypeface();
+            GlowSegmentCache target = null;
+            for (GlowSegmentCache cache : emphasisGlowSegmentCaches) {
+                if (cache.matches(line, text, start, end, sizeKey, widthKey, typeface)
+                        && cache.contextStart == row.start && cache.contextEnd == row.end
+                        && cache.radiusKey == radiusKey) {
+                    cache.lastUsed = ++glowCacheUseCounter;
+                    return cache;
+                }
+                if (target == null || cache.lastUsed < target.lastUsed) target = cache;
+            }
+            if (target == null) return null;
+            if (emphasisMaskFilter == null || emphasisMaskRadiusKey != radiusKey) {
+                emphasisMaskFilter = new BlurMaskFilter(charLift.emphasisGlowRadius, BlurMaskFilter.Blur.NORMAL);
+                emphasisMaskRadiusKey = radiusKey;
+            }
+            glowRasterPaint.set(activePaint);
+            glowRasterPaint.setStyle(Paint.Style.FILL);
+            glowRasterPaint.clearShadowLayer();
+            glowRasterPaint.setShader(null);
+            glowRasterPaint.setColorFilter(null);
+            glowRasterPaint.setMaskFilter(null);
+            glowRasterPaint.setColor(0xFFFFFFFF);
+            glowRasterPaint.getFontMetrics(glowFontMetrics);
+            int padding = Math.max(2, (int) Math.ceil(charLift.emphasisGlowRadius * 2.2f));
+            float baseline = padding - LyricUiLayoutPolicy.outwardFontTop(glowFontMetrics.top);
+            int width = Math.max(1, (int) Math.ceil(advance) + padding * 2 + 2);
+            int height = Math.max(1, (int) LyricUiLayoutPolicy.fontOuterHeight(
+                    glowFontMetrics.top, glowFontMetrics.bottom) + padding * 2 + 2);
+            target.ensureBitmap(width, height);
+            target.ensureMaskBitmap(width, height);
+            if (target.bitmap == null || target.maskBitmap == null) return null;
+            target.bitmap.eraseColor(0);
+            target.maskBitmap.eraseColor(0);
+            int save = target.maskCanvas.save();
+            try {
+                target.maskCanvas.clipRect(padding, 0f, padding + advance, height);
+                target.maskCanvas.drawText(text, row.start, row.end, padding - prefix, baseline, glowRasterPaint);
+            } finally {
+                target.maskCanvas.restoreToCount(save);
+            }
+            try {
+                glowRasterPaint.setColor(palette.glowShadow);
+                glowRasterPaint.setMaskFilter(emphasisMaskFilter);
+                target.canvas.drawBitmap(target.maskBitmap, 0f, 0f, glowRasterPaint);
+            } finally {
+                glowRasterPaint.setMaskFilter(null);
+            }
+            target.line = line; target.text = text; target.typeface = typeface;
+            target.start = start; target.end = end;
+            target.contextStart = row.start; target.contextEnd = row.end; target.radiusKey = radiusKey;
+            target.textSizeKey = sizeKey; target.widthKey = widthKey;
+            target.padding = padding; target.baseline = baseline; target.lastUsed = ++glowCacheUseCounter;
+            return target;
+        }
+
         private GlowSegmentCache obtainGlowSegmentCache(
                 WordLine line,
                 String text,
@@ -16545,6 +16445,9 @@ public final class LockscreenLyricsModule extends XposedModule {
         void clearGlowCache() {
             MAIN_ROW_GEOMETRY.clear();
             for (GlowSegmentCache cache : glowSegmentCaches) {
+                cache.clear();
+            }
+            for (GlowSegmentCache cache : emphasisGlowSegmentCaches) {
                 cache.clear();
             }
             for (GraphemeLayoutCache cache : graphemeLayoutCaches) {
@@ -16956,6 +16859,9 @@ public final class LockscreenLyricsModule extends XposedModule {
         private static final class GlowSegmentCache {
             Bitmap bitmap;
             Canvas canvas;
+            Bitmap maskBitmap;
+            Canvas maskCanvas;
+            int contextStart, contextEnd, radiusKey;
             WordLine line;
             String text;
             Typeface typeface;
@@ -16998,69 +16904,50 @@ public final class LockscreenLyricsModule extends XposedModule {
                 canvas = new Canvas(bitmap);
             }
 
+            void ensureMaskBitmap(int width, int height) {
+                if (maskBitmap == null || maskBitmap.isRecycled()
+                        || maskBitmap.getWidth() < width || maskBitmap.getHeight() < height) {
+                    maskBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8);
+                    maskCanvas = new Canvas(maskBitmap);
+                }
+            }
+
             void clear() {
                 line = null;
                 text = null;
                 typeface = null;
+                contextStart = contextEnd = radiusKey = -1;
                 lastUsed = 0L;
             }
         }
 
-        /**
-         * Reusable per-line scratch for the character lift. Flow coordinates are
-         * accumulated advance width from the start of the line's text across
-         * wrapped segments, which is the only frame of reference that stays
-         * comparable across a wrap.
-         */
+        /** Per-draw scratch; persistent spring state belongs to WordLine. */
         private static final class CharLiftState {
             boolean lineActive;
-            float flowFront;
-            float flowSegmentStart;
-            float waveWidth;
-            float maxSink;
-            /** Sink-in factor while the row settles into its unsung position. */
-            float ramp;
-            /** True while the wave is still running off the end of the text. */
-            boolean finishing;
-            /** Canvas y the sunk glyph bottoms may not cross. */
-            float floorY;
-            /** Clearance kept above {@link #floorY}, in pixels. */
-            float minClearance;
-            float zoneLeft;
-            float zoneRight;
-            float segmentLeft;
-            float segmentRight;
-            int firstGrapheme;
-            int lastGrapheme;
+            WordLine line;
+            SyllableLiftMotion motion;
+            WordEmphasisMotion emphasis;
+            float emphasisStrength;
+            float emphasisGlowRadius;
+            float maxLift;
             float[] prefixWidths;
-
-            /** True when part of this segment is already sung and sits on the baseline. */
-            boolean hasHead() {
-                return zoneLeft > segmentLeft;
-            }
-
-            /** True when part of this segment is still unsung and sits uniformly low. */
-            boolean hasTail() {
-                return zoneRight < segmentRight;
-            }
-
+            int[] boundaries;
+            float[] inkLefts, inkRights;
+            boolean[] hasPrecedingInk;
+            boolean spacingSafe;
             void reset() {
                 lineActive = false;
-                flowFront = 0f;
-                flowSegmentStart = 0f;
-                waveWidth = 0f;
-                maxSink = 0f;
-                ramp = 0f;
-                finishing = false;
-                floorY = 0f;
-                minClearance = 0f;
-                zoneLeft = 0f;
-                zoneRight = 0f;
-                segmentLeft = 0f;
-                segmentRight = 0f;
-                firstGrapheme = 0;
-                lastGrapheme = 0;
+                line = null;
+                motion = null;
+                emphasis = null;
+                emphasisStrength = 0f;
+                emphasisGlowRadius = 0f;
+                maxLift = 0f;
                 prefixWidths = null;
+                boundaries = null;
+                inkLefts = inkRights = null;
+                hasPrecedingInk = null;
+                spacingSafe = false;
             }
         }
 
@@ -17072,6 +16959,10 @@ public final class LockscreenLyricsModule extends XposedModule {
             int end;
             int textSizeKey;
             float[] prefixWidths;
+            float[] inkLefts, inkRights;
+            boolean[] hasPrecedingInk;
+            boolean spacingSafe;
+            int[] boundaries;
             long lastUsed;
 
             boolean matches(
@@ -17095,6 +16986,10 @@ public final class LockscreenLyricsModule extends XposedModule {
                 text = null;
                 typeface = null;
                 prefixWidths = null;
+                boundaries = null;
+                inkLefts = inkRights = null;
+                hasPrecedingInk = null;
+                spacingSafe = false;
                 lastUsed = 0L;
             }
         }
@@ -17114,6 +17009,7 @@ public final class LockscreenLyricsModule extends XposedModule {
             float auxiliaryHighlight;
             float auxiliaryProgress;
             boolean activeLine;
+            boolean liftSelected;
             boolean drawProgress;
             boolean hasTranslation;
             int wordIndex;

@@ -5,7 +5,7 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 
 final class LyricUiConfig {
-    static final int SCHEMA_VERSION = 5;
+    static final int SCHEMA_VERSION = 6;
     static final int MOTION_STANDARD = 0;
     static final int MOTION_REDUCED = 1;
     static final int MOTION_OFF = 2;
@@ -52,6 +52,8 @@ final class LyricUiConfig {
     final boolean secondaryProgressEnabled;
     final boolean charLiftEnabled;
     final int charLiftStrengthPercent;
+    final boolean wordEmphasisEnabled;
+    final boolean chineseTailEmphasisEnabled;
     final boolean screenTimeoutEnabled;
     final int screenTimeoutSeconds;
     final int mainFontTenthsSp;
@@ -89,9 +91,8 @@ final class LyricUiConfig {
         scaleEnabled = builder.scaleEnabled;
         inactiveScalePercent = clamp(builder.inactiveScalePercent, 75, 100);
         glowIntensityPercent = LyricUiGlowPolicy.canonicalIntensityPercent(
-                builder.glowEnabled,
                 builder.glowIntensityPercent);
-        glowEnabled = LyricUiGlowPolicy.enabledForIntensity(glowIntensityPercent);
+        glowEnabled = builder.glowEnabled;
         glowRadiusPercent = clamp(builder.glowRadiusPercent, 10, 24);
         primaryColor = sanitizeColor(builder.primaryColor, "#FFFFFF");
         glowColor = sanitizeColor(builder.glowColor, "#FFD68A");
@@ -106,6 +107,8 @@ final class LyricUiConfig {
         secondaryProgressEnabled = builder.secondaryProgressEnabled;
         charLiftEnabled = builder.charLiftEnabled;
         charLiftStrengthPercent = clamp(builder.charLiftStrengthPercent, 0, 200);
+        wordEmphasisEnabled = builder.wordEmphasisEnabled;
+        chineseTailEmphasisEnabled = builder.chineseTailEmphasisEnabled;
         screenTimeoutEnabled = builder.screenTimeoutEnabled;
         screenTimeoutSeconds = LyricUiSettings.sanitizeScreenTimeoutSeconds(
                 builder.screenTimeoutSeconds);
@@ -127,6 +130,28 @@ final class LyricUiConfig {
 
     Builder buildUpon() {
         return new Builder(this);
+    }
+
+    /** Restores feature switches while retaining the user's dormant appearance values. */
+    LyricUiConfig resetSwitches() {
+        LyricUiConfig defaults = defaults();
+        return buildUpon()
+                .inactiveTranslationFollowsMain(defaults.inactiveTranslationFollowsMain)
+                .verticalFadeEnabled(defaults.verticalFadeEnabled)
+                .inactiveRowFadeEnabled(defaults.inactiveRowFadeEnabled)
+                .blurEnabled(defaults.blurEnabled)
+                .scaleEnabled(defaults.scaleEnabled)
+                .glowEnabled(defaults.glowEnabled)
+                .translationMarqueeEnabled(defaults.translationMarqueeEnabled)
+                .defaultTranslationEnabled(defaults.defaultTranslationEnabled)
+                .lineTimedProgressEnabled(defaults.lineTimedProgressEnabled)
+                .translationProgressEnabled(defaults.translationProgressEnabled)
+                .secondaryProgressEnabled(defaults.secondaryProgressEnabled)
+                .charLiftEnabled(defaults.charLiftEnabled)
+                .wordEmphasisEnabled(defaults.wordEmphasisEnabled)
+                .chineseTailEmphasisEnabled(defaults.chineseTailEmphasisEnabled)
+                .screenTimeoutEnabled(defaults.screenTimeoutEnabled)
+                .build();
     }
 
     LyricUiConfig resetAppearance() {
@@ -215,6 +240,8 @@ final class LyricUiConfig {
                 && secondaryProgressEnabled == other.secondaryProgressEnabled
                 && charLiftEnabled == other.charLiftEnabled
                 && charLiftStrengthPercent == other.charLiftStrengthPercent
+                && wordEmphasisEnabled == other.wordEmphasisEnabled
+                && chineseTailEmphasisEnabled == other.chineseTailEmphasisEnabled
                 && screenTimeoutEnabled == other.screenTimeoutEnabled
                 && screenTimeoutSeconds == other.screenTimeoutSeconds
                 && mainFontTenthsSp == other.mainFontTenthsSp
@@ -243,6 +270,7 @@ final class LyricUiConfig {
                 defaultTranslationEnabled, translationDisplayMode, lineTimedProgressEnabled,
                 translationProgressEnabled, secondaryProgressEnabled,
                 charLiftEnabled, charLiftStrengthPercent,
+                wordEmphasisEnabled, chineseTailEmphasisEnabled,
                 screenTimeoutEnabled, screenTimeoutSeconds,
                 mainFontTenthsSp, translationFontRatioPercent, secondaryFontRatioPercent, fontWeight, alignment,
                 lineSpacingTenthsDp, wrappedLineSpacingTenthsDp);
@@ -279,6 +307,8 @@ final class LyricUiConfig {
         private boolean secondaryProgressEnabled = LyricUiSettings.DEFAULT_SECONDARY_PROGRESS_ENABLED;
         private boolean charLiftEnabled = LyricUiSettings.DEFAULT_CHAR_LIFT_ENABLED;
         private int charLiftStrengthPercent = LyricUiSettings.DEFAULT_CHAR_LIFT_STRENGTH_PERCENT;
+        private boolean wordEmphasisEnabled = true;
+        private boolean chineseTailEmphasisEnabled = true;
         private boolean screenTimeoutEnabled = true;
         private int screenTimeoutSeconds;
         private int mainFontTenthsSp = 240;
@@ -324,6 +354,8 @@ final class LyricUiConfig {
             secondaryProgressEnabled = source.secondaryProgressEnabled;
             charLiftEnabled = source.charLiftEnabled;
             charLiftStrengthPercent = source.charLiftStrengthPercent;
+            wordEmphasisEnabled = source.wordEmphasisEnabled;
+            chineseTailEmphasisEnabled = source.chineseTailEmphasisEnabled;
             screenTimeoutEnabled = source.screenTimeoutEnabled;
             screenTimeoutSeconds = source.screenTimeoutSeconds;
             mainFontTenthsSp = source.mainFontTenthsSp;
@@ -386,6 +418,8 @@ final class LyricUiConfig {
         Builder secondaryProgressEnabled(boolean v) { secondaryProgressEnabled = v; return this; }
         Builder charLiftEnabled(boolean v) { charLiftEnabled = v; return this; }
         Builder charLiftStrengthPercent(int v) { charLiftStrengthPercent = v; return this; }
+        Builder wordEmphasisEnabled(boolean v) { wordEmphasisEnabled = v; return this; }
+        Builder chineseTailEmphasisEnabled(boolean v) { chineseTailEmphasisEnabled = v; return this; }
         Builder screenTimeoutEnabled(boolean v) { screenTimeoutEnabled = v; return this; }
         Builder screenTimeoutSeconds(int v) { screenTimeoutSeconds = v; return this; }
         Builder mainFontTenthsSp(int v) { mainFontTenthsSp = v; return this; }

@@ -12,10 +12,10 @@ import java.util.Map;
 
 public final class LyricUiConfigTest {
     @Test
-    public void defaultsMatchPhoneConfiguration() {
+    public void defaultsMatchConfiguredPreset() {
         LyricUiConfig config = LyricUiConfig.defaults();
 
-        assertEquals(5, config.schemaVersion);
+        assertEquals(6, config.schemaVersion);
         assertEquals(100, config.activeOpacityPercent);
         assertEquals(50, config.currentUnrevealedOpacityPercent);
         assertEquals(60, config.activeTranslationOpacityPercent);
@@ -42,9 +42,11 @@ public final class LyricUiConfigTest {
         assertEquals(0, config.wrappedLineSpacingTenthsDp);
         assertTrue(config.charLiftEnabled);
         assertEquals(100, config.charLiftStrengthPercent);
+        assertTrue(config.wordEmphasisEnabled);
+        assertTrue(config.chineseTailEmphasisEnabled);
         assertEquals(LyricUiConfig.ALIGN_DEFAULT, config.alignment);
         assertEquals(LyricUiConfig.TRANSLATION_ALL_LINES, config.translationDisplayMode);
-        assertTrue(config.lineTimedProgressEnabled);
+        assertFalse(config.lineTimedProgressEnabled);
         assertFalse(config.translationProgressEnabled);
         assertTrue(config.secondaryProgressEnabled);
     }
@@ -289,7 +291,7 @@ public final class LyricUiConfigTest {
         assertEquals(61, migrated.inactiveOpacityPercent);
         assertEquals(61, migrated.inactiveTranslationOpacityPercent);
         assertFalse(migrated.inactiveRowFadeEnabled);
-        assertEquals(5, migrated.schemaVersion);
+        assertEquals(6, migrated.schemaVersion);
         assertNull(LyricUiConfigCodec.decode(
                 schemaOne,
                 LyricUiConfig.defaults(),
@@ -309,7 +311,7 @@ public final class LyricUiConfigTest {
                 LyricUiConfig.defaults(),
                 true);
 
-        assertEquals(5, migrated.schemaVersion);
+        assertEquals(6, migrated.schemaVersion);
         assertEquals(72, migrated.inactiveOpacityPercent);
         assertEquals(72, migrated.inactiveTranslationOpacityPercent);
         assertTrue(migrated.inactiveTranslationFollowsMain);

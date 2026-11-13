@@ -8,8 +8,8 @@
     <string name="scr_logs">Logs</string>
     <string name="scr_import">Import settings</string>
     <string name="scr_export">Export settings</string>
-    <string name="scr_reset">Reset settings</string>
-    <string name="scr_reset_summary">Restore all lyric settings to their defaults.</string>
+    <string name="scr_reset">Restore defaults</string>
+    <string name="scr_reset_summary">Restore every switch to its preset state.</string>
     <string name="scr_cancel">Cancel</string>
     <string name="scr_confirm">Confirm</string>
     <string name="scr_save_failed">Could not save</string>
@@ -63,7 +63,7 @@
     <string name="scr_rule_not_found">No cleanup format recognized</string>
     <string name="scr_invalid_prefix_rule">Prefix must contain 2–40 characters</string>
     <string name="scr_invalid_exact_rule">Exact rule must contain 1–160 characters</string>
-    <string name="scr_lyric_bridge">Lyric bridge</string>
+    <string name="scr_lyric_bridge">Lyric takeover</string>
     <string name="scr_music_apps">Music apps</string>
     <string name="scr_no_music_apps">No music apps</string>
     <string name="scr_install_provider">Install a lyric source</string>
@@ -94,6 +94,7 @@
     <string name="scr_font">Font</string>
     <string name="scr_follow_system">Follow system</string>
     <string name="scr_apple_style">Apple style</string>
+    <string name="scr_system_shaped_artwork">System shaped artwork</string>
     <string name="scr_romanization">Romanization</string>
     <string name="scr_background_animation">Audio-reactive background</string>
     <string name="scr_background_animation_summary">May increase power consumption</string>

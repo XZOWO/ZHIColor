@@ -350,6 +350,6 @@ public final class LyricLineExitPolicyTest {
         float wave = 60f;
         float front = Math.min(100f, position * 0.1f)
                 + CharLiftGeometry.finishOvershoot(position, 1_000L, 320L, wave);
-        return CharLiftGeometry.sinkFor(front, 99.99f, wave, 8f, 1f);
+        return CharLiftGeometry.sinkFor(front, 99.99f, wave, 8f);
     }
 }

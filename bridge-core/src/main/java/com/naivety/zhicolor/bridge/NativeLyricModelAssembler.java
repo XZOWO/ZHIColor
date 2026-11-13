@@ -304,6 +304,7 @@ final class NativeLyricModelAssembler {
         target.translationKey = source.optString("translationKey", "");
         target.parentLineId = source.optString("parentLineId", "");
         target.sourceRole = source.optString("role", "unknown");
+        target.sourceLanguage = sourceLanguage(source);
         target.vocalAgent = source.optString("agent", "");
         target.vocalGroup = source.optString("group", "");
         target.backgroundPosition = source.optString("backgroundPosition", "unknown");
@@ -321,6 +322,17 @@ final class NativeLyricModelAssembler {
                 }
             } catch (Exception ignored) { }
         }
+    }
+
+    private static String sourceLanguage(JSONObject source) {
+        for (String key : new String[]{"language", "languageTag", "languageCode"}) {
+            Object value = source.opt(key);
+            if (value instanceof String) {
+                String language = ((String) value).trim();
+                if (!language.isEmpty()) return language;
+            }
+        }
+        return "";
     }
 
     private static void applyStructuredTranslation(WordLine target, JSONObject source) {

@@ -2,6 +2,13 @@ package com.naivety.zhicolor.ui.screen
 
 /** Keeps the edited values within the same hierarchy as the renderer configuration. */
 internal object LyricFieldValuePolicy {
+    fun isVisible(dependency: String?, values: Map<String, Any>): Boolean =
+        dependency == null || if (dependency.startsWith("!")) {
+            values[dependency.drop(1)] != true
+        } else {
+            values[dependency] == true
+        }
+
     fun maximum(key: String, values: Map<String, Any>, defaultMaximum: Int): Int = when (key) {
         "current_unrevealed_opacity_percent", "active_translation_progress_opacity_percent" ->
             number(values, "active_opacity_percent", 100)

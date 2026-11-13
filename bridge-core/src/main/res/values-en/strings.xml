@@ -148,7 +148,7 @@
     <string name="setting_line_progress">Line-timed lyric progress</string>
     <string name="setting_translation_progress">Translation progress</string>
     <string name="setting_char_lift">Character lift animation</string>
-    <string name="char_lift_dependency_hint">Characters rise from below to the normal baseline as the reveal front passes them. Works with word-timed lyrics, and with ordinary line-timed lyrics when Line-timed lyric progress is enabled. Automatically off on the low frame rate always-on display.</string>
+    <string name="char_lift_dependency_hint">Lifts at each syllable start. Line-timed lyrics require line progress. Automatically off on the always-on display.</string>
     <string name="setting_char_lift_strength">Character float amount</string>
     <string name="setting_screen_timeout">Keep screen on while lyrics are shown</string>
     <string name="setting_screen_timeout_seconds_label">Timeout seconds</string>

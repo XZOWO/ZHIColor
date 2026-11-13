@@ -40,6 +40,8 @@ final class LyricUiConfigCodec {
     static final String SECONDARY_PROGRESS = "secondary_progress_enabled";
     static final String CHAR_LIFT_ENABLED = "char_lift_enabled";
     static final String CHAR_LIFT_STRENGTH = "char_lift_strength_percent";
+    static final String WORD_EMPHASIS_ENABLED = "word_emphasis_enabled";
+    static final String CHINESE_TAIL_EMPHASIS_ENABLED = "chinese_tail_emphasis_enabled";
     static final String SCREEN_TIMEOUT_ENABLED = "screen_timeout_enabled";
     static final String SCREEN_TIMEOUT_SECONDS = "screen_timeout_seconds";
     static final String MAIN_FONT_SIZE = "main_font_tenths_sp";
@@ -92,6 +94,8 @@ final class LyricUiConfigCodec {
         values.put(SECONDARY_PROGRESS, config.secondaryProgressEnabled);
         values.put(CHAR_LIFT_ENABLED, config.charLiftEnabled);
         values.put(CHAR_LIFT_STRENGTH, config.charLiftStrengthPercent);
+        values.put(WORD_EMPHASIS_ENABLED, config.wordEmphasisEnabled);
+        values.put(CHINESE_TAIL_EMPHASIS_ENABLED, config.chineseTailEmphasisEnabled);
         values.put(SCREEN_TIMEOUT_ENABLED, config.screenTimeoutEnabled);
         values.put(SCREEN_TIMEOUT_SECONDS, config.screenTimeoutSeconds);
         values.put(MAIN_FONT_SIZE, config.mainFontTenthsSp);
@@ -127,11 +131,11 @@ final class LyricUiConfigCodec {
             if (!values.containsKey(SCALE_ENABLED)) builder.scaleEnabled(false);
             if (!values.containsKey(BLUR_ENABLED)) builder.blurEnabled(false);
         }
-        if (allowLegacy && schema < LyricUiConfig.SCHEMA_VERSION
+        if (allowLegacy && schema < 5
                 && !values.containsKey(ALIGNMENT)) {
             builder.alignment(LyricUiConfig.ALIGN_START);
         }
-        if (allowLegacy && schema < LyricUiConfig.SCHEMA_VERSION
+        if (allowLegacy && schema < 5
                 && !values.containsKey(TRANSLATION_DISPLAY_MODE)) {
             builder.translationDisplayMode(LyricUiConfig.TRANSLATION_CURRENT_ONLY);
         }
@@ -152,6 +156,13 @@ final class LyricUiConfigCodec {
         if (values.containsKey(INACTIVE_SCALE)) builder.inactiveScalePercent(integer(values.get(INACTIVE_SCALE), base.inactiveScalePercent));
         if (values.containsKey(GLOW_ENABLED)) builder.glowEnabled(bool(values.get(GLOW_ENABLED), base.glowEnabled));
         if (values.containsKey(GLOW_INTENSITY)) builder.glowIntensityPercent(integer(values.get(GLOW_INTENSITY), base.glowIntensityPercent));
+        if (allowLegacy && schema < 6
+                && (values.containsKey(GLOW_ENABLED) || values.containsKey(GLOW_INTENSITY))) {
+            // Preserve the old visible on/off state before the flag became independent.
+            boolean enabled = bool(values.get(GLOW_ENABLED), base.glowEnabled);
+            int intensity = integer(values.get(GLOW_INTENSITY), base.glowIntensityPercent);
+            builder.glowEnabled(enabled && LyricUiGlowPolicy.enabledForIntensity(intensity));
+        }
         if (values.containsKey(GLOW_RADIUS)) builder.glowRadiusPercent(integer(values.get(GLOW_RADIUS), base.glowRadiusPercent));
         if (values.containsKey(PRIMARY_COLOR)) builder.primaryColor(string(values.get(PRIMARY_COLOR), base.primaryColor));
         if (values.containsKey(GLOW_COLOR)) builder.glowColor(string(values.get(GLOW_COLOR), base.glowColor));
@@ -165,6 +176,8 @@ final class LyricUiConfigCodec {
         if (values.containsKey(SECONDARY_PROGRESS)) builder.secondaryProgressEnabled(bool(values.get(SECONDARY_PROGRESS), base.secondaryProgressEnabled));
         if (values.containsKey(CHAR_LIFT_ENABLED)) builder.charLiftEnabled(bool(values.get(CHAR_LIFT_ENABLED), base.charLiftEnabled));
         if (values.containsKey(CHAR_LIFT_STRENGTH)) builder.charLiftStrengthPercent(integer(values.get(CHAR_LIFT_STRENGTH), base.charLiftStrengthPercent));
+        if (values.containsKey(WORD_EMPHASIS_ENABLED)) builder.wordEmphasisEnabled(bool(values.get(WORD_EMPHASIS_ENABLED), base.wordEmphasisEnabled));
+        if (values.containsKey(CHINESE_TAIL_EMPHASIS_ENABLED)) builder.chineseTailEmphasisEnabled(bool(values.get(CHINESE_TAIL_EMPHASIS_ENABLED), base.chineseTailEmphasisEnabled));
         if (values.containsKey(SCREEN_TIMEOUT_ENABLED)) builder.screenTimeoutEnabled(bool(values.get(SCREEN_TIMEOUT_ENABLED), base.screenTimeoutEnabled));
         if (values.containsKey(SCREEN_TIMEOUT_SECONDS)) builder.screenTimeoutSeconds(integer(values.get(SCREEN_TIMEOUT_SECONDS), base.screenTimeoutSeconds));
         if (values.containsKey(MAIN_FONT_SIZE)) builder.mainFontTenthsSp(integer(values.get(MAIN_FONT_SIZE), base.mainFontTenthsSp));
@@ -185,7 +198,7 @@ final class LyricUiConfigCodec {
                     .inactiveRowFadeEnabled(decoded.scaleEnabled || decoded.blurEnabled)
                     .build();
         }
-        if (allowLegacy && schema < LyricUiConfig.SCHEMA_VERSION
+        if (allowLegacy && schema < 5
                 && !values.containsKey(LINE_SPACING)) {
             decoded = decoded.buildUpon()
                     .lineSpacingTenthsDp(LyricUiLayoutPolicy.legacyLineSpacingTenthsDp(decoded))

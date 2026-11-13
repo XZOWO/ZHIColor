@@ -1,15 +1,15 @@
 package com.naivety.zhicolor.bridge;
 
-/** Canonicalizes the legacy glow enable flag onto the visible intensity control. */
+/** Keeps the glow switch independent from its saved intensity. */
 final class LyricUiGlowPolicy {
     private LyricUiGlowPolicy() {
     }
 
-    static int canonicalIntensityPercent(boolean legacyEnabled, int intensityPercent) {
-        if (!legacyEnabled) return 0;
+    static int canonicalIntensityPercent(int intensityPercent) {
         return Math.max(0, Math.min(100, intensityPercent));
     }
 
+    /** Only schema 1-5 used intensity as the visible switch. */
     static boolean enabledForIntensity(int intensityPercent) {
         return intensityPercent > 0;
     }

@@ -108,42 +108,46 @@ public final class CharLiftGeometry {
     /**
      * How far below the normal baseline a grapheme currently sits: {@code 0}
      * once sung, {@code maxSink} while still ahead of the wave, raised cosine in
-     * between. {@code ramp} is the row's sink-in factor from {@link #sinkRamp}.
+     * between. The amplitude is independent of row focus so waiting glyphs are
+     * already at rest before the line starts and can only rise as the front advances.
      */
     public static float sinkFor(
             float flowFront,
             float flowCenter,
             float waveWidth,
-            float maxSink,
-            float ramp) {
-        if (maxSink <= 0f || ramp <= 0f) {
+            float maxSink) {
+        if (maxSink <= 0f) {
             return 0f;
         }
         float weight = floatWeight(waveCoordinate(flowFront, flowCenter, waveWidth));
         if (weight >= 1f) {
             return 0f;
         }
-        return maxSink * (1f - weight) * Math.min(1f, ramp);
+        return maxSink * (1f - weight);
     }
 
     /**
-     * Sink-in factor for a row that has just become active, so the unsung text
-     * settles into its sunk position instead of appearing there. A pure
-     * function of playback position: no per-row animation state to drift or to
-     * reset on a seek.
+     * Whether advancing playback can still move this row's wave. Future rows
+     * have static waiting geometry and completed rows have settled at baseline,
+     * so neither needs an animation frame. A caller also gates this by playback
+     * or the existing bounded exit clock; a paused position does not advance it.
      */
-    public static float sinkRamp(long position, long lineBeginMillis, long sinkInMillis) {
-        if (sinkInMillis <= 0L) {
-            return 1f;
+    public static boolean isWaveRunning(
+            long position, long lineBeginMillis, long revealEndMillis, long finishMillis) {
+        if (position < lineBeginMillis) {
+            return false;
         }
-        if (position <= lineBeginMillis) {
-            return 0f;
+        long revealEnd = Math.max(lineBeginMillis, revealEndMillis);
+        if (position < revealEnd) {
+            return true;
         }
-        long elapsed = position - lineBeginMillis;
-        if (elapsed >= sinkInMillis) {
-            return 1f;
+        if (finishMillis <= 0L) {
+            return false;
         }
-        return smoothStep((float) elapsed / (float) sinkInMillis);
+        // Subtract instead of adding a deadline; overflow here means the elapsed
+        // interval exceeds every representable positive finish duration.
+        long elapsed = position - revealEnd;
+        return elapsed >= 0L && elapsed < finishMillis;
     }
 
     /**

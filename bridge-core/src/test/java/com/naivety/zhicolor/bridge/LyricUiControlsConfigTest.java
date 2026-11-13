@@ -13,6 +13,126 @@ import static org.junit.Assert.*;
 
 public final class LyricUiControlsConfigTest {
     @Test
+    public void independentEmphasisSwitchesRoundTripWithoutChangingLiftOrChildPreference() {
+        for (boolean lift : new boolean[]{false, true}) {
+            for (boolean emphasis : new boolean[]{false, true}) {
+                for (boolean chinese : new boolean[]{false, true}) {
+                    LyricUiConfig source = LyricUiConfig.defaults().buildUpon()
+                            .charLiftEnabled(lift)
+                            .wordEmphasisEnabled(emphasis)
+                            .chineseTailEmphasisEnabled(chinese)
+                            .build();
+                    LyricUiConfig decoded = LyricUiConfigCodec.decode(
+                            LyricUiConfigCodec.encode(source), null, false);
+                    assertEquals(lift, decoded.charLiftEnabled);
+                    assertEquals(emphasis, decoded.wordEmphasisEnabled);
+                    assertEquals(chinese, decoded.chineseTailEmphasisEnabled);
+                    assertEquals(source, decoded);
+                    assertEquals(source.hashCode(), decoded.hashCode());
+                }
+            }
+        }
+        LyricUiConfig defaults = LyricUiConfig.defaults();
+        assertNotEquals(defaults, defaults.buildUpon().wordEmphasisEnabled(false).build());
+        assertNotEquals(defaults, defaults.buildUpon().chineseTailEmphasisEnabled(false).build());
+    }
+
+    @Test
+    public void glowSwitchPersistsIntensityAndCanBeReenabledWithoutChangingAppearance() {
+        LyricUiConfig enabled = LyricUiConfig.defaults().buildUpon()
+                .glowIntensityPercent(73).glowRadiusPercent(20).glowColor("#123456").build();
+        LyricUiConfig disabled = enabled.buildUpon().glowEnabled(false).build();
+        LyricUiConfig restored = LyricUiConfigCodec.decode(
+                LyricUiConfigCodec.encode(disabled), null, false);
+        assertFalse(restored.glowEnabled);
+        assertEquals(73, restored.glowIntensityPercent);
+        assertEquals(20, restored.glowRadiusPercent);
+        assertEquals("#123456", restored.glowColor);
+        assertEquals(enabled, restored.buildUpon().glowEnabled(true).build());
+
+        LyricUiConfig zeroIntensity = enabled.buildUpon().glowIntensityPercent(0).build();
+        assertTrue(zeroIntensity.glowEnabled);
+        assertEquals(0, zeroIntensity.glowIntensityPercent);
+    }
+
+    @Test
+    public void schemaFiveMigrationPreservesChoicesAndAddsEnabledEmphasisWithoutOlderLayoutMigration() {
+        Map<String, Object> old = new HashMap<>();
+        old.put(LyricUiConfigCodec.SCHEMA, 5);
+        old.put(LyricUiConfigCodec.LINE_TIMED_PROGRESS, true);
+        old.put(LyricUiConfigCodec.CHAR_LIFT_ENABLED, false);
+        old.put(LyricUiConfigCodec.GLOW_ENABLED, false);
+        old.put(LyricUiConfigCodec.GLOW_INTENSITY, 73);
+        LyricUiConfig migrated = LyricUiConfigRepository.load(preferences(old));
+        assertTrue(migrated.lineTimedProgressEnabled);
+        assertFalse(migrated.charLiftEnabled);
+        assertFalse(migrated.glowEnabled);
+        assertEquals(73, migrated.glowIntensityPercent);
+        assertTrue(migrated.wordEmphasisEnabled);
+        assertTrue(migrated.chineseTailEmphasisEnabled);
+        assertEquals(LyricUiConfig.ALIGN_DEFAULT, migrated.alignment);
+        assertEquals(LyricUiConfig.TRANSLATION_ALL_LINES, migrated.translationDisplayMode);
+        assertEquals(0, migrated.lineSpacingTenthsDp);
+        assertEquals(6, old.get(LyricUiConfigCodec.SCHEMA));
+        assertEquals(true, old.get(LyricUiConfigCodec.WORD_EMPHASIS_ENABLED));
+        assertEquals(true, old.get(LyricUiConfigCodec.CHINESE_TAIL_EMPHASIS_ENABLED));
+        old.put(LyricUiConfigCodec.WORD_EMPHASIS_ENABLED, false);
+        old.put(LyricUiConfigCodec.CHINESE_TAIL_EMPHASIS_ENABLED, false);
+        LyricUiConfig next = LyricUiConfigRepository.load(preferences(old));
+        assertFalse(next.wordEmphasisEnabled);
+        assertFalse(next.chineseTailEmphasisEnabled);
+    }
+
+    @Test
+    public void legacyZeroIntensityMigratesToDisabledGlowWithoutOverwritingCurrentSchemaFlag() {
+        Map<String, Object> old = new HashMap<>();
+        old.put(LyricUiConfigCodec.SCHEMA, 5);
+        old.put(LyricUiConfigCodec.GLOW_INTENSITY, 0);
+        assertFalse(LyricUiConfigCodec.decode(old, null, true).glowEnabled);
+        old.put(LyricUiConfigCodec.GLOW_ENABLED, true);
+        assertFalse(LyricUiConfigCodec.decode(old, null, true).glowEnabled);
+        old.put(LyricUiConfigCodec.SCHEMA, LyricUiConfig.SCHEMA_VERSION);
+        assertTrue(LyricUiConfigCodec.decode(old, null, false).glowEnabled);
+    }
+
+    @Test
+    public void switchResetRestoresOnlyBooleansAndRetainsAllOtherValues() {
+        LyricUiConfig source = LyricUiConfig.defaults().buildUpon()
+                .activeOpacityPercent(91).currentUnrevealedOpacityPercent(43)
+                .activeTranslationOpacityPercent(39).activeTranslationProgressOpacityPercent(67)
+                .inactiveOpacityPercent(73).inactiveTranslationFollowsMain(false)
+                .inactiveTranslationOpacityPercent(47).verticalFadeEnabled(false)
+                .verticalFadeLengthTenthsDp(733).inactiveRowFadeEnabled(false)
+                .inactiveRowFadePercent(81).blurEnabled(false).blurRadiusTenthsPx(65)
+                .scaleEnabled(false).inactiveScalePercent(83).glowEnabled(false)
+                .glowIntensityPercent(72).glowRadiusPercent(23)
+                .primaryColor("#123456").glowColor("#ABCDEF")
+                .motionMode(LyricUiConfig.MOTION_REDUCED).translationMarqueeEnabled(false)
+                .maxRefreshRateHz(90).defaultTranslationEnabled(true)
+                .translationDisplayMode(LyricUiConfig.TRANSLATION_CURRENT_ONLY)
+                .lineTimedProgressEnabled(true).translationProgressEnabled(true)
+                .secondaryProgressEnabled(false).charLiftEnabled(false).charLiftStrengthPercent(135)
+                .wordEmphasisEnabled(false).chineseTailEmphasisEnabled(false)
+                .screenTimeoutEnabled(false).screenTimeoutSeconds(29)
+                .mainFontTenthsSp(253).translationFontRatioPercent(71).secondaryFontRatioPercent(58)
+                .fontWeight(LyricUiConfig.WEIGHT_BOLD).alignment(LyricUiConfig.ALIGN_END)
+                .lineSpacingTenthsDp(45).wrappedLineSpacingTenthsDp(35).build();
+        Map<String, Object> before = LyricUiConfigCodec.encode(source);
+        Map<String, Object> defaults = LyricUiConfigCodec.encode(LyricUiConfig.defaults());
+        Map<String, Object> reset = LyricUiConfigCodec.encode(source.resetSwitches());
+        int switches = 0;
+        for (Map.Entry<String, Object> entry : before.entrySet()) {
+            if (entry.getValue() instanceof Boolean) {
+                switches++;
+                assertEquals(entry.getKey(), defaults.get(entry.getKey()), reset.get(entry.getKey()));
+            } else {
+                assertEquals(entry.getKey(), entry.getValue(), reset.get(entry.getKey()));
+            }
+        }
+        assertEquals(15, switches);
+    }
+
+    @Test
     public void schemaThreeRetainsEveryExplicitAlignmentAndVisualSetting() {
         for (int alignment = 0; alignment <= 2; alignment++) {
             Map<String, Object> old = new HashMap<>();

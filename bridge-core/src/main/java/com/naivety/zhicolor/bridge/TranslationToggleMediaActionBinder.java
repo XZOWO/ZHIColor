@@ -80,6 +80,15 @@ final class TranslationToggleMediaActionBinder {
         this.actionIdReader = actionIdReader;
     }
 
+    /** Restores every live native model before a disabled takeover releases its references. */
+    synchronized void restoreAll() {
+        for (OriginalButton original : originalButtons) {
+            Object owner = original.owner.get();
+            if (owner != null) original.restore(owner);
+        }
+        originalButtons.clear();
+    }
+
     synchronized void applyTranslationToggle(
             String packageName,
             Object mediaButton,

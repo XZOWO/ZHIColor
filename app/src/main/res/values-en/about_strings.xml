@@ -5,6 +5,14 @@
     <string name="about_language">Language</string>
     <string name="about_language_system">System default</string>
     <string name="about_project">Project</string>
+    <string name="about_github">GitHub repository</string>
+    <string name="about_github_summary">Project source code</string>
+    <string name="about_afdian">Afdian</string>
+    <string name="about_afdian_summary">Support development</string>
+    <string name="about_qq_group">QQ group</string>
+    <string name="about_qq_group_summary">Group 228567742</string>
+    <string name="about_coolapk">Coolapk profile</string>
+    <string name="about_coolapk_summary">News and updates</string>
     <string name="about_application_id">Application ID</string>
     <string name="about_licenses">Open source licenses</string>
     <string name="about_notices">Copyright notices</string>

@@ -46,6 +46,8 @@ public final class LyricUiConfigContractTest {
             "secondaryProgressEnabled",
             "charLiftEnabled",
             "charLiftStrengthPercent",
+            "wordEmphasisEnabled",
+            "chineseTailEmphasisEnabled",
             "screenTimeoutEnabled",
             "screenTimeoutSeconds",
             "mainFontTenthsSp",
@@ -88,6 +90,8 @@ public final class LyricUiConfigContractTest {
                 .secondaryProgressEnabled(false)
                 .charLiftEnabled(true)
                 .charLiftStrengthPercent(140)
+                .wordEmphasisEnabled(false)
+                .chineseTailEmphasisEnabled(false)
                 .screenTimeoutEnabled(false)
                 .screenTimeoutSeconds(120)
                 .mainFontTenthsSp(245)

@@ -25,6 +25,7 @@
     <string name="ov_wrapped_spacing">Wrapped line spacing</string>
     <string name="ov_group_color">Colors</string>
     <string name="ov_lyric_color">Lyric color</string>
+    <string name="ov_glow">Glow</string>
     <string name="ov_glow_color">Glow color</string>
     <string name="ov_glow_intensity">Glow intensity</string>
     <string name="ov_glow_radius">Glow radius</string>
@@ -51,6 +52,8 @@
     <string name="ov_scale_ratio">Scale</string>
     <string name="ov_char_lift">Character lift</string>
     <string name="ov_lift_strength">Lift height</string>
+    <string name="ov_word_emphasis">Sustained-note emphasis</string>
+    <string name="ov_chinese_tail_emphasis">Chinese ending emphasis</string>
     <string name="ov_translation_marquee">Scroll long translations</string>
     <string name="ov_group_playback">Display and playback</string>
     <string name="ov_default_translation">Show translation by default</string>

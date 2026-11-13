@@ -71,7 +71,6 @@ public final class BridgeSettings {
     }
     static boolean save(SharedPreferences preferences,Map<String,?> values) {
         Map<String,Object> next=new LinkedHashMap<>(values); next.put(LyricUiConfigCodec.SCHEMA,LyricUiConfig.SCHEMA_VERSION);
-        Object intensity=next.get(LyricUiConfigCodec.GLOW_INTENSITY);if(intensity instanceof Number)next.put(LyricUiConfigCodec.GLOW_ENABLED,((Number)intensity).intValue()>0);
         LyricUiConfig previous=LyricUiConfigRepository.load(preferences);
         LyricUiConfig config=LyricUiConfigCodec.decode(next,previous,false);
         if(config==null) throw new IllegalArgumentException("设置无效");
@@ -92,7 +91,48 @@ public final class BridgeSettings {
         if(enabled) items.add(pkg); else items.remove(pkg);
         controls(c).edit().putStringSet(APPS,items).apply();sync(c);
     }
-    static void restoreDefaults(Context c) { BridgeConfigBackupRepository.clearAll(c);initialize(c); }
+    /** Restores switch presets while retaining appearance choices, parameters and saved data. */
+    static void restoreDefaults(Context c) {
+        BridgeConfigBackupCodec.Backup previous=BridgeConfigBackupCodec.decode(
+                BridgeConfigBackupRepository.exportAll(c));
+        Map<String,Map<String,?>> next=new LinkedHashMap<>();
+        for(String name:previous.namespaceNames())
+            next.put(name,new LinkedHashMap<>(previous.namespace(name)));
+
+        Map<String,Object> main=new LinkedHashMap<>(next.get(LyricUiSettings.PREFERENCES_NAME));
+        for(Map.Entry<String,Object> entry:LyricUiConfigCodec.encode(LyricUiConfig.defaults()).entrySet())
+            if(entry.getValue() instanceof Boolean)main.put(entry.getKey(),entry.getValue());
+        main.put(LyricUiConfigCodec.SCHEMA,LyricUiConfig.SCHEMA_VERSION);
+        main.put(LyricUiSettings.KEY_DEFAULT_TRANSLATION_BUTTON,true);
+        Object cleanup=main.get(LyricContentCleanupRepository.PREFERENCE_KEY);
+        if(cleanup instanceof String)try {
+            JSONObject config=new JSONObject((String)cleanup);
+            if(config.optInt("schema",-1)==LyricContentCleanupConfig.SCHEMA_VERSION) {
+                config.put("copyright",false).put("production",false).put("titleArtist",false);
+                main.put(LyricContentCleanupRepository.PREFERENCE_KEY,config.toString());
+            }
+        } catch(JSONException ignored) { /* Preserve unrecognized saved data. */ }
+        next.put(LyricUiSettings.PREFERENCES_NAME,main);
+
+        Map<String,Object> control=new LinkedHashMap<>(next.get(CONTROL_PREFS));
+        control.put(MASTER,DEFAULT_ENABLED);
+        control.put(APPS,new LinkedHashSet<>(DEFAULT_APPS));
+        control.put(LyricAppearanceSettings.BACKGROUND_ANIMATION,true);
+        control.put(LyricAppearanceSettings.ROMANIZATION,true);
+        next.put(CONTROL_PREFS,control);
+
+        Map<String,Object> debug=new LinkedHashMap<>(next.get(BridgeDebugConfig.PREFS_NAME));
+        for(String key:debugKeys())debug.put(key,!key.equals(BridgeDebugConfig.KEY_MASTER));
+        next.put(BridgeDebugConfig.PREFS_NAME,debug);
+        Map<String,Object> tools=new LinkedHashMap<>(next.get(ToolsSettings.PREFERENCES));
+        tools.put(ToolsSettings.HIDE_LOCKSCREEN_MUSIC_APP,false);
+        tools.put(ToolsSettings.HIDE_CONTROL_CENTER_MUSIC_APP,false);
+        next.put(ToolsSettings.PREFERENCES,tools);
+
+        // The repository rolls back all domains if any preference commit fails.
+        BridgeConfigBackupRepository.restoreAll(c,BridgeConfigBackupCodec.encode(next));
+        initialize(c);
+    }
     public static void reset(Context c) {
         long toolsRevision=c.getSharedPreferences(ToolsSettings.PREFERENCES,0).getLong(ToolsSettings.REVISION,0L);
         long translationResetRevision=controls(c).getLong(TRANSLATION_RESET_REVISION,0L);

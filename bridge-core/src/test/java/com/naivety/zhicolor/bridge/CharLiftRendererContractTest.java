@@ -25,19 +25,35 @@ public final class CharLiftRendererContractTest {
         assertTrue("beginCharLiftLine is missing", gate >= 0);
         String body = module.substring(gate, gate + 3_000);
         assertTrue("lift must bail out on AOD low frame rate", body.contains("aodLowFrameRateMode"));
-        assertTrue("lift must bail out without the toggle", body.contains("!charLiftEnabled"));
+        assertTrue("ordinary lift must have its own toggle and strength gate",
+                body.contains("boolean liftEnabled = charLiftEnabled && charLiftStrengthPercent > 0"));
+        assertTrue("emphasis must have an independent enabled state",
+                body.contains("boolean emphasisEnabled = uiConfig.wordEmphasisEnabled"));
+        assertTrue("both channels off must stop the combined path",
+                body.contains("(!liftEnabled && !emphasisEnabled)"));
         assertTrue(
                 "lift must bail out for a timestamp-highlighted short row",
                 body.contains("shouldUseTimestampHighlight"));
         assertTrue(
                 "WORD_TIMED lift must remain allowed",
-                body.contains("line.timingMode != LyricTimingMode.WORD_TIMED"));
+                body.contains("line.timingMode == LyricTimingMode.WORD_TIMED"));
         assertTrue(
-                "LINE_TIMED lift must remain behind the line-progress setting",
-                body.contains("line.timingMode != LyricTimingMode.LINE_TIMED"));
-        assertTrue(
-                "LINE_TIMED lift must stay off when line progress is disabled",
-                body.contains("!lineTimedProgressEnabled"));
+                "line-only lift requires the enabled line-progress path",
+                body.contains("line.timingMode == LyricTimingMode.LINE_TIMED && !lineTimedProgressEnabled"));
+        assertTrue(body.contains("resolveLineProgressLift(model, line, text, compact).motion"));
+        assertTrue(body.contains("line.resetLineProgressLift()"));
+    }
+
+    @Test
+    public void lineOnlyRevealDoesNotDependOnASyntheticWordOrUseFullRowFallback() throws Exception {
+        String module = module();
+        int start = module.indexOf("private float resolveWordRevealWidthForSegment(");
+        int end = module.indexOf("private boolean prepareSyllableLiftSegment(", start);
+        String body = module.substring(start, end);
+        assertTrue(body.indexOf("LineTimedProgress.revealWidth(") < body.indexOf("if (word == null)"));
+        assertTrue(body.contains("drawLine == compactLiftLine"));
+        assertTrue(module.contains("if (activeWord == null && line.timingMode != LyricTimingMode.LINE_TIMED)"));
+        assertFalse(module.contains("if (activeLine && line.timingMode != LyricTimingMode.WORD_TIMED)"));
     }
 
     @Test
@@ -83,26 +99,41 @@ public final class CharLiftRendererContractTest {
                 "the bell model's settle decay has no place in a step model",
                 module.contains("revealDecay"));
         assertFalse(module.contains("CHAR_LIFT_SETTLE_TAIL_MS"));
-        assertTrue(
-                "the only animation this effect owns is the sink-in ramp",
+        assertFalse(
+                "incoming text must not sink after activation",
                 module.contains("CharLiftGeometry.sinkRamp("));
-        assertTrue(
-                "the ramp must be anchored on the row's own start",
-                module.contains("WordLyricRenderConstants.CHAR_LIFT_SINK_IN_MS"));
+        assertFalse(module.contains("charLift.ramp"));
+        assertFalse(
+                "highlight activation must not multiply the geometric displacement",
+                module.contains("maxSink *= line.highlightExit.liftActivationAmount()"));
     }
 
     @Test
-    public void theRowSinksBeforeItsFirstWordRatherThanOnIt() throws Exception {
+    public void sourceSyllableSpringIsSeparateFromProgressAndExitClocks() throws Exception {
         String module = module();
-        int gate = module.indexOf("private void beginCharLiftLine(");
-        assertTrue("beginCharLiftLine is missing", gate >= 0);
-        String body = module.substring(gate, gate + 3_000);
-        assertFalse(
-                "a row with no active word yet is still unsung and must sink",
-                body.contains("|| activeWord == null"));
-        assertTrue(
-                "the front rests at the start of the text during the pre-roll",
-                body.contains("activeWord == null"));
+        int start = module.indexOf("private void beginCharLiftLine(");
+        int end = module.indexOf("private long resolveCharLiftLineRevealEnd(", start);
+        String body = module.substring(start, end);
+        assertTrue(body.contains("line.syllableLift.sample(position, lyricAnimationTimeMillis(), selected, true)"));
+        assertTrue(body.contains("SyllableLiftMotion.LIFT_DP"));
+        assertFalse(body.contains("resolveLineFlowFront"));
+        assertFalse(body.contains("finishOvershoot"));
+        assertFalse(body.contains("findWordIndex"));
+        assertFalse(module.contains("CharLiftGeometry.sinkFor("));
+        assertFalse(module.contains("completionPosition += WordLyricRenderConstants.CHAR_LIFT_FINISH_MS"));
+        assertTrue(module.contains("state.liftSelected = sourceSelected"));
+        assertTrue(module.contains("state.liftSelected,"));
+    }
+
+    @Test
+    public void finiteSpringOwnsFramesAndCacheResetDoesNotReplayIt() throws Exception {
+        String module = module();
+        assertTrue(module.contains("charLift.motion.isRunning() || charLift.emphasis.isRunning()"));
+        assertFalse(module.contains("CharLiftGeometry.isWaveRunning("));
+        int start = module.indexOf("void clearGlowCache() {");
+        String body = module.substring(start, start + 900);
+        assertFalse(body.contains("syllableLift.reset()"));
+        assertTrue(module.contains("charLift.boundaries = cache.boundaries"));
     }
 
     @Test
@@ -110,21 +141,33 @@ public final class CharLiftRendererContractTest {
         String module = module();
         assertEquals(
                 "grapheme boundaries must be walked on a cache miss and nowhere else",
-                1,
+                2,
                 countOf(module, "CharLiftGeometry.graphemeBoundaries("));
         assertTrue(module.contains("private final GraphemeLayoutCache[] graphemeLayoutCaches"));
     }
 
     @Test
-    public void compactSingleLineDrawingStaysOutOfScope() throws Exception {
+    public void compactAndAllInkLayersShareSyllableTransforms() throws Exception {
         String module = module();
         int compact = module.indexOf("private void drawCompactLine(");
-        int segment = module.indexOf("private void drawSegment(");
-        assertTrue("drawCompactLine is missing", compact >= 0);
-        assertTrue("drawSegment must follow drawCompactLine", segment > compact);
-        assertTrue(
-                "the compact single-line variant is out of scope for the lift",
-                !module.substring(compact, segment).contains("charLift"));
+        int end = module.indexOf("private void fitSingleLineText(", compact);
+        String body = module.substring(compact, end);
+        assertTrue(body.contains("beginCharLiftLine(model, line, textView, line.text, liftPosition, sourceSelected, true)"));
+        assertTrue(body.contains("drawSegment(canvas, model, line, line.text, compactLiftLine"));
+        assertTrue(module.contains("drawSyllableLiftLayer(canvas, line, text, drawLine, x, y, basePaint,"));
+        assertTrue(module.contains("segmentWidth, glowRevealWidth, 2)"));
+        assertTrue(module.contains("canvas.translate(outwardOffset, -lift)"));
+    }
+
+    @Test
+    public void lineProgressLiftOwnsPersistentLayoutsAndKeepsTheExitHighlightClock() throws Exception {
+        String module = module();
+        assertTrue(module.contains("compact ? line.compactLineProgressLift : line.lineProgressLift"));
+        assertTrue(module.contains("cached.matches(line.timeMillis, end, textSizeKey, typeface,"));
+        assertTrue(module.contains("liftSelected |= exitingHighlight"));
+        assertTrue(module.contains("sourceSelected |= line.highlightExit.isExiting()"));
+        assertTrue(module.contains("beforeWidth += widths[segment++]"));
+        assertTrue(module.contains("charLift.motion.sample(position, lyricAnimationTimeMillis(), selected, true)"));
     }
 
     @Test
@@ -132,12 +175,43 @@ public final class CharLiftRendererContractTest {
         String module = module();
         int start = module.indexOf("void clearGlowCache() {");
         assertTrue("clearGlowCache is missing", start >= 0);
-        String body = module.substring(start, start + 500);
+        String body = module.substring(start, start + 900);
         assertTrue(body.contains("for (GraphemeLayoutCache cache : graphemeLayoutCaches)"));
         assertTrue(body.contains("charLift.reset()"));
         assertTrue(
                 "a rebind must give the effect another chance",
                 body.contains("charLiftUnavailable = false"));
+    }
+
+    @Test
+    public void emphasisHasIndependentScaleGlowAndFiniteScheduling() throws Exception {
+        String module = module();
+        assertTrue(module.contains("if (emphasisEnabled) line.wordEmphasis.sample("));
+        assertTrue(module.contains("line.sourceLanguage, uiConfig.chineseTailEmphasisEnabled)"));
+        assertTrue(module.contains("charLift.emphasis.amountForCharacter"));
+        assertTrue(module.contains("charLift.emphasis.glowAmountForCharacter"));
+        assertTrue(module.contains("canvas.scale(scale, scale, pivotX, pivotY)"));
+        assertTrue(module.contains("emphasisGlowSegmentCaches"));
+        assertTrue(module.contains("charLift.emphasisGlowRadius = dp(textView.getContext(), WordEmphasisGeometry.EMPHASIS_GLOW_RADIUS_DP)"));
+        assertTrue(module.contains("line.wordEmphasis.reset()"));
+    }
+
+    @Test
+    public void emphasisAloneKeepsScaleGlowAndFrameSchedulingWithoutOrdinaryLift() throws Exception {
+        String source = module();
+        int start = source.indexOf("private void beginCharLiftLine(");
+        int end = source.indexOf("private LineProgressLiftMotion resolveLineProgressLift(", start);
+        String body = source.substring(start, end);
+        assertTrue(body.contains("if (liftEnabled) line.syllableLift.sample("));
+        assertTrue(body.contains("else line.syllableLift.reset()"));
+        assertTrue(body.contains("if (emphasisEnabled) line.wordEmphasis.sample("));
+        assertTrue(body.contains("else line.wordEmphasis.reset()"));
+        assertTrue(body.contains("? LyricWakeTransitionPolicy.liftAmount(1f, frameAodAmount) : 0f"));
+        assertTrue(body.contains("charLift.maxLift = liftEnabled ?"));
+        assertTrue(body.contains("|| charLift.emphasisStrength > CHAR_LIFT_FRAME_EPSILON"));
+        assertTrue(source.contains("charLift.motion.isRunning() || charLift.emphasis.isRunning()"));
+        assertTrue(source.contains("if (!uiConfig.glowEnabled || uiConfig.glowIntensityPercent <= 0) return"));
+        assertTrue(source.contains("canvas.scale(scale, scale, pivotX, pivotY)"));
     }
 
     private static int countOf(String source, String needle) {
