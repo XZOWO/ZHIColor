@@ -42,11 +42,16 @@ public final class ZhiToolLyricMotion {
     public static final class Value {
         private boolean initialized;
         private boolean running;
+        private boolean useAppleSpring;
         private float from;
         private float target;
         private long startedAt;
         private long duration;
         private long lastSampleAt = Long.MIN_VALUE;
+
+        public float target() {
+            return target;
+        }
 
         public float value(long now) {
             long sampleAt = Math.max(now, lastSampleAt);
@@ -61,10 +66,20 @@ public final class ZhiToolLyricMotion {
                 return target;
             }
             float progress = elapsed <= 0L ? 0f : (float) elapsed / duration;
-            return from + (target - from) * easeOutCubic(progress);
+            float eased = useAppleSpring ? AppleLyricMotionPolicy.springValue(progress) : easeOutCubic(progress);
+            return from + (target - from) * eased;
         }
 
         public void retarget(float target, long now, long duration, boolean animate) {
+            retarget(target, now, duration, animate, false);
+        }
+
+        public void retarget(
+                float target,
+                long now,
+                long duration,
+                boolean animate,
+                boolean useAppleSpring) {
             if (!initialized || !animate || duration <= 0L) {
                 reset(target);
                 lastSampleAt = now;
@@ -76,6 +91,7 @@ public final class ZhiToolLyricMotion {
             }
             from = current;
             this.target = target;
+            this.useAppleSpring = useAppleSpring;
             startedAt = lastSampleAt;
             this.duration = duration;
             running = current != target;
@@ -89,6 +105,7 @@ public final class ZhiToolLyricMotion {
         public void reset(float value) {
             initialized = true;
             running = false;
+            useAppleSpring = false;
             from = value;
             target = value;
             startedAt = 0L;

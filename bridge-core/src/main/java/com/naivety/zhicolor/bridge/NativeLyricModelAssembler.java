@@ -125,6 +125,7 @@ final class NativeLyricModelAssembler {
         }
         int propagatedTranslations = model.propagateNearbyTranslations(6);
         applyLineMetadata(model, lineMetadata);
+        inheritWaitingDotsSourceAlignment(model);
         LyricModelTraceSupport.traceWordLyricModel(traceSink, model, "final-systemui", "systemui");
         return new AssemblyResult(
                 model,
@@ -179,10 +180,32 @@ final class NativeLyricModelAssembler {
                 model.lines.add(line);
             }
             if (model.lines.isEmpty()) return null;
-            model.lines.sort((left, right) -> Long.compare(left.timeMillis, right.timeMillis));
+        model.lines.sort((left, right) -> Long.compare(left.timeMillis, right.timeMillis));
             return model;
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private static void inheritWaitingDotsSourceAlignment(WordLyricModel model) {
+        if (model == null || model.lines.isEmpty()) {
+            return;
+        }
+        int size = model.lines.size();
+        for (int i = 0; i < size; i++) {
+            WordLine line = model.lines.get(i);
+            if (line == null || !line.isWaitingDots) {
+                continue;
+            }
+            for (int nextIndex = i + 1; nextIndex < size; nextIndex++) {
+                WordLine host = model.lines.get(nextIndex);
+                if (host != null && !host.isWaitingDots
+                        && !LyricMetadataFilter.isNonLyricInfoLine(host.text, host.timeMillis)) {
+                    line.sourceAlignment = host.sourceAlignment;
+                    line.sourceAlignmentProvided = host.sourceAlignmentProvided;
+                    break;
+                }
+            }
         }
     }
 
@@ -234,7 +257,7 @@ final class NativeLyricModelAssembler {
         WordLine fallback = null;
         long fallbackDistance = Long.MAX_VALUE;
         for (WordLine line : model.lines) {
-            if (claimed.containsKey(line)) continue;
+            if (line == null || line.isWaitingDots || claimed.containsKey(line)) continue;
             long distance = Math.abs(line.timeMillis - begin);
             boolean matches = line.textMatchKey.equals(matchKey)
                     || line.displayMatchKey().equals(matchKey);
@@ -511,12 +534,32 @@ final class NativeLyricModelAssembler {
         ArrayList<String> splitLines = sharedSplitLines != null
                 ? sharedSplitLines
                 : splitRawLyricLines(officialLyric);
-        for (TimedLyricGroup group : parseTimedTextGroups(splitLines)) {
+        ArrayList<TimedLyricGroup> groups = parseTimedTextGroups(splitLines);
+        for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
+            TimedLyricGroup group = groups.get(groupIndex);
             if (group == null) {
                 continue;
             }
             if (group.texts.isEmpty()) {
-                if (group.blankPlaceholder) {
+                if (group.waitingDotsPlaceholder) {
+                    long endMillis = group.timeMillis + OplusLyricNormalizer.TAIL_SPACER_DELAY_MS;
+                    for (int nextIndex = groupIndex + 1; nextIndex < groups.size(); nextIndex++) {
+                        TimedLyricGroup nextGroup = groups.get(nextIndex);
+                        if (nextGroup != null && nextGroup.timeMillis > group.timeMillis) {
+                            endMillis = nextGroup.timeMillis;
+                            break;
+                        }
+                    }
+                    WordLine dotsLine = WordLine.waitingDots(group.timeMillis, endMillis);
+                    int officialIndex = model.officialLines.size();
+                    model.officialLines.add(dotsLine);
+                    model.insertLineChronologically(dotsLine);
+                    if (traceSink != null && traceSink.traceEnabled()) {
+                        traceSink.trace("official-waiting-dots#" + officialIndex
+                                + " start=" + formatLrcTime(dotsLine.timeMillis)
+                                + " end=" + formatLrcTime(dotsLine.endTimeMillis));
+                    }
+                } else if (group.blankPlaceholder) {
                     int officialIndex = model.officialLines.size();
                     model.officialLines.add(null);
                     if (traceSink != null && traceSink.traceEnabled()) {
@@ -762,9 +805,10 @@ final class NativeLyricModelAssembler {
             long timeMillis = parseLrcTimeMillis(firstTag.group(1));
             String rawText = line.substring(firstTag.end());
             rawText = WordLyricRenderSupport.ANY_LRC_TIME_TAG.matcher(rawText).replaceAll("");
-            boolean blankPlaceholder = isIgnorableOnlyPlaceholder(rawText);
+            boolean waitingDotsPlaceholder = LyricTextSanitizer.isWaitingDotsMarker(rawText);
+            boolean blankPlaceholder = !waitingDotsPlaceholder && isIgnorableOnlyPlaceholder(rawText);
             String text = cleanPlainLyricText(rawText);
-            if (!isEmpty(text) || blankPlaceholder) {
+            if (!isEmpty(text) || blankPlaceholder || waitingDotsPlaceholder) {
                 TimedLyricGroup group = groups.get(timeMillis);
                 if (group == null) {
                     group = new TimedLyricGroup(timeMillis);
@@ -772,6 +816,8 @@ final class NativeLyricModelAssembler {
                 }
                 if (!isEmpty(text)) {
                     group.texts.add(text);
+                } else if (waitingDotsPlaceholder) {
+                    group.waitingDotsPlaceholder = true;
                 } else {
                     group.blankPlaceholder = true;
                 }
@@ -788,6 +834,7 @@ final class NativeLyricModelAssembler {
         final long timeMillis;
         final ArrayList<String> texts = new ArrayList<>();
         boolean blankPlaceholder;
+        boolean waitingDotsPlaceholder;
 
         TimedLyricGroup(long timeMillis) {
             this.timeMillis = timeMillis;

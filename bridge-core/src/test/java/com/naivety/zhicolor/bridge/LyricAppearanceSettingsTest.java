@@ -174,12 +174,44 @@ public class LyricAppearanceSettingsTest {
         SharedPreferences controls = BridgeSettings.controls(context);
         for (int invalid : new int[]{-1,3,Integer.MAX_VALUE}) {
             controls.edit().putInt(LyricAppearanceSettings.BACKGROUND,invalid)
-                    .putInt(LyricAppearanceSettings.FONT,LyricAppearanceSettings.SYSTEM_SHAPED).apply();
+                    .putInt(LyricAppearanceSettings.FONT,LyricAppearanceSettings.SYSTEM_SHAPED)
+                    .putInt(LyricAppearanceSettings.POSITION,LyricAppearanceSettings.SYSTEM_SHAPED).apply();
             LyricAppearanceSettings settings = LyricAppearanceSettings.load(context);
             assertEquals(LyricAppearanceSettings.SYSTEM_SHAPED,settings.background);
             assertEquals(LyricAppearanceSettings.APPLE,settings.font);
+            assertEquals(LyricAppearanceSettings.APPLE,settings.position);
             assertFalse(settings.appleBackground);
             assertTrue(settings.systemShapedArtwork);
+            assertTrue(settings.applePosition);
         }
+    }
+
+    @Test public void positionDefaultsToAppleAndFollowsMasterSwitchIndependently() {
+        PreferenceTestContext context = new PreferenceTestContext();
+        LyricAppearanceSettings defaults = LyricAppearanceSettings.load(context);
+        assertEquals(LyricAppearanceSettings.APPLE,defaults.position);
+        assertTrue(defaults.applePosition);
+
+        SharedPreferences controls = BridgeSettings.controls(context);
+        LyricAppearanceSettings.saveChoice(controls,LyricAppearanceSettings.FONT,LyricAppearanceSettings.SYSTEM);
+        LyricAppearanceSettings.saveChoice(controls,LyricAppearanceSettings.POSITION,LyricAppearanceSettings.SYSTEM);
+        LyricAppearanceSettings systemPos = LyricAppearanceSettings.load(context);
+        assertEquals(LyricAppearanceSettings.SYSTEM,systemPos.position);
+        assertFalse(systemPos.applePosition);
+        assertEquals(LyricAppearanceSettings.SYSTEM,systemPos.font);
+
+        LyricAppearanceSettings.saveChoice(controls,LyricAppearanceSettings.POSITION,LyricAppearanceSettings.APPLE);
+        controls.edit().putBoolean(BridgeSettings.MASTER,false).apply();
+        LyricAppearanceSettings masterOff = LyricAppearanceSettings.load(context);
+        assertEquals(LyricAppearanceSettings.APPLE,masterOff.position);
+        assertFalse(masterOff.applePosition);
+        controls.edit().putBoolean(BridgeSettings.MASTER,true).apply();
+        assertTrue(LyricAppearanceSettings.load(context).applePosition);
+    }
+
+    @Test(expected = IllegalArgumentException.class) public void positionCannotSelectSystemShapedArtwork() {
+        PreferenceTestContext context = new PreferenceTestContext();
+        LyricAppearanceSettings.saveChoice(BridgeSettings.controls(context),
+                LyricAppearanceSettings.POSITION,LyricAppearanceSettings.SYSTEM_SHAPED);
     }
 }

@@ -257,11 +257,17 @@ final class OplusPluginDexKitAdapter {
                 !mediaInfoLayout);
     }
 
-    /** Verified 17.000.002 layout: q owns lyric support; s owns artwork background. */
+    /**
+     * Verified 17.000.002 layouts (20 fields pre-17.0.1 and 21 fields adding {@code int t} on
+     * 17.0.1.202): {@code q} owns lyric support; {@code s} owns artwork background.
+     */
     private static Field requireColorOs17MediaInfoLayout(
             Class<?> owner, Class<?> multiIconClass, Class<?> lyricModelClass)
             throws ReflectiveOperationException {
-        requireInstanceFieldCount(owner, 20);
+        int fieldCount = instanceFieldCount(owner);
+        if (fieldCount != 20 && fieldCount != 21) {
+            throw new IllegalStateException("Unverified plugin field layout: " + owner.getName());
+        }
         for (String name : new String[]{"a", "b", "e", "h", "i", "k", "l", "m"}) {
             requireDeclaredField(owner, name, String.class);
         }
@@ -282,22 +288,38 @@ final class OplusPluginDexKitAdapter {
         requireConstructor(artColors, int.class, int.class, int.class, int.class,
                 int.class, int.class, int.class);
         requireDeclaredField(owner, "s", boolean.class);
-        requireDeclaredField(owner, "t", Object.class);
-        requireConstructor(owner, String.class, String.class, PendingIntent.class, multiIconClass,
-                String.class, multiIconClass, LinkedHashMap.class, String.class, String.class,
-                multiIconClass, String.class, String.class, String.class, List.class, List.class,
-                lyricModelClass, boolean.class, boolean.class);
+        if (fieldCount == 20) {
+            requireDeclaredField(owner, "t", Object.class);
+            requireConstructor(owner, String.class, String.class, PendingIntent.class, multiIconClass,
+                    String.class, multiIconClass, LinkedHashMap.class, String.class, String.class,
+                    multiIconClass, String.class, String.class, String.class, List.class, List.class,
+                    lyricModelClass, boolean.class, boolean.class);
+        } else {
+            requireDeclaredField(owner, "t", int.class);
+            requireDeclaredField(owner, "u", Object.class);
+            requireConstructor(owner, String.class, String.class, PendingIntent.class, multiIconClass,
+                    String.class, multiIconClass, LinkedHashMap.class, String.class, String.class,
+                    multiIconClass, String.class, String.class, String.class, List.class, List.class,
+                    lyricModelClass, boolean.class, boolean.class, int.class);
+        }
         return supported;
     }
 
     private static void requireInstanceFieldCount(Class<?> owner, int expected) {
+        if (instanceFieldCount(owner) != expected) {
+            throw new IllegalStateException("Unverified plugin field layout: " + owner.getName());
+        }
+    }
+
+    private static int instanceFieldCount(Class<?> owner) {
+        if (owner.getSuperclass() != Object.class) {
+            throw new IllegalStateException("Unverified plugin field layout: " + owner.getName());
+        }
         int count = 0;
         for (Field field : owner.getDeclaredFields()) {
             if (!Modifier.isStatic(field.getModifiers())) count++;
         }
-        if (owner.getSuperclass() != Object.class || count != expected) {
-            throw new IllegalStateException("Unverified plugin field layout: " + owner.getName());
-        }
+        return count;
     }
 
     private static Field requireDeclaredField(Class<?> owner, String name, Class<?> type) {

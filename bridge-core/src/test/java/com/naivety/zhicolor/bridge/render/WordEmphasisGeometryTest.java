@@ -158,4 +158,39 @@ public final class WordEmphasisGeometryTest {
             assertTrue(transformedRight - (bearing + inkWidth) <= room + 0.00001d);
         }
     }
+
+    @Test public void expandedCellClipsUseAdjacentBlankSpacesWithoutTouchingAdjacentInk() {
+        // Glyphs: "I" (0), " " (1), "y" (2), "o" (3), "u" (4), " " (5), "!" (6)
+        float originX = 120f;
+        float[] widths = {0f, 10f, 22f, 40f, 58f, 76f, 88f, 96f};
+        float[] inkLefts = {1f, 10f, 20f, 41f, 59f, 76f, 90f};
+        // Note 'I' slightly overhangs 1px into the space (inkRight=11 > width[1]=10), while 'y' overhangs -2px left (inkLeft=20 < width[2]=22).
+        float[] inkRights = {11f, 10f, 39f, 57f, 78f, 76f, 95f};
+
+        // Left of "you" (first=2) expands into whitespace index 1, stopping cleanly at I's right edge (11f).
+        assertEquals(originX + 11f,
+                WordEmphasisGeometry.expandedLeftClip(originX, widths, inkLefts, inkRights, 2), 0f);
+        // Right of "you" (end=5) expands into whitespace index 5, stopping cleanly at width[6]=88f (since inkLeft[6]=90f >= 88f).
+        assertEquals(originX + 88f,
+                WordEmphasisGeometry.expandedRightClip(originX, widths, inkLefts, inkRights, 5, 1080f), 0f);
+        // Right of 'o' (end=4) faces inked 'u' immediately -> no expansion across inked neighbor.
+        assertEquals(originX + 58f,
+                WordEmphasisGeometry.expandedRightClip(originX, widths, inkLefts, inkRights, 4, 1080f), 0f);
+        // Left of 'u' (first=4) faces inked 'o' immediately -> no expansion.
+        assertEquals(originX + 58f,
+                WordEmphasisGeometry.expandedLeftClip(originX, widths, inkLefts, inkRights, 4), 0f);
+    }
+
+    @Test public void leadingAndTrailingBlanksExpandCellClipsToCanvasEdges() {
+        float originX = 100f;
+        // " " (0), "A" (1), " " (2)
+        float[] widths = {0f, 12f, 34f, 46f};
+        float[] inkLefts = {0f, 10f, 34f};
+        float[] inkRights = {0f, 36f, 34f};
+
+        assertEquals(0f,
+                WordEmphasisGeometry.expandedLeftClip(originX, widths, inkLefts, inkRights, 1), 0f);
+        assertEquals(1080f,
+                WordEmphasisGeometry.expandedRightClip(originX, widths, inkLefts, inkRights, 2, 1080f), 0f);
+    }
 }

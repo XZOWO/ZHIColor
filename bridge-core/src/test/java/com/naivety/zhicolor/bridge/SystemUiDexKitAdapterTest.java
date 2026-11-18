@@ -68,7 +68,38 @@ public class SystemUiDexKitAdapterTest {
         }
     }
 
-    /** Mirrors MediaActionPrioritySelectorImpl before/after the sixth map. */
+    /** Mirrors the ColorOS 17.0.1 (17.99.02) RUS manager surface adding ImmersiveFullBg. */
+    private static final class ColorOs1701RusShapes {
+        public static void dealEndTag(
+                String tag,
+                Set set,
+                Set set2,
+                List list,
+                List list2,
+                Map map,
+                Map map2,
+                Map map3,
+                Map map4,
+                Map map5,
+                Map map6) {
+        }
+
+        public static void saveListToSP(
+                Context context,
+                Set set,
+                Set set2,
+                Map map,
+                Map map2,
+                Map map3,
+                Map map4,
+                Map map5,
+                Map map6,
+                Map map7,
+                int version) {
+        }
+    }
+
+    /** Mirrors MediaActionPrioritySelectorImpl across 5, 6, and 7 maps. */
     private static final class SelectorShapes {
         public int getLyricEnable(String packageName) {
             return 0;
@@ -90,6 +121,16 @@ public class SystemUiDexKitAdapterTest {
                 Map map6) {
         }
 
+        public void updatePkgActionsRule(
+                Map map,
+                Map map2,
+                Map map3,
+                Map map4,
+                Map map5,
+                Map map6,
+                Map map7) {
+        }
+
         public static void staticUpdatePkgActionsRule(
                 Map map,
                 Map map2,
@@ -97,6 +138,16 @@ public class SystemUiDexKitAdapterTest {
                 Map map4,
                 Map map5,
                 Map map6) {
+        }
+
+        public static void staticUpdatePkgActionsRule(
+                Map map,
+                Map map2,
+                Map map3,
+                Map map4,
+                Map map5,
+                Map map6,
+                Map map7) {
         }
     }
 
@@ -143,6 +194,25 @@ public class SystemUiDexKitAdapterTest {
     }
 
     @Test
+    public void saveListToSpShapeAcceptsColorOs1701ElevenParameterForm() throws Exception {
+        Method colorOs1701Form = method(
+                ColorOs1701RusShapes.class,
+                "saveListToSP",
+                Context.class,
+                Set.class,
+                Set.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                int.class);
+        assertTrue(SystemUiDexKitAdapter.isSaveListToSpShape(colorOs1701Form));
+    }
+
+    @Test
     public void saveListToSpShapeRejectsMismatchedShapes() throws Exception {
         assertFalse(SystemUiDexKitAdapter.isSaveListToSpShape(
                 method(SelectorShapes.class, "updatePkgActionsRule", Map.class, Map.class, Map.class, Map.class, Map.class)));
@@ -151,13 +221,17 @@ public class SystemUiDexKitAdapterTest {
     }
 
     @Test
-    public void updatePkgActionsRuleShapeAcceptsFiveAndSixMaps() throws Exception {
+    public void updatePkgActionsRuleShapeAcceptsFiveSixAndSevenMaps() throws Exception {
         Method fiveMaps = method(SelectorShapes.class, "updatePkgActionsRule", Map.class, Map.class, Map.class, Map.class, Map.class);
         Method sixMaps = method(SelectorShapes.class, "updatePkgActionsRule", Map.class, Map.class, Map.class, Map.class, Map.class, Map.class);
+        Method sevenMaps = method(SelectorShapes.class, "updatePkgActionsRule", Map.class, Map.class, Map.class, Map.class, Map.class, Map.class, Map.class);
         assertTrue(SystemUiDexKitAdapter.isUpdatePkgActionsRuleShape(fiveMaps));
         assertTrue(SystemUiDexKitAdapter.isUpdatePkgActionsRuleShape(sixMaps));
+        assertTrue(SystemUiDexKitAdapter.isUpdatePkgActionsRuleShape(sevenMaps));
         assertFalse(SystemUiDexKitAdapter.isUpdatePkgActionsRuleShape(
                 method(SelectorShapes.class, "staticUpdatePkgActionsRule", Map.class, Map.class, Map.class, Map.class, Map.class, Map.class)));
+        assertFalse(SystemUiDexKitAdapter.isUpdatePkgActionsRuleShape(
+                method(SelectorShapes.class, "staticUpdatePkgActionsRule", Map.class, Map.class, Map.class, Map.class, Map.class, Map.class, Map.class)));
     }
 
     @Test
@@ -179,7 +253,7 @@ public class SystemUiDexKitAdapterTest {
     }
 
     @Test
-    public void dealEndTagShapeAcceptsSharedStaticForm() throws Exception {
+    public void dealEndTagShapeAcceptsLegacyAndColorOs1701StaticForms() throws Exception {
         Method dealEndTag = method(
                 OldRusShapes.class,
                 "dealEndTag",
@@ -193,7 +267,22 @@ public class SystemUiDexKitAdapterTest {
                 Map.class,
                 Map.class,
                 Map.class);
+        Method dealEndTag1701 = method(
+                ColorOs1701RusShapes.class,
+                "dealEndTag",
+                String.class,
+                Set.class,
+                Set.class,
+                List.class,
+                List.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class);
         assertTrue(SystemUiDexKitAdapter.isDealEndTagShape(dealEndTag));
+        assertTrue(SystemUiDexKitAdapter.isDealEndTagShape(dealEndTag1701));
         assertFalse(SystemUiDexKitAdapter.isDealEndTagShape(
                 method(OldRusShapes.class, "getRusWhiteList")));
     }

@@ -9,6 +9,7 @@ final class LyricUiConfig {
     static final int MOTION_STANDARD = 0;
     static final int MOTION_REDUCED = 1;
     static final int MOTION_OFF = 2;
+    static final int MOTION_APPLE = 3;
     static final int WEIGHT_SYSTEM = 0;
     static final int WEIGHT_REGULAR = 1;
     static final int WEIGHT_MEDIUM = 2;
@@ -96,7 +97,7 @@ final class LyricUiConfig {
         glowRadiusPercent = clamp(builder.glowRadiusPercent, 10, 24);
         primaryColor = sanitizeColor(builder.primaryColor, "#FFFFFF");
         glowColor = sanitizeColor(builder.glowColor, "#FFD68A");
-        motionMode = clamp(builder.motionMode, MOTION_STANDARD, MOTION_OFF);
+        motionMode = clamp(builder.motionMode, MOTION_STANDARD, MOTION_APPLE);
         translationMarqueeEnabled = builder.translationMarqueeEnabled;
         maxRefreshRateHz = sanitizeRefreshRate(builder.maxRefreshRateHz);
         defaultTranslationEnabled = builder.defaultTranslationEnabled;
@@ -297,7 +298,7 @@ final class LyricUiConfig {
         private int glowRadiusPercent = 14;
         private String primaryColor = "#FFFFFF";
         private String glowColor = "#FFD68A";
-        private int motionMode = MOTION_STANDARD;
+        private int motionMode = MOTION_APPLE;
         private boolean translationMarqueeEnabled = true;
         private int maxRefreshRateHz;
         private boolean defaultTranslationEnabled = false;

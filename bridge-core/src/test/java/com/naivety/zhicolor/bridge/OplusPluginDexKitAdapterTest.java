@@ -184,6 +184,56 @@ public class OplusPluginDexKitAdapterTest {
         }
     }
 
+    // Exact public field/constructor shape of rebuilt SystemUIPlugin 17.000.002 MediaInfo (17.0.1.202).
+    private static class FakeMediaInfo17V2 {
+        final String a, b;
+        final PendingIntent c;
+        final FakeMultiIcon17 d;
+        final String e;
+        final FakeMultiIcon17 f;
+        final LinkedHashMap<?, ?> g;
+        final String h, i;
+        final FakeMultiIcon17 j;
+        final String k, l, m;
+        final List<?> n, o;
+        final FakeLyricModel p;
+        final boolean q;
+        final FakeArtColors r;
+        final boolean s;
+        final int t;
+        final Object u;
+
+        FakeMediaInfo17V2(String a, String b, PendingIntent c, FakeMultiIcon17 d, String e,
+                          FakeMultiIcon17 f, LinkedHashMap<?, ?> g, String h, String i,
+                          FakeMultiIcon17 j, String k, String l, String m, List<?> n, List<?> o,
+                          FakeLyricModel p, boolean q, boolean s, int t) {
+            this.a = a; this.b = b; this.c = c; this.d = d; this.e = e; this.f = f;
+            this.g = g; this.h = h; this.i = i; this.j = j; this.k = k; this.l = l;
+            this.m = m; this.n = n; this.o = o; this.p = p; this.q = q; this.s = s; this.t = t;
+            r = new FakeArtColors(0, 0, 0, 0, 0, 0, 0);
+            u = null;
+        }
+    }
+
+    private static final class UnknownMediaInfo21 {
+        final String a = null, b = null;
+        final PendingIntent c = null;
+        final FakeMultiIcon17 d = null;
+        final String e = null;
+        final FakeMultiIcon17 f = null;
+        final LinkedHashMap<?, ?> g = null;
+        final String h = null, i = null;
+        final FakeMultiIcon17 j = null;
+        final String k = null, l = null, m = null;
+        final List<?> n = null, o = null;
+        final FakeLyricModel p = null;
+        final boolean q = false;
+        final FakeArtColors r = null;
+        final boolean s = false;
+        final boolean t = false;
+        final Object u = null;
+    }
+
     @Test
     public void bindsObfuscatedPluginModelsByStructure() throws Exception {
         OplusPluginDexKitAdapter.Targets targets =
@@ -263,8 +313,27 @@ public class OplusPluginDexKitAdapterTest {
     }
 
     @Test
+    public void colorOs1701RebuiltMediaInfoWritesLyricSupportWithoutChangingArtworkBackground()
+            throws Exception {
+        OplusPluginDexKitAdapter.Targets targets = bindColorOs17(FakeMediaInfo17V2.class);
+        FakeMediaInfo17V2 model = new FakeMediaInfo17V2(null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, false, false, 7);
+
+        targets.lyricSupportedField.setBoolean(model, true);
+
+        assertSame(FakeMediaInfo17V2.class, targets.mediaModelClass);
+        assertEquals("d", targets.albumArtField.getName());
+        assertEquals("p", targets.lyricModelField.getName());
+        assertEquals("q", targets.lyricSupportedField.getName());
+        assertTrue(model.q);
+        assertFalse(model.s);
+        assertEquals(7, model.t);
+    }
+
+    @Test
     public void unknownMediaInfoShapeIsRejectedInsteadOfSelectingLastBoolean() {
         assertThrows(IllegalStateException.class, () -> bindColorOs17(UnknownMediaInfo.class));
+        assertThrows(IllegalStateException.class, () -> bindColorOs17(UnknownMediaInfo21.class));
     }
 
     private static OplusPluginDexKitAdapter.Targets bindColorOs17(Class<?> model)

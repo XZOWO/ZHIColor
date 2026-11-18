@@ -93,7 +93,10 @@ fun LyricsScreen(bottomInnerPadding:Dp=0.dp,onChildPageActiveChanged:(Boolean)->
                         groups.forEach {group->
                             item(key="header_"+group.title){GlassSectionTitle(group.title)}
                             item(key="group_"+group.title){GlassCard(Modifier.padding(horizontal=12.dp)){
-                                if(group.fields.any {it.key=="main_font_tenths_sp"})AppearanceChoice(R.string.scr_font,appearance.font){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.FONT,it)}
+                                if(group.fields.any {it.key=="main_font_tenths_sp"}){
+                                    AppearanceChoice(R.string.scr_font,appearance.font){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.FONT,it)}
+                                    AppearanceChoice(R.string.scr_lyric_position,appearance.position){LyricAppearanceSettings.setChoice(context,LyricAppearanceSettings.POSITION,it)}
+                                }
                                 group.fields.forEach {field->key(field.key){
                                     LyricFieldEditor(field,draft,onCommit={save()})
                                 }}

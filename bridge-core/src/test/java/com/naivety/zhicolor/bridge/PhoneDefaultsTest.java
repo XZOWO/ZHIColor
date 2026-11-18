@@ -160,6 +160,7 @@ public final class PhoneDefaultsTest {
         expected.put(LyricUiConfigCodec.LINE_TIMED_PROGRESS,false);
         expected.put(LyricUiConfigCodec.WORD_EMPHASIS_ENABLED,true);
         expected.put(LyricUiConfigCodec.CHINESE_TAIL_EMPHASIS_ENABLED,true);
+        expected.put(LyricUiConfigCodec.MOTION_MODE,LyricUiConfig.MOTION_APPLE);
         return expected;
     }
 

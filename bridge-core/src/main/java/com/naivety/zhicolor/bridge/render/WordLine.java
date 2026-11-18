@@ -105,6 +105,10 @@ public final class WordLine {
     public final ZhiToolLyricMotion.Value vocalAppearance = new ZhiToolLyricMotion.Value();
     public boolean vocalVisible;
     public long vocalChangedAtMs;
+    public boolean isWaitingDots;
+    public final ZhiToolLyricMotion.Value waitingDotsLayout = new ZhiToolLyricMotion.Value();
+    public boolean waitingDotsLayoutInitialized;
+    public int waitingDotsLayoutFocusIndex = Integer.MIN_VALUE;
 
     public int slotHeightWidthKey = -1;
     public int slotHeightBaseTextSizeKey = -1;
@@ -157,6 +161,18 @@ public final class WordLine {
         this.timingMode = timingMode == null
                 ? LyricTimingMode.LINE_TIMED
                 : timingMode;
+    }
+
+    public static WordLine waitingDots(long timeMillis, long endTimeMillis) {
+        WordLine line = new WordLine(
+                timeMillis,
+                com.naivety.zhicolor.bridge.LyricTextSanitizer.WAITING_DOTS_MARKER,
+                new ArrayList<>(),
+                Math.max(timeMillis, endTimeMillis),
+                LyricTimingMode.LINE_TIMED);
+        line.isWaitingDots = true;
+        line.explicitEndTimeProvided = true;
+        return line;
     }
 
     public void ensureRendererLayoutCapacity(int requiredCapacity) {

@@ -329,21 +329,7 @@ final class TranslationToggleMediaActionBinder {
                     "com.android.systemui.media.controls.models.player.OplusMediaActionEx",
                     true,
                     loader);
-            Object actionEx = actionExClass.getDeclaredConstructor(
-                    boolean.class,
-                    Icon.class,
-                    android.net.Uri.class,
-                    boolean.class,
-                    Boolean.class,
-                    boolean.class,
-                    String.class).newInstance(
-                    false,
-                    translationIcon.icon,
-                    null,
-                    false,
-                    null,
-                    false,
-                    null);
+            Object actionEx = instantiateOplusMediaActionEx(actionExClass, translationIcon.icon);
             Class<?> actionClass = Class.forName(
                     "com.android.systemui.media.controls.shared.model.MediaAction",
                     true,
@@ -372,6 +358,45 @@ final class TranslationToggleMediaActionBinder {
             debug("synthetic translation action unavailable, package="
                     + nullToEmpty(packageName) + ", reason=" + t.getClass().getSimpleName());
             return null;
+        }
+    }
+
+    static Object instantiateOplusMediaActionEx(Class<?> actionExClass, Object icon)
+            throws ReflectiveOperationException {
+        try {
+            return actionExClass.getDeclaredConstructor(
+                    boolean.class,
+                    Icon.class,
+                    android.net.Uri.class,
+                    boolean.class,
+                    Boolean.class,
+                    boolean.class,
+                    String.class).newInstance(
+                    false,
+                    icon,
+                    null,
+                    false,
+                    null,
+                    false,
+                    null);
+        } catch (NoSuchMethodException ignored) {
+            return actionExClass.getDeclaredConstructor(
+                    boolean.class,
+                    Icon.class,
+                    Drawable.class,
+                    android.net.Uri.class,
+                    boolean.class,
+                    Boolean.class,
+                    boolean.class,
+                    String.class).newInstance(
+                    false,
+                    icon,
+                    null,
+                    null,
+                    false,
+                    null,
+                    false,
+                    null);
         }
     }
 

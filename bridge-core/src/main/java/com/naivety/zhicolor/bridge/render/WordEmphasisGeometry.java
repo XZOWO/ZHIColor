@@ -56,4 +56,68 @@ public final class WordEmphasisGeometry {
         double offset = ((double) scale - 1d) * (cellWidth * 0.5d - leftSideBearing);
         return offset >= -Float.MAX_VALUE && offset <= Float.MAX_VALUE ? (float) offset : 0f;
     }
+
+    /** Expand left cell clip across preceding empty-ink glyphs without intruding on prior ink. */
+    public static float expandedLeftClip(
+            float originX,
+            float[] prefixWidths,
+            float[] inkLefts,
+            float[] inkRights,
+            int first) {
+        if (!Float.isFinite(originX) || prefixWidths == null || prefixWidths.length < 2 || first <= 0) {
+            return 0f;
+        }
+        int glyphCount = prefixWidths.length - 1;
+        int safeFirst = Math.min(first, glyphCount);
+        if (inkLefts == null || inkRights == null
+                || inkLefts.length < glyphCount || inkRights.length < glyphCount) {
+            return originX + prefixWidths[safeFirst];
+        }
+        int prev = safeFirst - 1;
+        while (prev >= 0 && inkRights[prev] <= inkLefts[prev]) {
+            prev--;
+        }
+        if (prev < 0) {
+            return 0f;
+        }
+        if (prev == safeFirst - 1) {
+            return originX + prefixWidths[safeFirst];
+        }
+        float occupiedRight = Math.max(prefixWidths[prev + 1], inkRights[prev]);
+        return originX + Math.min(prefixWidths[safeFirst], occupiedRight);
+    }
+
+    /** Expand right cell clip across trailing empty-ink glyphs without intruding on following ink. */
+    public static float expandedRightClip(
+            float originX,
+            float[] prefixWidths,
+            float[] inkLefts,
+            float[] inkRights,
+            int end,
+            float canvasRight) {
+        if (!Float.isFinite(originX) || prefixWidths == null || prefixWidths.length < 2) {
+            return canvasRight;
+        }
+        int glyphCount = prefixWidths.length - 1;
+        int safeEnd = Math.max(0, Math.min(end, glyphCount));
+        if (safeEnd >= glyphCount) {
+            return Math.max(canvasRight, originX + prefixWidths[glyphCount]);
+        }
+        if (inkLefts == null || inkRights == null
+                || inkLefts.length < glyphCount || inkRights.length < glyphCount) {
+            return originX + prefixWidths[safeEnd];
+        }
+        int next = safeEnd;
+        while (next < glyphCount && inkRights[next] <= inkLefts[next]) {
+            next++;
+        }
+        if (next >= glyphCount) {
+            return Math.max(canvasRight, originX + prefixWidths[glyphCount]);
+        }
+        if (next == safeEnd) {
+            return originX + prefixWidths[safeEnd];
+        }
+        float occupiedLeft = Math.min(prefixWidths[next], inkLefts[next]);
+        return originX + Math.max(prefixWidths[safeEnd], occupiedLeft);
+    }
 }

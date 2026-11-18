@@ -98,17 +98,40 @@ public final class SystemShapedArtworkPolicy {
         private static final String MODEL = "com.oplus.systemui.plugins.shared.template.section.model.media.";
         private static final String DATA = "com.oplus.systemui.plugins.shared.data.media.model.";
         private static final String BUILDER = SECTION + "MPImmersiveSectionViewModel$bgModel$1";
-        private static final String VM = SECTION + "q";
-        private static final String READ_ONLY = "com.oplus.systemui.plugins.r8.jj";
-        private static final String MUTABLE = "kotlinx.coroutines.flow.p";
         private static final String DRAWABLE = "android.graphics.drawable.Drawable";
+        private static final Variant[] VARIANTS = {
+                new Variant(SECTION + "q", "com.oplus.systemui.plugins.r8.jj",
+                        "com.oplus.systemui.plugins.r8.Lg", "kotlinx.coroutines.flow.p"),
+                new Variant(SECTION + "p", "com.oplus.systemui.plugins.r8.lj",
+                        "com.oplus.systemui.plugins.r8.Mg", "kotlinx.coroutines.flow.q")
+        };
         private final Map<String, Class<?>> types;
+
+        private static final class Variant {
+            final String vm, readOnly, state, mutable;
+
+            Variant(String vm, String readOnly, String state, String mutable) {
+                this.vm = vm;
+                this.readOnly = readOnly;
+                this.state = state;
+                this.mutable = mutable;
+            }
+        }
 
         NativeAccess() { this.types = java.util.Collections.emptyMap(); }
         NativeAccess(Map<String, Class<?>> types) { this.types = types; }
 
         @Override public Object owner(Object builder) throws ReflectiveOperationException {
-            return read(builder, BUILDER, "this$0", VM);
+            if (builder == null || !named(builder.getClass(), BUILDER))
+                throw new NoSuchFieldException("Unverified OEM owner " + BUILDER);
+            Field field = builder.getClass().getDeclaredField("this$0");
+            for (Variant variant : VARIANTS) {
+                if (named(field.getType(), variant.vm)) {
+                    field.setAccessible(true);
+                    return field.get(builder);
+                }
+            }
+            throw new NoSuchFieldException("Unverified OEM field " + BUILDER + ".this$0");
         }
 
         @Override public boolean fullScreen(Object model) {
@@ -152,11 +175,21 @@ public final class SystemShapedArtworkPolicy {
         }
 
         private Object state(Object owner) throws ReflectiveOperationException {
-            Object wrapper = read(owner, VM, "m", READ_ONLY);
-            Object state = read(wrapper, READ_ONLY, "b", "com.oplus.systemui.plugins.r8.Lg");
-            if (state == null || !named(state.getClass(), MUTABLE))
+            Variant variant = variantForOwner(owner);
+            Object wrapper = read(owner, variant.vm, "m", variant.readOnly);
+            Object state = read(wrapper, variant.readOnly, "b", variant.state);
+            if (state == null || !named(state.getClass(), variant.mutable))
                 throw new NoSuchFieldException("OEM mutable background state");
             return state;
+        }
+
+        private Variant variantForOwner(Object owner) throws NoSuchFieldException {
+            if (owner != null) {
+                for (Variant variant : VARIANTS) {
+                    if (named(owner.getClass(), variant.vm)) return variant;
+                }
+            }
+            throw new NoSuchFieldException("Unverified OEM owner");
         }
 
         private int color(Object palette, String name) throws ReflectiveOperationException {

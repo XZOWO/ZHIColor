@@ -7,6 +7,7 @@ import android.view.View;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.TextView;
 
+import com.naivety.zhicolor.bridge.render.AppleLyricMotionPolicy;
 import com.naivety.zhicolor.bridge.render.ZhiToolLyricMotion;
 import com.naivety.zhicolor.bridge.systemui.lyrics.LyricsRecyclerFieldAccessor;
 
@@ -60,7 +61,8 @@ final class OfficialLyricMotionController {
                     scroller,
                     durationField,
                     interpolatorField,
-                    new ScrollInterpolator(scrollMillis, maximumRefreshRate),
+                    new ScrollInterpolator(scrollMillis, maximumRefreshRate,
+                            LyricMotionPolicy.appleMotion(motionMode)),
                     animate ? LyricMotionPolicy.focusMillis(motionMode) : 0L,
                     scrollMillis);
             if (firstConfiguration) {
@@ -120,13 +122,14 @@ final class OfficialLyricMotionController {
             return;
         }
         long duration = animate ? LyricMotionPolicy.focusMillis(motionMode) : 0L;
+        boolean appleMode = LyricMotionPolicy.appleMotion(motionMode);
         animator.setDuration(duration);
-        animator.setInterpolator(new FocusInterpolator(duration, maximumRefreshRate));
+        animator.setInterpolator(new FocusInterpolator(duration, maximumRefreshRate, appleMode));
         // The native adapter starts this set before its bind method returns.
         // Apply to its existing children as well, without restarting the owner.
         for (Animator child : animator.getChildAnimations()) {
             child.setDuration(duration);
-            child.setInterpolator(new FocusInterpolator(duration, maximumRefreshRate));
+            child.setInterpolator(new FocusInterpolator(duration, maximumRefreshRate, appleMode));
         }
     }
 
@@ -181,26 +184,36 @@ final class OfficialLyricMotionController {
 
     private static final class FocusInterpolator implements TimeInterpolator {
         private final AnimationFractionSampler sampler;
+        private final boolean appleMode;
 
-        FocusInterpolator(long durationMillis, IntSupplier maximumRefreshRate) {
+        FocusInterpolator(long durationMillis, IntSupplier maximumRefreshRate, boolean appleMode) {
             sampler = new AnimationFractionSampler(durationMillis, maximumRefreshRate);
+            this.appleMode = appleMode;
         }
 
         @Override public float getInterpolation(float input) {
-            return FOCUS_INTERPOLATOR.getInterpolation(sampler.sample(input));
+            float sampled = sampler.sample(input);
+            return appleMode
+                    ? AppleLyricMotionPolicy.focusInterpolation(sampled)
+                    : FOCUS_INTERPOLATOR.getInterpolation(sampled);
         }
     }
 
     private static final class ScrollInterpolator extends DecelerateInterpolator {
         private final AnimationFractionSampler sampler;
+        private final boolean appleMode;
 
-        ScrollInterpolator(long durationMillis, IntSupplier maximumRefreshRate) {
+        ScrollInterpolator(long durationMillis, IntSupplier maximumRefreshRate, boolean appleMode) {
             super(1.5f);
             sampler = new AnimationFractionSampler(durationMillis, maximumRefreshRate);
+            this.appleMode = appleMode;
         }
 
         @Override public float getInterpolation(float input) {
-            return super.getInterpolation(sampler.sample(input));
+            float sampled = sampler.sample(input);
+            return appleMode
+                    ? AppleLyricMotionPolicy.springValue(sampled)
+                    : super.getInterpolation(sampled);
         }
     }
 

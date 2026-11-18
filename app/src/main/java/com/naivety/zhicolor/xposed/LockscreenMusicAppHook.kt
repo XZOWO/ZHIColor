@@ -30,8 +30,6 @@ object LockscreenMusicAppHook {
     private const val INDICATOR_ID = "img_top_right_icon"
     private const val INDICATOR_CLASS =
         "com.oplus.systemui.plugins.shared.template.component.media.view.OplusLottieAnimationView"
-    private const val SECTION_CLASS =
-        "com.oplus.systemui.plugins.shared.template.section.media.s1"
     private const val PLUGIN_LOADER_CLASS = "com.android.systemui.shared.plugins.OPlusPluginClassLoader"
     private const val CONTROL_CENTER_HOLDER_CLASS =
         "com.oplus.systemui.qs.media.OplusMediaViewPagerAdapter\$OplusMediaViewHolder"
@@ -90,7 +88,9 @@ object LockscreenMusicAppHook {
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept { chain ->
                     val result = chain.proceed()
-                    if (chain.getArg(0) == SECTION_CLASS && result is Class<*>) {
+                    if (result is Class<*> &&
+                        LockscreenMusicAppPolicy.SECTION_SPECS.any { it.sectionClass == chain.getArg(0) }
+                    ) {
                         runCatching { installSectionType(module, result) }
                             .onFailure { Log.w(TAG, "loaded indicator hook failed", it) }
                     }
@@ -150,17 +150,16 @@ object LockscreenMusicAppHook {
     }
 
     private fun installSection(module: XposedModule, loader: ClassLoader) {
-        val type = runCatching { loader.loadClass(SECTION_CLASS) }.getOrNull() ?: return
-        installSectionType(module, type)
+        LockscreenMusicAppPolicy.SECTION_SPECS.forEach { spec ->
+            val type = runCatching { loader.loadClass(spec.sectionClass) }.getOrNull() ?: return@forEach
+            installSectionType(module, type)
+        }
     }
 
     private fun installSectionType(module: XposedModule, type: Class<*>) {
-        if (type.name != SECTION_CLASS) return
+        val binding = LockscreenMusicAppPolicy.resolveSectionBinding(type, INDICATOR_CLASS) ?: return
         synchronized(sectionTypes) {
             if (sectionTypes.containsKey(type)) return
-            val indicatorField = type.getDeclaredField("u").apply { isAccessible = true }
-            val notificationMethod = type.getDeclaredMethod("o").apply { isAccessible = true }
-            if (notificationMethod.returnType != Boolean::class.javaPrimitiveType) return
             sectionTypes[type] = true
             var hooked = 0
             type.declaredConstructors.forEach { constructor ->
@@ -172,8 +171,8 @@ object LockscreenMusicAppHook {
                             val result = chain.proceed()
                             runCatching {
                                 val section = chain.thisObject ?: return@runCatching
-                                val view = indicatorField.get(section) as? View ?: return@runCatching
-                                if (isIndicator(view)) track(view, section, notificationMethod)
+                                val view = binding.indicatorField.get(section) as? View ?: return@runCatching
+                                if (isIndicator(view)) track(view, section, binding)
                             }.onFailure { Log.w(TAG, "indicator registration failed", it) }
                             result
                         }
@@ -232,8 +231,8 @@ object LockscreenMusicAppHook {
         }
     }
 
-    private fun track(view: View, section: Any, notificationMethod: Method) {
-        track(view, StateAccess.create(section, notificationMethod), controlCenter = false)
+    private fun track(view: View, section: Any, binding: LockscreenMusicAppPolicy.SectionBinding) {
+        track(view, StateAccess.create(section, binding), controlCenter = false)
     }
 
     private fun track(view: View, state: StateAccess?, controlCenter: Boolean) {
@@ -334,8 +333,8 @@ object LockscreenMusicAppHook {
         var preDraw: ViewTreeObserver.OnPreDrawListener? = null
     }
 
-    /** Field names are bound to the verified ColorOS 17 section, never guessed on unrelated views. */
-    private class StateAccess(
+    /** Field names are bound to verified ColorOS 17 sections, never guessed on unrelated views. */
+    internal class StateAccess(
         private val section: WeakReference<Any>,
         private val notification: Method,
         private val configFlow: WeakReference<Any>,
@@ -354,17 +353,30 @@ object LockscreenMusicAppHook {
         }
 
         companion object {
-            fun create(section: Any, notification: Method): StateAccess {
-                val vm = section.javaClass.getDeclaredField("k").apply { isAccessible = true }.get(section)
-                val flow = vm.javaClass.getDeclaredField("b").apply { isAccessible = true }.get(vm)
+            fun create(section: Any, binding: LockscreenMusicAppPolicy.SectionBinding): StateAccess {
+                val vm = checkNotNull(
+                    section.javaClass.getDeclaredField(binding.spec.vmField)
+                        .apply { isAccessible = true }.get(section)
+                )
+                val flow = checkNotNull(
+                    vm.javaClass.getDeclaredField(binding.spec.configFlowField)
+                        .apply { isAccessible = true }.get(vm)
+                )
                 val value = flow.javaClass.getMethod("getValue").apply { isAccessible = true }
                 val config = checkNotNull(value.invoke(flow))
                 fun booleanField(name: String): Field = config.javaClass.getDeclaredField(name).apply {
                     check(type == Boolean::class.javaPrimitiveType)
                     isAccessible = true
                 }
-                return StateAccess(WeakReference(section), notification, WeakReference(flow), value,
-                    booleanField("v"), booleanField("i"), booleanField("j"))
+                return StateAccess(
+                    WeakReference(section),
+                    binding.notificationMethod,
+                    WeakReference(flow),
+                    value,
+                    booleanField("v"),
+                    booleanField("i"),
+                    booleanField("j")
+                )
             }
         }
     }
@@ -372,6 +384,55 @@ object LockscreenMusicAppHook {
 
 /** Pure decisions shared by the live hook and its local JVM checks. */
 internal object LockscreenMusicAppPolicy {
+    internal data class SectionSpec(
+        val sectionClass: String,
+        val indicatorField: String,
+        val notificationMethod: String,
+        val vmField: String,
+        val configFlowField: String
+    )
+
+    internal class SectionBinding(
+        val spec: SectionSpec,
+        val indicatorField: Field,
+        val notificationMethod: Method
+    )
+
+    internal val SECTION_SPECS = listOf(
+        SectionSpec(
+            sectionClass = "com.oplus.systemui.plugins.shared.template.section.media.s1",
+            indicatorField = "u",
+            notificationMethod = "o",
+            vmField = "k",
+            configFlowField = "b"
+        ),
+        SectionSpec(
+            sectionClass = "com.oplus.systemui.plugins.shared.template.section.media.x1",
+            indicatorField = "w",
+            notificationMethod = "o",
+            vmField = "l",
+            configFlowField = "c"
+        )
+    )
+
+    internal fun resolveSectionBinding(
+        type: Class<*>,
+        indicatorClassName: String =
+            "com.oplus.systemui.plugins.shared.template.component.media.view.OplusLottieAnimationView",
+        specs: List<SectionSpec> = SECTION_SPECS
+    ): SectionBinding? {
+        val spec = specs.firstOrNull { it.sectionClass == type.name } ?: return null
+        return runCatching {
+            val indicatorField = type.getDeclaredField(spec.indicatorField).apply { isAccessible = true }
+            if (indicatorField.type.name != indicatorClassName) return null
+            val notificationMethod = type.getDeclaredMethod(spec.notificationMethod).apply { isAccessible = true }
+            if (notificationMethod.returnType != Boolean::class.javaPrimitiveType) return null
+            val vmField = type.getDeclaredField(spec.vmField)
+            vmField.type.getDeclaredField(spec.configFlowField)
+            SectionBinding(spec, indicatorField, notificationMethod)
+        }.getOrNull()
+    }
+
     fun hidden(enabled: Boolean, notificationCard: Boolean, keyguardShowing: Boolean,
         alwaysOnDisplay: Boolean, screenOn: Boolean): Boolean =
         // OEM state flags publish separately; an unlit card stays hidden between lockscreen and AOD.

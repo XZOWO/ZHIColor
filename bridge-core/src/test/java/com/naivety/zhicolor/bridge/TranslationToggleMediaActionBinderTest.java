@@ -643,4 +643,87 @@ public class TranslationToggleMediaActionBinderTest {
         assertSame(newerClick, first.action);
     }
 
+    public static final class FakeOplusMediaActionEx7 {
+        final boolean enabled;
+        final Icon icon;
+        final android.net.Uri uri;
+        final boolean activityAction;
+        final Boolean hasHeartFromRating;
+        final boolean standardAction;
+        final String intentUriKey;
+
+        public FakeOplusMediaActionEx7(
+                boolean enabled,
+                Icon icon,
+                android.net.Uri uri,
+                boolean activityAction,
+                Boolean hasHeartFromRating,
+                boolean standardAction,
+                String intentUriKey) {
+            this.enabled = enabled;
+            this.icon = icon;
+            this.uri = uri;
+            this.activityAction = activityAction;
+            this.hasHeartFromRating = hasHeartFromRating;
+            this.standardAction = standardAction;
+            this.intentUriKey = intentUriKey;
+        }
+    }
+
+    public static final class FakeOplusMediaActionEx8 {
+        final boolean enabled;
+        final Icon icon;
+        final Drawable iconForAod;
+        final android.net.Uri uri;
+        final boolean activityAction;
+        final Boolean hasHeartFromRating;
+        final boolean standardAction;
+        final String intentUriKey;
+
+        public FakeOplusMediaActionEx8(
+                boolean enabled,
+                Icon icon,
+                Drawable iconForAod,
+                android.net.Uri uri,
+                boolean activityAction,
+                Boolean hasHeartFromRating,
+                boolean standardAction,
+                String intentUriKey) {
+            this.enabled = enabled;
+            this.icon = icon;
+            this.iconForAod = iconForAod;
+            this.uri = uri;
+            this.activityAction = activityAction;
+            this.hasHeartFromRating = hasHeartFromRating;
+            this.standardAction = standardAction;
+            this.intentUriKey = intentUriKey;
+        }
+    }
+
+    @Test
+    public void instantiatesBothSevenAndEightArgumentOplusMediaActionExConstructors() throws Exception {
+        FakeOplusMediaActionEx7 legacy = (FakeOplusMediaActionEx7)
+                TranslationToggleMediaActionBinder.instantiateOplusMediaActionEx(
+                        FakeOplusMediaActionEx7.class, null);
+        assertFalse(legacy.enabled);
+        assertNull(legacy.icon);
+        assertNull(legacy.uri);
+        assertFalse(legacy.activityAction);
+        assertNull(legacy.hasHeartFromRating);
+        assertFalse(legacy.standardAction);
+        assertNull(legacy.intentUriKey);
+
+        FakeOplusMediaActionEx8 updated = (FakeOplusMediaActionEx8)
+                TranslationToggleMediaActionBinder.instantiateOplusMediaActionEx(
+                        FakeOplusMediaActionEx8.class, null);
+        assertFalse(updated.enabled);
+        assertNull(updated.icon);
+        assertNull(updated.iconForAod);
+        assertNull(updated.uri);
+        assertFalse(updated.activityAction);
+        assertNull(updated.hasHeartFromRating);
+        assertFalse(updated.standardAction);
+        assertNull(updated.intentUriKey);
+    }
+
 }

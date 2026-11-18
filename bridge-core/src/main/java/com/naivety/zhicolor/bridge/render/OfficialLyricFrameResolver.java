@@ -24,7 +24,18 @@ public final class OfficialLyricFrameResolver {
             return;
         }
         result.reset(indexedLine, duplicateText);
-        if (model == null || isEmpty(normalizedText)) {
+        boolean indexedWaitingDots = indexedLine != null && indexedLine.isWaitingDots;
+        if (model == null || (isEmpty(normalizedText) && !indexedWaitingDots)) {
+            return;
+        }
+
+        if (indexedWaitingDots && isEmpty(normalizedText)) {
+            int mappedIndex = model.indexOfLine(indexedLine);
+            result.complete(
+                    indexedLine,
+                    null,
+                    mappedIndex >= 0 ? mappedIndex : model.displayIndexAt(position),
+                    "indexed-waiting-dots");
             return;
         }
 

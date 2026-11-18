@@ -93,13 +93,16 @@ enum LyricUiPreset {
     }
 
     private static LyricUiConfig legacyDefaultAppearance(LyricUiConfig source) {
+        int legacyMotion = source != null && source.motionMode == LyricUiConfig.MOTION_APPLE
+                ? LyricUiConfig.MOTION_APPLE
+                : LyricUiConfig.MOTION_STANDARD;
         return DEFAULT.apply(source).buildUpon()
                 .inactiveOpacityPercent(44).inactiveTranslationOpacityPercent(44)
                 .inactiveRowFadeEnabled(false)
                 .blurEnabled(false).blurRadiusTenthsPx(40)
                 .scaleEnabled(false).inactiveScalePercent(90)
                 .glowEnabled(true).glowIntensityPercent(100).glowRadiusPercent(18)
-                .motionMode(LyricUiConfig.MOTION_STANDARD).build();
+                .motionMode(legacyMotion).build();
     }
 
     static boolean hasLegacyPresetSpacing(LyricUiConfig config) {

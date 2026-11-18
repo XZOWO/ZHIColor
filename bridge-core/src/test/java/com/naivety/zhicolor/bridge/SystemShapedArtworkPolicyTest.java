@@ -23,6 +23,20 @@ public class SystemShapedArtworkPolicyTest {
                 Map.entry("kotlinx.coroutines.flow.p", Mutable.class))));
     }
 
+    private static SystemShapedArtworkPolicy policyV2() {
+        return new SystemShapedArtworkPolicy(new SystemShapedArtworkPolicy.NativeAccess(Map.ofEntries(
+                Map.entry(SECTION + "MPImmersiveSectionViewModel$bgModel$1", BuilderV2.class),
+                Map.entry(SECTION + "p", OwnerV2.class),
+                Map.entry(MODEL + "b", FullScreen.class), Map.entry(MODEL + "c", FlowLight.class),
+                Map.entry(DATA + "t", Media.class), Map.entry(DATA + "y", Artwork.class),
+                Map.entry(DATA + "A", Icon.class), Map.entry(DATA + "b", Result.class),
+                Map.entry(DATA + "a", Palette.class),
+                Map.entry("android.graphics.drawable.Drawable", Drawable.class),
+                Map.entry("com.oplus.systemui.plugins.r8.lj", ReadOnlyV2.class),
+                Map.entry("com.oplus.systemui.plugins.r8.Mg", State.class),
+                Map.entry("kotlinx.coroutines.flow.q", Mutable.class))));
+    }
+
     @Test public void defaultRetainsNativeModelAndForcedModeUsesExactOemPaletteWithoutGeometryChanges() {
         SystemShapedArtworkPolicy policy = policy();
         Builder builder = new Builder();
@@ -159,6 +173,39 @@ public class SystemShapedArtworkPolicyTest {
         assertTrue(builder.this$0.mutable().value instanceof FlowLight);
     }
 
+    @Test public void rebuiltPluginVariantSupportsFlowLightToggleAndRejectsMismatchedWrappers() {
+        SystemShapedArtworkPolicy policy = policyV2();
+        BuilderV2 builder = new BuilderV2();
+        FullScreen original = new FullScreen();
+        Mutable state = builder.this$0.mutable();
+        state.value = policy.modelBuilt(builder, original);
+        assertSame(original, state.value);
+        policy.setEnabled(true);
+        assertTrue(state.value instanceof FlowLight);
+        policy.setEnabled(false);
+        assertSame(original, state.value);
+
+        // Reject mixing Variant 2 VM (section.media.p) with Variant 1 wrapper (r8.jj).
+        SystemShapedArtworkPolicy mismatched = new SystemShapedArtworkPolicy(
+                new SystemShapedArtworkPolicy.NativeAccess(Map.ofEntries(
+                        Map.entry(SECTION + "MPImmersiveSectionViewModel$bgModel$1", BuilderV2.class),
+                        Map.entry(SECTION + "p", OwnerV2.class),
+                        Map.entry(MODEL + "b", FullScreen.class), Map.entry(MODEL + "c", FlowLight.class),
+                        Map.entry(DATA + "t", Media.class), Map.entry(DATA + "y", Artwork.class),
+                        Map.entry(DATA + "A", Icon.class), Map.entry(DATA + "b", Result.class),
+                        Map.entry(DATA + "a", Palette.class),
+                        Map.entry("android.graphics.drawable.Drawable", Drawable.class),
+                        Map.entry("com.oplus.systemui.plugins.r8.jj", ReadOnlyV2.class),
+                        Map.entry("com.oplus.systemui.plugins.r8.Mg", State.class),
+                        Map.entry("kotlinx.coroutines.flow.q", Mutable.class))));
+        BuilderV2 mixedBuilder = new BuilderV2();
+        FullScreen untouched = new FullScreen();
+        mixedBuilder.this$0.mutable().value = untouched;
+        mismatched.setEnabled(true);
+        assertSame(untouched, mixedBuilder.this$0.mutable().value);
+        assertEquals(0, mixedBuilder.this$0.mutable().writes);
+    }
+
     static final class Builder {
         final Owner this$0 = new Owner();
         Object L$0 = new Media();
@@ -167,8 +214,17 @@ public class SystemShapedArtworkPolicyTest {
         final ReadOnly m = new ReadOnly();
         Mutable mutable() { return (Mutable)m.b; }
     }
+    static final class BuilderV2 {
+        final OwnerV2 this$0 = new OwnerV2();
+        Object L$0 = new Media();
+    }
+    static final class OwnerV2 {
+        final ReadOnlyV2 m = new ReadOnlyV2();
+        Mutable mutable() { return (Mutable)m.b; }
+    }
     interface State {}
     static final class ReadOnly { final State b = new Mutable(); }
+    static final class ReadOnlyV2 { final State b = new Mutable(); }
     static final class Mutable implements State {
         Object value; int writes; Runnable afterWrite;
         public Object getValue() { return value; }

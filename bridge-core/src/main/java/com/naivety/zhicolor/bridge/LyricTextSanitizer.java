@@ -7,6 +7,8 @@ public final class LyricTextSanitizer {
     static final int WORD_JOINER_CODE_POINT = 0x2060;
     static final int BYTE_ORDER_MARK_CODE_POINT = 0xFEFF;
     static final String ZERO_WIDTH_SPACE = codePointString(ZERO_WIDTH_SPACE_CODE_POINT);
+    public static final String WAITING_DOTS_MARKER =
+            ZERO_WIDTH_SPACE + codePointString(WORD_JOINER_CODE_POINT);
 
     private LyricTextSanitizer() {
     }
@@ -55,6 +57,24 @@ public final class LyricTextSanitizer {
             }
         }
         return true;
+    }
+
+    /** True when {@code value} is the standalone waiting-dots placeholder token. */
+    public static boolean isWaitingDotsMarker(CharSequence value) {
+        if (value == null || value.length() < WAITING_DOTS_MARKER.length()) {
+            return false;
+        }
+        int start = 0;
+        int end = value.length();
+        while (start < end && Character.isWhitespace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return end - start == WAITING_DOTS_MARKER.length()
+                && value.charAt(start) == ZERO_WIDTH_SPACE_CODE_POINT
+                && value.charAt(start + 1) == WORD_JOINER_CODE_POINT;
     }
 
     static String codePointString(int codePoint) {

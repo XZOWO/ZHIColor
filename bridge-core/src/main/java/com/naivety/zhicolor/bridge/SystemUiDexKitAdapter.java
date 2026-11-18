@@ -165,18 +165,32 @@ public final class SystemUiDexKitAdapter {
         Class<?> seedlingBundleClass = classLoader.loadClass(
                 "com.oplus.systemui.seedlingservice.utils.SeedlingMediaDataHandleUtils");
 
-        Method dealEndTag = rusManagerClass.getDeclaredMethod(
+        Method dealEndTag = findDeclaredMethod(
+                rusManagerClass,
                 "dealEndTag",
-                String.class,
-                Set.class,
-                Set.class,
-                List.class,
-                List.class,
-                Map.class,
-                Map.class,
-                Map.class,
-                Map.class,
-                Map.class);
+                new Class<?>[]{
+                        String.class,
+                        Set.class,
+                        Set.class,
+                        List.class,
+                        List.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class},
+                new Class<?>[]{
+                        String.class,
+                        Set.class,
+                        Set.class,
+                        List.class,
+                        List.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class});
         Method saveListToSp = findDeclaredMethod(
                 rusManagerClass,
                 "saveListToSP",
@@ -199,6 +213,18 @@ public final class SystemUiDexKitAdapter {
                         Map.class,
                         Map.class,
                         Map.class,
+                        int.class},
+                new Class<?>[]{
+                        Context.class,
+                        Set.class,
+                        Set.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
                         int.class});
         Method getRusWhiteList = findOptionalDeclaredMethod(rusManagerClass, "getRusWhiteList");
         Method mediaRusConfigWhiteListGetter = findMediaRusConfigWhiteListGetter(classLoader);
@@ -212,6 +238,14 @@ public final class SystemUiDexKitAdapter {
                         Map.class,
                         Map.class},
                 new Class<?>[]{
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class,
+                        Map.class},
+                new Class<?>[]{
+                        Map.class,
                         Map.class,
                         Map.class,
                         Map.class,
@@ -374,9 +408,10 @@ public final class SystemUiDexKitAdapter {
     }
 
     static boolean isDealEndTagShape(Method method) {
-        return Modifier.isStatic(method.getModifiers())
-                && method.getReturnType() == void.class
-                && hasParameterTypes(
+        if (!Modifier.isStatic(method.getModifiers()) || method.getReturnType() != void.class) {
+            return false;
+        }
+        return hasParameterTypes(
                 method,
                 String.class,
                 Set.class,
@@ -387,12 +422,26 @@ public final class SystemUiDexKitAdapter {
                 Map.class,
                 Map.class,
                 Map.class,
+                Map.class)
+                || hasParameterTypes(
+                method,
+                String.class,
+                Set.class,
+                Set.class,
+                List.class,
+                List.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
                 Map.class);
     }
 
     /**
      * ColorOS 16.0.9.x: instance method with {@code (Context, Set, Set, Map x5)}.
-     * ColorOS 16.0.10.x: static method with {@code (Context, Set, Set, Map x5, Map, int)}.
+     * ColorOS 16.0.10.x / 17.0.0: static method with {@code (Context, Set, Set, Map x6, int)}.
+     * ColorOS 17.0.1: static method with {@code (Context, Set, Set, Map x7, int)}.
      */
     static boolean isSaveListToSpShape(Method method) {
         if (method.getReturnType() != void.class) {
@@ -421,11 +470,25 @@ public final class SystemUiDexKitAdapter {
                 Map.class,
                 Map.class,
                 Map.class,
+                int.class)
+                || hasParameterTypes(
+                method,
+                Context.class,
+                Set.class,
+                Set.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
                 int.class);
     }
 
     /**
-     * ColorOS 16.0.9.x passes five maps; 16.0.10.x adds a sixth (lyric enable) map.
+     * ColorOS 16.0.9.x passes five maps; 16.0.10.x / 17.0.0 pass six; 17.0.1 adds a seventh
+     * (immersive full-bg) map.
      */
     static boolean isUpdatePkgActionsRuleShape(Method method) {
         if (Modifier.isStatic(method.getModifiers()) || method.getReturnType() != void.class) {
@@ -440,6 +503,15 @@ public final class SystemUiDexKitAdapter {
                 Map.class)
                 || hasParameterTypes(
                 method,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class,
+                Map.class)
+                || hasParameterTypes(
+                method,
+                Map.class,
                 Map.class,
                 Map.class,
                 Map.class,

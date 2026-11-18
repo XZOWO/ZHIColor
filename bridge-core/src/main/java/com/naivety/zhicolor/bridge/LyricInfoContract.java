@@ -119,6 +119,25 @@ public final class LyricInfoContract {
         }
     }
 
+    static NormalizedPayload withOfficialLyric(NormalizedPayload base, String nextLyric) {
+        if (base == null || base.lyricInfo == null || base.payload == null
+                || !containsTimedLrc(nextLyric) || nextLyric.equals(base.payload.lyric)) {
+            return base;
+        }
+        try {
+            JSONObject object = new JSONObject(base.lyricInfo);
+            object.put(JSON_LYRIC, nextLyric);
+            String updatedJson = object.toString();
+            Payload updatedPayload = parse(updatedJson);
+            if (updatedPayload == null) {
+                return base;
+            }
+            return new NormalizedPayload(updatedJson, updatedPayload, true);
+        } catch (Throwable ignored) {
+            return base;
+        }
+    }
+
     private static Map<Long, List<String>> explicitSimultaneousMainRows(JSONArray metadata) {
         LinkedHashMap<Long, List<String>> result = new LinkedHashMap<>();
         if (metadata == null) return result;

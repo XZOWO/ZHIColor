@@ -178,17 +178,47 @@ public final class WordLyricModel {
     public WordLine firstDisplayLine() {
         if (WordLyricRenderConstants.OFFICIAL_SLOT_ALIAS_REUSE_ENABLED && !officialLines.isEmpty()) {
             for (WordLine line : officialLines) {
-                if (line != null && !isEmpty(line.text)) {
+                if (line != null && !line.isWaitingDots && !isEmpty(line.text)) {
                     return line;
                 }
             }
         }
         for (WordLine line : lines) {
-            if (line != null && !isEmpty(line.text)) {
+            if (line != null && !line.isWaitingDots && !isEmpty(line.text)) {
                 return line;
             }
         }
         return null;
+    }
+
+    public void insertLineChronologically(WordLine line) {
+        if (line == null) {
+            return;
+        }
+        int insertionIndex = firstLineIndexAfterOrAt(line.timeMillis);
+        lines.add(insertionIndex, line);
+        lineIndexCacheSize = -1;
+        renderableTextIndexBuilt = false;
+    }
+
+    public WordLine findNearestWaitingDotsLine(long position) {
+        WordLine closest = null;
+        long bestDistance = Long.MAX_VALUE;
+        for (int i = 0; i < lines.size(); i++) {
+            WordLine line = lines.get(i);
+            if (line == null || !line.isWaitingDots) {
+                continue;
+            }
+            if (position >= line.timeMillis && position < line.endTimeMillis) {
+                return line;
+            }
+            long distance = position < 0L ? 0L : Math.abs(line.timeMillis - position);
+            if (closest == null || distance < bestDistance) {
+                closest = line;
+                bestDistance = distance;
+            }
+        }
+        return closest;
     }
 
     public int firstDisplayLineIndex() {

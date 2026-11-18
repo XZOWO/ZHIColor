@@ -147,7 +147,7 @@ internal fun lyricGroups(): List<LyricGroup> = listOf(
         LyricField("inactive_row_fade_enabled",stringResource(R.string.ov_distance_fade),"switch"),
         LyricField("inactive_row_fade_percent",stringResource(R.string.ov_fade_strength),min=50,max=100,dependsOn="inactive_row_fade_enabled"))),
     LyricGroup(stringResource(R.string.ov_group_motion),listOf(
-        LyricField("motion_mode",stringResource(R.string.ov_motion),"choice",options=listOf(stringResource(R.string.ov_standard),stringResource(R.string.ov_gentle),stringResource(R.string.ov_off))),
+        LyricField("motion_mode",stringResource(R.string.ov_motion),"choice",options=listOf(stringResource(R.string.ov_standard),stringResource(R.string.ov_gentle),stringResource(R.string.ov_off),stringResource(R.string.scr_apple_style))),
         LyricField("lyric_ui_inactive_blur_enabled",stringResource(R.string.ov_inactive_blur),"switch"),
         LyricField("blur_radius_tenths_px",stringResource(R.string.ov_blur_radius),min=0,max=80,step=5,factor=10f,unit="px",dependsOn="lyric_ui_inactive_blur_enabled"),
         LyricField("lyric_ui_scroll_scale_enabled",stringResource(R.string.ov_inactive_scale),"switch"),

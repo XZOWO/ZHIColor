@@ -92,6 +92,7 @@
     <string name="scr_separator">;\u0020</string>
     <string name="scr_background">Background</string>
     <string name="scr_font">Font</string>
+    <string name="scr_lyric_position">Lyric Position</string>
     <string name="scr_follow_system">Follow system</string>
     <string name="scr_apple_style">Apple style</string>
     <string name="scr_system_shaped_artwork">System shaped artwork</string>

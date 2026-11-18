@@ -92,6 +92,7 @@
     <string name="scr_separator">；</string>
     <string name="scr_background">背景</string>
     <string name="scr_font">字体</string>
+    <string name="scr_lyric_position">歌词位置</string>
     <string name="scr_follow_system">跟随系统</string>
     <string name="scr_apple_style">Apple样式</string>
     <string name="scr_system_shaped_artwork">系统异形封面</string>
