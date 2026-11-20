@@ -246,8 +246,7 @@ public class LyricWaitingDotsPolicyTest {
                 "[00:00.000]" + LyricTextSanitizer.WAITING_DOTS_MARKER + "\n"
                         + "[00:10.000]First line\n"
                         + "[00:15.100]" + LyricTextSanitizer.WAITING_DOTS_MARKER + "\n"
-                        + "[00:26.000]Second line\n"
-                        + "[00:34.000]" + LyricTextSanitizer.ZERO_WIDTH_SPACE;
+                        + "[00:26.000]Second line";
         assertEquals(expectedOfficial, injected.payload.lyric);
 
         WordLyricModel model = new NativeLyricModelAssembler(null).assemble(
@@ -257,7 +256,7 @@ public class LyricWaitingDotsPolicyTest {
                 true,
                 "",
                 injected.payload.lineMetadata).model;
-        assertEquals(5, model.officialLines.size());
+        assertEquals(4, model.officialLines.size());
         assertEquals(4, model.lines.size());
         assertTrue(model.lines.get(0).isWaitingDots);
         assertEquals(0L, model.lines.get(0).timeMillis);
@@ -267,7 +266,6 @@ public class LyricWaitingDotsPolicyTest {
         assertEquals(15_100L, model.lines.get(2).timeMillis);
         assertEquals(26_000L, model.lines.get(2).endTimeMillis);
         assertEquals("Second line", model.lines.get(3).text);
-        assertNull(model.officialLines.get(4)); // tail spacer stays null placeholder
 
         assertSame(model.lines.get(1), model.firstDisplayLine());
         assertTrue(model.isBeforeFirstProgressStart(2_000L));
@@ -356,5 +354,46 @@ public class LyricWaitingDotsPolicyTest {
         assertEquals(1f, LyricWaitingDotsPolicy.expandCollapseCurve(LyricUiConfig.MOTION_APPLE, 1f), 0.0001f);
         float curveMid = LyricWaitingDotsPolicy.expandCollapseCurve(LyricUiConfig.MOTION_APPLE, 0.5f);
         assertTrue(curveMid > 0.5f && curveMid <= 1f);
+    }
+
+    @Test
+    public void overallThreeDotGroupTransformScalesPositionsAndRadiiTogetherWithoutEdgeClipping() {
+        float textSize = 36f;
+        float pitch = textSize * LyricWaitingDotsPolicy.DOT_PITCH_EM;
+        float radius = textSize * (LyricWaitingDotsPolicy.DOT_DIAMETER_EM * 0.5f);
+        float left = 20f;
+        float width = 320f;
+
+        LyricWaitingDotsPolicy.DotFrameState peak =
+                LyricWaitingDotsPolicy.evaluateDots(10_000L, 20_000L, 12_000L, true, true);
+        assertEquals(1.2f, peak.groupScale, 0.005f);
+        assertEquals(peak.groupScale, peak.scales[0], 0.0001f);
+        assertEquals(peak.groupScale, peak.scales[1], 0.0001f);
+        assertEquals(peak.groupScale, peak.scales[2], 0.0001f);
+
+        // Overall 3-dot scale scales inter-dot spacing proportionally around the middle dot.
+        for (int alignment : new int[]{LyricUiConfig.ALIGN_START, LyricUiConfig.ALIGN_CENTER, LyricUiConfig.ALIGN_END}) {
+            for (boolean rtl : new boolean[]{false, true}) {
+                float pivot = LyricWaitingDotsPolicy.groupCenterX(alignment, rtl, left, width, textSize);
+                float s0Peak = LyricWaitingDotsPolicy.scaledDotCenterX(0, alignment, rtl, left, width, textSize, 1.2f);
+                float s1Peak = LyricWaitingDotsPolicy.scaledDotCenterX(1, alignment, rtl, left, width, textSize, 1.2f);
+                float s2Peak = LyricWaitingDotsPolicy.scaledDotCenterX(2, alignment, rtl, left, width, textSize, 1.2f);
+                assertEquals(pivot, s1Peak, 0.001f);
+                assertEquals(pitch * 1.2f, Math.abs(s1Peak - s0Peak), 0.001f);
+                assertEquals(pitch * 1.2f, Math.abs(s2Peak - s1Peak), 0.001f);
+
+                // Even at MAX_SCALE = 1.2x, outermost dot edges remain inside [left, left + width].
+                float minX = Math.min(s0Peak, s2Peak) - radius * 1.2f;
+                float maxX = Math.max(s0Peak, s2Peak) + radius * 1.2f;
+                assertTrue("Left edge must not clip at 1.2x", minX >= left - 0.01f);
+                assertTrue("Right edge must not clip at 1.2x", maxX <= left + width + 0.01f);
+
+                // Exit shrink to 0.2x pulls all 3 dots tightly inward around groupCenterX.
+                float s0Shrink = LyricWaitingDotsPolicy.scaledDotCenterX(0, alignment, rtl, left, width, textSize, 0.2f);
+                float s2Shrink = LyricWaitingDotsPolicy.scaledDotCenterX(2, alignment, rtl, left, width, textSize, 0.2f);
+                assertEquals(pitch * 0.2f, Math.abs(pivot - s0Shrink), 0.001f);
+                assertEquals(pitch * 0.2f, Math.abs(s2Shrink - pivot), 0.001f);
+            }
+        }
     }
 }

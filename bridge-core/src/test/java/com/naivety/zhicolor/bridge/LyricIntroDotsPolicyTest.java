@@ -46,8 +46,8 @@ public class LyricIntroDotsPolicyTest {
         assertEquals(2f * LyricIntroDotsPolicy.rowHeight(20f, 0f),
                 LyricIntroDotsPolicy.rowHeight(40f, 0f), 0.0001f);
         float capped = LyricIntroDotsPolicy.boundedTextSize(100f, 24f);
-        float expectedSpan = 2f * LyricWaitingDotsPolicy.DOT_PITCH_EM
-                + LyricWaitingDotsPolicy.DOT_DIAMETER_EM * LyricIntroDotsPolicy.MAX_SCALE;
+        float expectedSpan = (2f * LyricWaitingDotsPolicy.DOT_PITCH_EM
+                + LyricWaitingDotsPolicy.DOT_DIAMETER_EM) * LyricIntroDotsPolicy.MAX_SCALE;
         assertEquals(24f, capped * expectedSpan, 0.0001f);
     }
 

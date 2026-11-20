@@ -50,6 +50,7 @@ object LockscreenMusicAppHook {
     private var revision = -1L
     @Volatile private var enabled = false
     @Volatile private var controlCenterEnabled = false
+    @Volatile private var fluidCloudEnabled = false
 
     fun install(module: XposedModule, classLoader: ClassLoader) {
         if (!installed.compareAndSet(false, true)) return
@@ -288,7 +289,11 @@ object LockscreenMusicAppHook {
 
     private fun shouldHide(record: Indicator): Boolean =
         if (record.controlCenter) controlCenterEnabled
-        else enabled && record.state?.isLockscreenCard() == true
+        else {
+            val state = record.state
+            (fluidCloudEnabled && state?.isFluidCloudCard() == true) ||
+                (enabled && state?.isLockscreenCard() == true)
+        }
 
     private fun applyVisibility(view: View, record: Indicator) {
         runCatching {
@@ -313,6 +318,7 @@ object LockscreenMusicAppHook {
             revision = nextRevision
             enabled = snapshot.getBoolean(ToolsSettings.HIDE_LOCKSCREEN_MUSIC_APP, false)
             controlCenterEnabled = snapshot.getBoolean(ToolsSettings.HIDE_CONTROL_CENTER_MUSIC_APP, false)
+            fluidCloudEnabled = snapshot.getBoolean(ToolsSettings.HIDE_FLUID_CLOUD_MUSIC_APP, false)
         }
         onMain {
             val current = synchronized(records) { records.entries.map { it.key to it.value } }
@@ -350,6 +356,12 @@ object LockscreenMusicAppHook {
             val config = value.invoke(flow) ?: return false
             return LockscreenMusicAppPolicy.hidden(true, true, keyguard.getBoolean(config),
                 aod.getBoolean(config), screenOn.getBoolean(config))
+        }
+
+        /** Expanded Fluid Cloud cards are the non-notification media cards (ENTRY_STATUS_BAR). */
+        fun isFluidCloudCard(): Boolean {
+            val owner = section.get() ?: return false
+            return LockscreenMusicAppPolicy.fluidCloudHidden(true, notification.invoke(owner) == true)
         }
 
         companion object {
@@ -437,6 +449,9 @@ internal object LockscreenMusicAppPolicy {
         alwaysOnDisplay: Boolean, screenOn: Boolean): Boolean =
         // OEM state flags publish separately; an unlit card stays hidden between lockscreen and AOD.
         enabled && notificationCard && (keyguardShowing || alwaysOnDisplay || !screenOn)
+
+    fun fluidCloudHidden(enabled: Boolean, notificationCard: Boolean): Boolean =
+        enabled && !notificationCard
 
     fun visibility(nativeVisibility: Int, hidden: Boolean): Int =
         if (hidden && nativeVisibility == 0) 4 /* View.INVISIBLE */ else nativeVisibility

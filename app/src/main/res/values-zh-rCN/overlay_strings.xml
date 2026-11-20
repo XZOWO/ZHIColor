@@ -43,6 +43,8 @@
     <string name="ov_fade_strength">渐隐强度</string>
     <string name="ov_group_motion">动态效果</string>
     <string name="ov_motion">动效</string>
+    <string name="ov_secondary_animation">子句动画</string>
+    <string name="ov_normal_style">普通样式</string>
     <string name="ov_standard">标准</string>
     <string name="ov_gentle">轻柔</string>
     <string name="ov_off">关闭</string>
@@ -54,7 +56,9 @@
     <string name="ov_lift_strength">上浮幅度</string>
     <string name="ov_word_emphasis">长音强调</string>
     <string name="ov_chinese_tail_emphasis">中文尾字强调</string>
+    <string name="ov_wrapped_window_motion">长句切句优化</string>
     <string name="ov_translation_marquee">翻译横向滚动</string>
+    <string name="ov_translation_marquee_return">翻译滚动优化</string>
     <string name="ov_group_playback">显示与播放</string>
     <string name="ov_default_translation">默认显示翻译</string>
     <string name="ov_translation_display">翻译显示</string>
@@ -63,6 +67,7 @@
     <string name="ov_line_progress">逐行歌词进度</string>
     <string name="ov_translation_progress">翻译进度</string>
     <string name="ov_secondary_progress">子句进度</string>
+    <string name="ov_scrub_sync">随进度条调整歌词</string>
     <string name="ov_refresh_rate">刷新率</string>
     <string name="ov_follow_system">跟随系统</string>
     <string name="ov_keep_screen_on">歌词页亮屏</string>

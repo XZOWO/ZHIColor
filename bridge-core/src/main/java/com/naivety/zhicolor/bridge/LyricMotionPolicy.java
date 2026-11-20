@@ -5,7 +5,20 @@ import com.naivety.zhicolor.bridge.render.ZhiToolLyricMotion;
 
 /** Reduced motion retains the transitions needed to follow the lyric's position. */
 final class LyricMotionPolicy {
+    static final double APPLE_SECONDARY_SHOW_STIFFNESS = 30d;
+    static final double APPLE_SECONDARY_SHOW_DAMPING = 9d;
+    private static final double APPLE_SECONDARY_HIDE_PERIOD_SECONDS = 0.2d;
+    private static final double APPLE_SECONDARY_HIDE_OMEGA =
+            (2d * Math.PI) / APPLE_SECONDARY_HIDE_PERIOD_SECONDS;
+    static final double APPLE_SECONDARY_HIDE_STIFFNESS =
+            APPLE_SECONDARY_HIDE_OMEGA * APPLE_SECONDARY_HIDE_OMEGA;
+    static final double APPLE_SECONDARY_HIDE_DAMPING = 2d * APPLE_SECONDARY_HIDE_OMEGA;
+
     private LyricMotionPolicy() {}
+
+    static boolean appleSecondaryMotion(int secondaryMotionMode) {
+        return secondaryMotionMode != LyricUiConfig.SECONDARY_MOTION_STANDARD;
+    }
 
     static boolean animate(int mode, boolean lowFrameRate, boolean systemAnimatorsEnabled) {
         return mode != LyricUiConfig.MOTION_OFF && !lowFrameRate && systemAnimatorsEnabled;

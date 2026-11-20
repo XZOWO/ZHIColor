@@ -114,4 +114,19 @@ public class LyricOverlapPolicyTest {
         assertEquals(1000, LyricOverlapHandoffPolicy.delayMillis(2000, 4000, true, 2f));
         assertEquals(2000, LyricOverlapHandoffPolicy.delayMillis(2000, 4000, true, 1f));
     }
+
+    @Test public void shorterOverlappingSecondLineStopsSingingBeforeEarlierLongLineEnds() {
+        WordLyricModel m = model(line(1000, 8000, "long A", true), line(2000, 5000, "short B", true));
+        assertEquals(0, m.focusIndexAt(3000));
+        assertEquals(1, m.overlapIndexAt(3000));
+        assertTrue(m.isSingingLine(0, 3000));
+        assertTrue(m.isSingingLine(1, 3000));
+
+        // Once short B explicitly finishes at 5000ms while long A continues until 8000ms,
+        // short B stops singing so it can smoothly scale down while long A stays active.
+        assertEquals(0, m.focusIndexAt(6000));
+        assertEquals(-1, m.overlapIndexAt(6000));
+        assertTrue(m.isSingingLine(0, 6000));
+        assertFalse(m.isSingingLine(1, 6000));
+    }
 }

@@ -133,6 +133,22 @@ final class OfficialLyricMotionController {
         }
     }
 
+    /**
+     * Cancels the native single-row transition AnimatorSet on a ColorOS 17 holder when ZHIColor
+     * owns multi-line active row scaling, preventing dual-owner scale fighting on overlapping rows.
+     */
+    static void cancelHolderAnimator(Object holder) throws ReflectiveOperationException {
+        if (holder == null) {
+            return;
+        }
+        Field animatorField = findUniqueField(holder.getClass(), AnimatorSet.class, true);
+        AnimatorSet animator = (AnimatorSet) animatorField.get(holder);
+        if (animator != null) {
+            animator.cancel();
+            animatorField.set(holder, null);
+        }
+    }
+
     private static boolean extendsLinearSmoothScroller(Class<?> type) {
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             if ("androidx.recyclerview.widget.LinearSmoothScroller".equals(current.getName())) {

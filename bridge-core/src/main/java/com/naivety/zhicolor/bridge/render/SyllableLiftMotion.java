@@ -1,5 +1,6 @@
 package com.naivety.zhicolor.bridge.render;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -11,6 +12,7 @@ public final class SyllableLiftMotion {
     private static final double REST_EPSILON = 0.001d;
     private static final long MAX_OBSERVATION_GAP_MS = 1_000L;
     private static final long POSITION_JUMP_TOLERANCE_MS = 500L;
+    private static final long FALLBACK_HAN_CHAR_STAGGER_MS = 150L;
 
     private final long[] starts;
     private final boolean[] valid, moving;
@@ -22,7 +24,12 @@ public final class SyllableLiftMotion {
     private long lastPosition, lastNow;
 
     public SyllableLiftMotion(List<WordRange> ranges) {
-        int count = ranges == null ? 0 : ranges.size();
+        this(null, ranges, -1L);
+    }
+
+    public SyllableLiftMotion(String text, List<WordRange> ranges, long lineEndTimeMillis) {
+        List<WordRange> effectiveRanges = expandRangesForLift(text, ranges, lineEndTimeMillis);
+        int count = effectiveRanges == null ? 0 : effectiveRanges.size();
         starts = new long[count];
         valid = new boolean[count];
         moving = new boolean[count];
@@ -36,7 +43,7 @@ public final class SyllableLiftMotion {
         int[] boundaries = new int[count * 2];
         int boundaryCount = 0;
         for (int i = 0; i < count; i++) {
-            WordRange range = ranges.get(i);
+            WordRange range = effectiveRanges.get(i);
             if (range == null || range.start < 0 || range.end <= range.start) continue;
             valid[i] = true;
             starts[i] = range.timeMillis;
@@ -72,6 +79,235 @@ public final class SyllableLiftMotion {
             }
         }
         characterSegmentCount = segments;
+    }
+
+    /**
+     * Keeps Western/Latin word/syllable ranges intact while splitting Chinese (Han)
+     * multi-character ranges or identical-timestamp Han runs into per-character triggers
+     * so Chinese characters always lift one by one.
+     */
+    static List<WordRange> expandRangesForLift(
+            String text, List<WordRange> ranges, long lineEndTimeMillis) {
+        if (text == null || text.isEmpty() || ranges == null || ranges.isEmpty()) {
+            return ranges;
+        }
+        int textLength = text.length();
+        int count = ranges.size();
+        boolean anyHan = false;
+        for (int i = 0; i < count; i++) {
+            WordRange range = ranges.get(i);
+            if (range != null && range.start >= 0 && range.end > range.start
+                    && range.end <= textLength && containsHan(text, range.start, range.end)) {
+                anyHan = true;
+                break;
+            }
+        }
+        if (!anyHan) {
+            return ranges;
+        }
+        ArrayList<WordRange> expanded = new ArrayList<>(count);
+        int i = 0;
+        while (i < count) {
+            WordRange range = ranges.get(i);
+            if (range == null || range.start < 0 || range.end <= range.start
+                    || range.end > textLength || !containsHan(text, range.start, range.end)) {
+                expanded.add(range);
+                i++;
+                continue;
+            }
+            // Coalesce consecutive contiguous Han-containing ranges that share the exact same
+            // start timestamp so grouped same-timestamp Chinese glyphs still lift one by one.
+            int runEndIndex = i;
+            int combinedEnd = range.end;
+            long maxExplicitEnd = range.endTimeMillis;
+            while (runEndIndex + 1 < count) {
+                WordRange next = ranges.get(runEndIndex + 1);
+                if (next == null || next.timeMillis != range.timeMillis
+                        || next.start < combinedEnd || next.end <= next.start
+                        || next.end > textLength
+                        || !containsOnlyWhitespaceBetween(text, combinedEnd, next.start)
+                        || !containsHan(text, next.start, next.end)) {
+                    break;
+                }
+                combinedEnd = next.end;
+                if (next.endTimeMillis > maxExplicitEnd) {
+                    maxExplicitEnd = next.endTimeMillis;
+                }
+                runEndIndex++;
+            }
+            int[] unitBounds = partitionHanAwareLiftUnits(text, range.start, combinedEnd);
+            int unitCount = unitBounds.length / 2;
+            if (unitCount <= 1) {
+                for (int k = i; k <= runEndIndex; k++) {
+                    expanded.add(ranges.get(k));
+                }
+                i = runEndIndex + 1;
+                continue;
+            }
+            long startMs = range.timeMillis;
+            long spanEndMs = maxExplicitEnd > startMs ? maxExplicitEnd : -1L;
+            if (spanEndMs <= startMs) {
+                for (int nextIdx = runEndIndex + 1; nextIdx < count; nextIdx++) {
+                    WordRange following = ranges.get(nextIdx);
+                    if (following != null && following.timeMillis > startMs) {
+                        spanEndMs = following.timeMillis;
+                        break;
+                    }
+                }
+            }
+            if (spanEndMs <= startMs && lineEndTimeMillis > startMs) {
+                spanEndMs = lineEndTimeMillis;
+            }
+            if (spanEndMs <= startMs) {
+                spanEndMs = startMs + (long) unitCount * FALLBACK_HAN_CHAR_STAGGER_MS;
+            }
+            double duration = (double) (spanEndMs - startMs);
+            for (int u = 0; u < unitCount; u++) {
+                int uStart = unitBounds[u * 2];
+                int uEnd = unitBounds[u * 2 + 1];
+                long triggerMs = u == 0
+                        ? startMs
+                        : Math.min(spanEndMs, (long) Math.ceil(startMs + duration * u / unitCount));
+                long nextTriggerMs = u + 1 < unitCount
+                        ? Math.min(spanEndMs, (long) Math.ceil(startMs + duration * (u + 1) / unitCount))
+                        : spanEndMs;
+                expanded.add(new WordRange(triggerMs, uStart, uEnd, Math.max(triggerMs, nextTriggerMs)));
+            }
+            i = runEndIndex + 1;
+        }
+        return expanded;
+    }
+
+    private static int[] partitionHanAwareLiftUnits(String text, int start, int end) {
+        int[] boundaries = CharLiftGeometry.graphemeBoundaries(text, start, end);
+        if (boundaries.length < 2) {
+            return new int[]{start, end};
+        }
+        int graphemeCount = boundaries.length - 1;
+        int[] unitStarts = new int[graphemeCount];
+        int[] unitEnds = new int[graphemeCount];
+        boolean[] unitIsWestern = new boolean[graphemeCount];
+        int unitCount = 0;
+        int pendingLeadingStart = -1;
+        for (int g = 0; g < graphemeCount; g++) {
+            int gStart = boundaries[g];
+            int gEnd = boundaries[g + 1];
+            if (isWhitespaceOnly(text, gStart, gEnd)) {
+                pendingLeadingStart = -1;
+                continue;
+            }
+            if (containsHan(text, gStart, gEnd)) {
+                int resolvedStart = pendingLeadingStart >= 0 ? pendingLeadingStart : gStart;
+                pendingLeadingStart = -1;
+                unitStarts[unitCount] = resolvedStart;
+                unitEnds[unitCount] = gEnd;
+                unitIsWestern[unitCount] = false;
+                unitCount++;
+            } else if (isLeadingPunctuation(text, gStart, gEnd)) {
+                if (pendingLeadingStart < 0) {
+                    pendingLeadingStart = gStart;
+                }
+            } else if (isTrailingPunctuation(text, gStart, gEnd)) {
+                if (unitCount > 0) {
+                    unitEnds[unitCount - 1] = gEnd;
+                } else {
+                    int resolvedStart = pendingLeadingStart >= 0 ? pendingLeadingStart : gStart;
+                    pendingLeadingStart = -1;
+                    unitStarts[unitCount] = resolvedStart;
+                    unitEnds[unitCount] = gEnd;
+                    unitIsWestern[unitCount] = false;
+                    unitCount++;
+                }
+            } else {
+                // Contiguous non-Han word/syllable letters stay grouped as one Western unit.
+                if (unitCount > 0
+                        && unitIsWestern[unitCount - 1]
+                        && unitEnds[unitCount - 1] == gStart
+                        && pendingLeadingStart < 0) {
+                    unitEnds[unitCount - 1] = gEnd;
+                } else {
+                    int resolvedStart = pendingLeadingStart >= 0 ? pendingLeadingStart : gStart;
+                    pendingLeadingStart = -1;
+                    unitStarts[unitCount] = resolvedStart;
+                    unitEnds[unitCount] = gEnd;
+                    unitIsWestern[unitCount] = true;
+                    unitCount++;
+                }
+            }
+        }
+        if (pendingLeadingStart >= 0) {
+            if (unitCount > 0) {
+                unitEnds[unitCount - 1] = end;
+            } else {
+                unitStarts[unitCount] = pendingLeadingStart;
+                unitEnds[unitCount] = end;
+                unitCount++;
+            }
+        }
+        int[] packed = new int[unitCount * 2];
+        for (int u = 0; u < unitCount; u++) {
+            packed[u * 2] = unitStarts[u];
+            packed[u * 2 + 1] = unitEnds[u];
+        }
+        return packed;
+    }
+
+    private static boolean containsHan(String text, int start, int end) {
+        for (int offset = start; offset < end; ) {
+            int codePoint = text.codePointAt(offset);
+            if (Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN) {
+                return true;
+            }
+            offset += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
+    private static boolean containsOnlyWhitespaceBetween(String text, int start, int end) {
+        return start >= end || isWhitespaceOnly(text, start, end);
+    }
+
+    private static boolean isWhitespaceOnly(String text, int start, int end) {
+        for (int offset = start; offset < end; ) {
+            int codePoint = text.codePointAt(offset);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) {
+                return false;
+            }
+            offset += Character.charCount(codePoint);
+        }
+        return true;
+    }
+
+    private static boolean isLeadingPunctuation(String text, int start, int end) {
+        boolean any = false;
+        for (int offset = start; offset < end; ) {
+            int codePoint = text.codePointAt(offset);
+            int type = Character.getType(codePoint);
+            if (type != Character.START_PUNCTUATION && type != Character.INITIAL_QUOTE_PUNCTUATION) {
+                return false;
+            }
+            any = true;
+            offset += Character.charCount(codePoint);
+        }
+        return any;
+    }
+
+    private static boolean isTrailingPunctuation(String text, int start, int end) {
+        boolean any = false;
+        for (int offset = start; offset < end; ) {
+            int codePoint = text.codePointAt(offset);
+            int type = Character.getType(codePoint);
+            if (type != Character.END_PUNCTUATION
+                    && type != Character.FINAL_QUOTE_PUNCTUATION
+                    && type != Character.OTHER_PUNCTUATION
+                    && type != Character.DASH_PUNCTUATION
+                    && type != Character.CONNECTOR_PUNCTUATION) {
+                return false;
+            }
+            any = true;
+            offset += Character.charCount(codePoint);
+        }
+        return any;
     }
 
     /** First observation and discontinuities settle immediately; ordinary retargets keep velocity. */

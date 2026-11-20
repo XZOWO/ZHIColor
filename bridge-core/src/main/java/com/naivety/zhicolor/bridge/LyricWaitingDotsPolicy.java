@@ -90,15 +90,17 @@ public final class LyricWaitingDotsPolicy {
         }
     }
 
-    /** Evaluated AM 4-phase per-dot opacities and scale factors. */
+    /** Evaluated AM 4-phase per-dot opacities and unified 3-dot group scale factor. */
     public static final class DotFrameState {
         public final float[] opacities = new float[DOT_COUNT];
         public final float[] scales = new float[DOT_COUNT];
+        public final float groupScale;
         public final boolean anyVisible;
 
-        private DotFrameState(float[] opacities, float[] scales, boolean anyVisible) {
+        private DotFrameState(float[] opacities, float[] scales, float groupScale, boolean anyVisible) {
             System.arraycopy(opacities, 0, this.opacities, 0, DOT_COUNT);
             System.arraycopy(scales, 0, this.scales, 0, DOT_COUNT);
+            this.groupScale = groupScale;
             this.anyVisible = anyVisible;
         }
     }
@@ -613,7 +615,7 @@ public final class LyricWaitingDotsPolicy {
                 opacities[i] = 0f;
                 scales[i] = EXIT_SHRINK_SCALE;
             }
-            return new DotFrameState(opacities, scales, false);
+            return new DotFrameState(opacities, scales, EXIT_SHRINK_SCALE, false);
         }
         if (!motionEnabled) {
             double endS = endMillis / 1000.0;
@@ -626,7 +628,7 @@ public final class LyricWaitingDotsPolicy {
                 opacities[i] = elapsedS >= fillAt ? 1f : 0.25f;
                 scales[i] = 1f;
             }
-            return new DotFrameState(opacities, scales, true);
+            return new DotFrameState(opacities, scales, 1f, true);
         }
 
         double startS = startMillis / 1000.0;
@@ -658,7 +660,7 @@ public final class LyricWaitingDotsPolicy {
                 scales[i] = groupScale;
                 anyVisible |= alpha > 0.002f;
             }
-            return new DotFrameState(opacities, scales, anyVisible);
+            return new DotFrameState(opacities, scales, groupScale, anyVisible);
         }
 
         // Phase 4: Gather group from resting breath scale to 1.2x, fade out, and shrink to 0.2x.
@@ -683,7 +685,7 @@ public final class LyricWaitingDotsPolicy {
             opacities[i] = exitAlpha;
             scales[i] = exitScale;
         }
-        return new DotFrameState(opacities, scales, exitAlpha > 0.002f);
+        return new DotFrameState(opacities, scales, exitScale, exitAlpha > 0.002f);
     }
 
     private static float evaluateOverallBreathScale(double startS, double breathTriggerS, double elapsedS) {
@@ -776,9 +778,30 @@ public final class LyricWaitingDotsPolicy {
     }
 
     public static float boundedTextSize(float mainTextSize, float availableWidth) {
-        float groupSpanEm = (DOT_COUNT - 1) * DOT_PITCH_EM + DOT_DIAMETER_EM * MAX_SCALE;
+        float groupSpanEm = ((DOT_COUNT - 1) * DOT_PITCH_EM + DOT_DIAMETER_EM) * MAX_SCALE;
         float maximum = Math.max(0f, availableWidth) / Math.max(0.1f, groupSpanEm);
         return Math.max(0f, Math.min(mainTextSize, maximum));
+    }
+
+    /** Horizontal center (transform pivot) of the 3-dot group, reserving full MAX_SCALE headroom. */
+    public static float groupCenterX(
+            int alignment,
+            boolean rtl,
+            float left,
+            float availableWidth,
+            float textSize) {
+        float radius = textSize * (DOT_DIAMETER_EM * 0.5f);
+        float pitch = textSize * DOT_PITCH_EM;
+        float unscaledHalfSpan = (DOT_COUNT - 1) * 0.5f * pitch;
+        float scaledHalfWidth = (unscaledHalfSpan + radius) * MAX_SCALE;
+        if (alignment == LyricUiConfig.ALIGN_CENTER) {
+            return left + availableWidth * 0.5f;
+        }
+        boolean alignRight = alignment == LyricUiConfig.ALIGN_END ? !rtl : rtl;
+        float edgeOffset = Math.min(availableWidth * 0.5f, scaledHalfWidth);
+        return alignRight
+                ? left + availableWidth - edgeOffset
+                : left + edgeOffset;
     }
 
     public static float dotCenterX(
@@ -788,22 +811,25 @@ public final class LyricWaitingDotsPolicy {
             float left,
             float availableWidth,
             float textSize) {
-        float radius = textSize * (DOT_DIAMETER_EM * 0.5f);
         float pitch = textSize * DOT_PITCH_EM;
-        float edgePad = radius * MAX_SCALE;
-        float unscaledSpan = (DOT_COUNT - 1) * pitch;
-        float totalVisualWidth = unscaledSpan + 2f * edgePad;
-        float firstDotCenterX;
-        if (alignment == LyricUiConfig.ALIGN_CENTER) {
-            firstDotCenterX = left + availableWidth * 0.5f - unscaledSpan * 0.5f;
-        } else {
-            boolean alignRight = alignment == LyricUiConfig.ALIGN_END ? !rtl : rtl;
-            firstDotCenterX = alignRight
-                    ? left + availableWidth - Math.max(edgePad, totalVisualWidth - edgePad)
-                    : left + Math.min(availableWidth * 0.5f, edgePad);
-        }
+        float pivotX = groupCenterX(alignment, rtl, left, availableWidth, textSize);
         int visualOrder = rtl ? (DOT_COUNT - 1 - dotIndex) : dotIndex;
-        return firstDotCenterX + visualOrder * pitch;
+        float centerOffset = (visualOrder - (DOT_COUNT - 1) * 0.5f) * pitch;
+        return pivotX + centerOffset;
+    }
+
+    /** Rendered horizontal center after applying uniform overall 3-dot group scale around the group pivot. */
+    public static float scaledDotCenterX(
+            int dotIndex,
+            int alignment,
+            boolean rtl,
+            float left,
+            float availableWidth,
+            float textSize,
+            float groupScale) {
+        float pivotX = groupCenterX(alignment, rtl, left, availableWidth, textSize);
+        float unscaledX = dotCenterX(dotIndex, alignment, rtl, left, availableWidth, textSize);
+        return pivotX + (unscaledX - pivotX) * groupScale;
     }
 
     private static double easeInOut(double t) {

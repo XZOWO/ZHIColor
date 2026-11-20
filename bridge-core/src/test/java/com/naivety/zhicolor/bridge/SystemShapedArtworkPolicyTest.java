@@ -2,6 +2,10 @@ package com.naivety.zhicolor.bridge;
 
 import org.junit.Test;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import static org.junit.Assert.*;
 
 public class SystemShapedArtworkPolicyTest {
@@ -10,6 +14,10 @@ public class SystemShapedArtworkPolicyTest {
     private static final String DATA = "com.oplus.systemui.plugins.shared.data.media.model.";
 
     private static SystemShapedArtworkPolicy policy() {
+        return policy(pkg -> true);
+    }
+
+    private static SystemShapedArtworkPolicy policy(Predicate<String> packageFilter) {
         return new SystemShapedArtworkPolicy(new SystemShapedArtworkPolicy.NativeAccess(Map.ofEntries(
                 Map.entry(SECTION + "MPImmersiveSectionViewModel$bgModel$1", Builder.class),
                 Map.entry(SECTION + "q", Owner.class),
@@ -20,7 +28,7 @@ public class SystemShapedArtworkPolicyTest {
                 Map.entry("android.graphics.drawable.Drawable", Drawable.class),
                 Map.entry("com.oplus.systemui.plugins.r8.jj", ReadOnly.class),
                 Map.entry("com.oplus.systemui.plugins.r8.Lg", State.class),
-                Map.entry("kotlinx.coroutines.flow.p", Mutable.class))));
+                Map.entry("kotlinx.coroutines.flow.p", Mutable.class))), packageFilter);
     }
 
     private static SystemShapedArtworkPolicy policyV2() {
@@ -206,9 +214,57 @@ public class SystemShapedArtworkPolicyTest {
         assertEquals(0, mixedBuilder.this$0.mutable().writes);
     }
 
+    @Test public void mediaCardPackageRemainsShapedWhilePausedOrControllerUnboundAndRestoresWhenPlayerDisabled() {
+        AtomicReference<Set<String>> enabledPackages = new AtomicReference<>(
+                Set.of("com.apple.android.music"));
+        SystemShapedArtworkPolicy policy = policy(pkg -> enabledPackages.get().contains(pkg));
+        policy.setEnabled(true);
+
+        Builder musicBuilder = new Builder("com.apple.android.music");
+        FullScreen musicOriginal = new FullScreen();
+        Mutable musicState = musicBuilder.this$0.mutable();
+        musicState.value = policy.modelBuilt(musicBuilder, musicOriginal);
+        assertTrue(musicState.value instanceof FlowLight);
+
+        Builder otherBuilder = new Builder("com.tencent.mm");
+        FullScreen otherOriginal = new FullScreen();
+        Mutable otherState = otherBuilder.this$0.mutable();
+        otherState.value = policy.modelBuilt(otherBuilder, otherOriginal);
+        assertSame(otherOriginal, otherState.value);
+
+        // Pausing / dropping lyric controller while system-shaped artwork remains enabled keeps FlowLight.
+        policy.setEnabled(true);
+        assertTrue(musicState.value instanceof FlowLight);
+        assertSame(otherOriginal, otherState.value);
+
+        // Disabling the player restores its native square model immediately.
+        enabledPackages.set(Set.of());
+        policy.setEnabled(true);
+        assertSame(musicOriginal, musicState.value);
+    }
+
+    @Test public void earlyModelBuiltBeforeRuntimeSnapshotRepairsToShapedOncePlayerBecomesEnabled() {
+        AtomicBoolean playerEnabled = new AtomicBoolean(false);
+        SystemShapedArtworkPolicy policy = policy(pkg -> playerEnabled.get() && "com.apple.android.music".equals(pkg));
+        Builder builder = new Builder("com.apple.android.music");
+        FullScreen original = new FullScreen();
+        Mutable state = builder.this$0.mutable();
+
+        // Early startup emission before runtime settings finish loading stores nativeModel and FlowLight candidate.
+        state.value = policy.modelBuilt(builder, original);
+        assertSame(original, state.value);
+
+        // Once settings load and enable both the option and the player, FlowLight is published without a track change.
+        playerEnabled.set(true);
+        policy.setEnabled(true);
+        assertTrue(state.value instanceof FlowLight);
+    }
+
     static final class Builder {
         final Owner this$0 = new Owner();
-        Object L$0 = new Media();
+        Object L$0;
+        Builder() { this("com.example.player"); }
+        Builder(String packageName) { this.L$0 = new Media(packageName); }
     }
     static final class Owner {
         final ReadOnly m = new ReadOnly();
@@ -233,7 +289,12 @@ public class SystemShapedArtworkPolicyTest {
             if (afterWrite != null) afterWrite.run();
         }
     }
-    static final class Media { final Artwork d = new Artwork(); }
+    static final class Media {
+        final Artwork d = new Artwork();
+        final String m;
+        Media() { this("com.example.player"); }
+        Media(String packageName) { this.m = packageName; }
+    }
     static final class Artwork { final Icon a = new Icon(); }
     static final class Icon { Result e = new Result(); }
     static final class Result { final Palette b = new Palette(); }

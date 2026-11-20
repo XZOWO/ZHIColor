@@ -85,6 +85,8 @@ public final class WordLine {
     public int mainLineWindowStart;
     public int mainLineWindowPreviousStart;
     public long mainLineWindowChangedAtMs;
+    public final LyricWrappedWindowMotion wrappedWindow = new LyricWrappedWindowMotion();
+    public final LyricTranslationMarqueeMotion translationMarquee = new LyricTranslationMarqueeMotion();
     /** Last AOD visual role; bright progress may include an additional overlapping vocal. */
     public boolean aodVisualFocused;
 
@@ -94,6 +96,8 @@ public final class WordLine {
     public int rowVisualScaleActiveIndex = Integer.MIN_VALUE;
     public final ZhiToolLyricMotion.Value visualFade = new ZhiToolLyricMotion.Value();
     public final ZhiToolLyricMotion.Value visualFocus = new ZhiToolLyricMotion.Value();
+    public final ZhiToolLyricMotion.Value visualScale = new ZhiToolLyricMotion.Value();
+    public boolean visualScaleInitialized;
     public final LyricLineExitPolicy highlightExit = new LyricLineExitPolicy();
     public final ZhiToolLyricMotion.Value visualSecondary = new ZhiToolLyricMotion.Value();
     public boolean secondaryFocus;
@@ -116,6 +120,7 @@ public final class WordLine {
     public int slotHeightTranslationHash;
     public int slotHeightTranslationLength = -1;
     public int slotHeightTranslationAmountKey = -1;
+    public float appliedSecondaryAmount = -1f;
     public boolean slotHeightScrollScaleEnabled;
     public boolean slotHeightForceOfficial;
     public int slotHeightCollapsedValue = -1;
@@ -156,7 +161,7 @@ public final class WordLine {
         this.normalizedText = WordLyricRenderSupport.normalizeLine(text);
         this.textMatchKey = WordLyricRenderSupport.lyricMatchKeyFromNormalized(normalizedText);
         this.words = words;
-        this.syllableLift = new SyllableLiftMotion(words);
+        this.syllableLift = new SyllableLiftMotion(text, words, this.endTimeMillis);
         this.wordEmphasis = new WordEmphasisMotion(text, words);
         this.timingMode = timingMode == null
                 ? LyricTimingMode.LINE_TIMED

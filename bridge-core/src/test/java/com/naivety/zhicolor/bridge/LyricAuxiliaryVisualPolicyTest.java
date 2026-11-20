@@ -200,6 +200,23 @@ public final class LyricAuxiliaryVisualPolicyTest {
         }
     }
 
+    @Test public void appleSecondaryExitPreservesBothVocalLayoutAndAppearanceSprings() {
+        WordLine parent = exiting();
+        ZhiToolLyricMotion.Value[] channels = channels(parent);
+        float[] starts = beginPartialExpansion(channels);
+        LyricAuxiliaryVisualPolicy.synchronizeExit(parent, 110L, false);
+        assertEquals(starts[0] * 0.125f, parent.secondaryLayout.value(275L), 0.000001f);
+        assertEquals(starts[1] * 0.125f, parent.visualSecondary.value(275L), 0.000001f);
+        assertEquals(
+                ZhiToolLyricMotion.easeOutCubic(265f / 500L),
+                parent.vocalLayout.value(275L),
+                0.000001f);
+        assertEquals(
+                ZhiToolLyricMotion.easeOutCubic(265f / 600L),
+                parent.vocalAppearance.value(275L),
+                0.000001f);
+    }
+
     private static ZhiToolLyricMotion.Value[] channels(WordLine parent) {
         return new ZhiToolLyricMotion.Value[]{parent.secondaryLayout, parent.visualSecondary,
                 parent.vocalLayout, parent.vocalAppearance};

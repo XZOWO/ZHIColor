@@ -43,6 +43,8 @@
     <string name="ov_fade_strength">Fade strength</string>
     <string name="ov_group_motion">Motion</string>
     <string name="ov_motion">Motion style</string>
+    <string name="ov_secondary_animation">Secondary line animation</string>
+    <string name="ov_normal_style">Normal style</string>
     <string name="ov_standard">Standard</string>
     <string name="ov_gentle">Gentle</string>
     <string name="ov_off">Off</string>
@@ -54,7 +56,9 @@
     <string name="ov_lift_strength">Lift height</string>
     <string name="ov_word_emphasis">Sustained-note emphasis</string>
     <string name="ov_chinese_tail_emphasis">Chinese ending emphasis</string>
+    <string name="ov_wrapped_window_motion">Smooth long-line paging</string>
     <string name="ov_translation_marquee">Scroll long translations</string>
+    <string name="ov_translation_marquee_return">Smooth translation scroll</string>
     <string name="ov_group_playback">Display and playback</string>
     <string name="ov_default_translation">Show translation by default</string>
     <string name="ov_translation_display">Translation visibility</string>
@@ -63,6 +67,7 @@
     <string name="ov_line_progress">Line progress</string>
     <string name="ov_translation_progress">Translation progress</string>
     <string name="ov_secondary_progress">Secondary line progress</string>
+    <string name="ov_scrub_sync">Sync lyrics with progress bar</string>
     <string name="ov_refresh_rate">Refresh rate</string>
     <string name="ov_follow_system">System default</string>
     <string name="ov_keep_screen_on">Keep lyrics screen on</string>

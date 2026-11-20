@@ -10,6 +10,8 @@ final class LyricUiConfig {
     static final int MOTION_REDUCED = 1;
     static final int MOTION_OFF = 2;
     static final int MOTION_APPLE = 3;
+    static final int SECONDARY_MOTION_STANDARD = 0;
+    static final int SECONDARY_MOTION_APPLE = 1;
     static final int WEIGHT_SYSTEM = 0;
     static final int WEIGHT_REGULAR = 1;
     static final int WEIGHT_MEDIUM = 2;
@@ -44,13 +46,17 @@ final class LyricUiConfig {
     final String primaryColor;
     final String glowColor;
     final int motionMode;
+    final int secondaryMotionMode;
+    final boolean wrappedWindowMotionEnabled;
     final boolean translationMarqueeEnabled;
+    final boolean translationMarqueeReturnEnabled;
     final int maxRefreshRateHz;
     final boolean defaultTranslationEnabled;
     final int translationDisplayMode;
     final boolean lineTimedProgressEnabled;
     final boolean translationProgressEnabled;
     final boolean secondaryProgressEnabled;
+    final boolean scrubSyncEnabled;
     final boolean charLiftEnabled;
     final int charLiftStrengthPercent;
     final boolean wordEmphasisEnabled;
@@ -98,7 +104,10 @@ final class LyricUiConfig {
         primaryColor = sanitizeColor(builder.primaryColor, "#FFFFFF");
         glowColor = sanitizeColor(builder.glowColor, "#FFD68A");
         motionMode = clamp(builder.motionMode, MOTION_STANDARD, MOTION_APPLE);
+        secondaryMotionMode = clamp(builder.secondaryMotionMode, SECONDARY_MOTION_STANDARD, SECONDARY_MOTION_APPLE);
+        wrappedWindowMotionEnabled = builder.wrappedWindowMotionEnabled;
         translationMarqueeEnabled = builder.translationMarqueeEnabled;
+        translationMarqueeReturnEnabled = builder.translationMarqueeReturnEnabled;
         maxRefreshRateHz = sanitizeRefreshRate(builder.maxRefreshRateHz);
         defaultTranslationEnabled = builder.defaultTranslationEnabled;
         translationDisplayMode = clamp(builder.translationDisplayMode,
@@ -106,6 +115,7 @@ final class LyricUiConfig {
         lineTimedProgressEnabled = builder.lineTimedProgressEnabled;
         translationProgressEnabled = builder.translationProgressEnabled;
         secondaryProgressEnabled = builder.secondaryProgressEnabled;
+        scrubSyncEnabled = builder.scrubSyncEnabled;
         charLiftEnabled = builder.charLiftEnabled;
         charLiftStrengthPercent = clamp(builder.charLiftStrengthPercent, 0, 200);
         wordEmphasisEnabled = builder.wordEmphasisEnabled;
@@ -143,11 +153,14 @@ final class LyricUiConfig {
                 .blurEnabled(defaults.blurEnabled)
                 .scaleEnabled(defaults.scaleEnabled)
                 .glowEnabled(defaults.glowEnabled)
+                .wrappedWindowMotionEnabled(defaults.wrappedWindowMotionEnabled)
                 .translationMarqueeEnabled(defaults.translationMarqueeEnabled)
+                .translationMarqueeReturnEnabled(defaults.translationMarqueeReturnEnabled)
                 .defaultTranslationEnabled(defaults.defaultTranslationEnabled)
                 .lineTimedProgressEnabled(defaults.lineTimedProgressEnabled)
                 .translationProgressEnabled(defaults.translationProgressEnabled)
                 .secondaryProgressEnabled(defaults.secondaryProgressEnabled)
+                .scrubSyncEnabled(defaults.scrubSyncEnabled)
                 .charLiftEnabled(defaults.charLiftEnabled)
                 .wordEmphasisEnabled(defaults.wordEmphasisEnabled)
                 .chineseTailEmphasisEnabled(defaults.chineseTailEmphasisEnabled)
@@ -180,6 +193,7 @@ final class LyricUiConfig {
                 .primaryColor(defaults.primaryColor)
                 .glowColor(defaults.glowColor)
                 .motionMode(defaults.motionMode)
+                .secondaryMotionMode(defaults.secondaryMotionMode)
                 .mainFontTenthsSp(defaults.mainFontTenthsSp)
                 .translationFontRatioPercent(defaults.translationFontRatioPercent)
                 .secondaryFontRatioPercent(defaults.secondaryFontRatioPercent)
@@ -232,13 +246,17 @@ final class LyricUiConfig {
                 && glowIntensityPercent == other.glowIntensityPercent
                 && glowRadiusPercent == other.glowRadiusPercent
                 && motionMode == other.motionMode
+                && secondaryMotionMode == other.secondaryMotionMode
+                && wrappedWindowMotionEnabled == other.wrappedWindowMotionEnabled
                 && translationMarqueeEnabled == other.translationMarqueeEnabled
+                && translationMarqueeReturnEnabled == other.translationMarqueeReturnEnabled
                 && maxRefreshRateHz == other.maxRefreshRateHz
                 && defaultTranslationEnabled == other.defaultTranslationEnabled
                 && translationDisplayMode == other.translationDisplayMode
                 && lineTimedProgressEnabled == other.lineTimedProgressEnabled
                 && translationProgressEnabled == other.translationProgressEnabled
                 && secondaryProgressEnabled == other.secondaryProgressEnabled
+                && scrubSyncEnabled == other.scrubSyncEnabled
                 && charLiftEnabled == other.charLiftEnabled
                 && charLiftStrengthPercent == other.charLiftStrengthPercent
                 && wordEmphasisEnabled == other.wordEmphasisEnabled
@@ -266,10 +284,11 @@ final class LyricUiConfig {
                 verticalFadeLengthTenthsDp, inactiveRowFadeEnabled, inactiveRowFadePercent,
                 blurEnabled, blurRadiusTenthsPx,
                 scaleEnabled, inactiveScalePercent, glowEnabled, glowIntensityPercent,
-                glowRadiusPercent, primaryColor, glowColor, motionMode,
-                translationMarqueeEnabled, maxRefreshRateHz,
+                glowRadiusPercent, primaryColor, glowColor, motionMode, secondaryMotionMode,
+                wrappedWindowMotionEnabled, translationMarqueeEnabled,
+                translationMarqueeReturnEnabled, maxRefreshRateHz,
                 defaultTranslationEnabled, translationDisplayMode, lineTimedProgressEnabled,
-                translationProgressEnabled, secondaryProgressEnabled,
+                translationProgressEnabled, secondaryProgressEnabled, scrubSyncEnabled,
                 charLiftEnabled, charLiftStrengthPercent,
                 wordEmphasisEnabled, chineseTailEmphasisEnabled,
                 screenTimeoutEnabled, screenTimeoutSeconds,
@@ -299,13 +318,17 @@ final class LyricUiConfig {
         private String primaryColor = "#FFFFFF";
         private String glowColor = "#FFD68A";
         private int motionMode = MOTION_APPLE;
+        private int secondaryMotionMode = SECONDARY_MOTION_APPLE;
+        private boolean wrappedWindowMotionEnabled = true;
         private boolean translationMarqueeEnabled = true;
+        private boolean translationMarqueeReturnEnabled = true;
         private int maxRefreshRateHz;
         private boolean defaultTranslationEnabled = false;
         private int translationDisplayMode = TRANSLATION_ALL_LINES;
         private boolean lineTimedProgressEnabled = LyricUiSettings.DEFAULT_LINE_TIMED_PROGRESS_ENABLED;
         private boolean translationProgressEnabled = LyricUiSettings.DEFAULT_TRANSLATION_PROGRESS_ENABLED;
         private boolean secondaryProgressEnabled = LyricUiSettings.DEFAULT_SECONDARY_PROGRESS_ENABLED;
+        private boolean scrubSyncEnabled = true;
         private boolean charLiftEnabled = LyricUiSettings.DEFAULT_CHAR_LIFT_ENABLED;
         private int charLiftStrengthPercent = LyricUiSettings.DEFAULT_CHAR_LIFT_STRENGTH_PERCENT;
         private boolean wordEmphasisEnabled = true;
@@ -346,13 +369,17 @@ final class LyricUiConfig {
             primaryColor = source.primaryColor;
             glowColor = source.glowColor;
             motionMode = source.motionMode;
+            secondaryMotionMode = source.secondaryMotionMode;
+            wrappedWindowMotionEnabled = source.wrappedWindowMotionEnabled;
             translationMarqueeEnabled = source.translationMarqueeEnabled;
+            translationMarqueeReturnEnabled = source.translationMarqueeReturnEnabled;
             maxRefreshRateHz = source.maxRefreshRateHz;
             defaultTranslationEnabled = source.defaultTranslationEnabled;
             translationDisplayMode = source.translationDisplayMode;
             lineTimedProgressEnabled = source.lineTimedProgressEnabled;
             translationProgressEnabled = source.translationProgressEnabled;
             secondaryProgressEnabled = source.secondaryProgressEnabled;
+            scrubSyncEnabled = source.scrubSyncEnabled;
             charLiftEnabled = source.charLiftEnabled;
             charLiftStrengthPercent = source.charLiftStrengthPercent;
             wordEmphasisEnabled = source.wordEmphasisEnabled;
@@ -410,13 +437,17 @@ final class LyricUiConfig {
         Builder primaryColor(String v) { primaryColor = v; return this; }
         Builder glowColor(String v) { glowColor = v; return this; }
         Builder motionMode(int v) { motionMode = v; return this; }
+        Builder secondaryMotionMode(int v) { secondaryMotionMode = v; return this; }
+        Builder wrappedWindowMotionEnabled(boolean v) { wrappedWindowMotionEnabled = v; return this; }
         Builder translationMarqueeEnabled(boolean v) { translationMarqueeEnabled = v; return this; }
+        Builder translationMarqueeReturnEnabled(boolean v) { translationMarqueeReturnEnabled = v; return this; }
         Builder maxRefreshRateHz(int v) { maxRefreshRateHz = v; return this; }
         Builder defaultTranslationEnabled(boolean v) { defaultTranslationEnabled = v; return this; }
         Builder translationDisplayMode(int v) { translationDisplayMode = v; return this; }
         Builder lineTimedProgressEnabled(boolean v) { lineTimedProgressEnabled = v; return this; }
         Builder translationProgressEnabled(boolean v) { translationProgressEnabled = v; return this; }
         Builder secondaryProgressEnabled(boolean v) { secondaryProgressEnabled = v; return this; }
+        Builder scrubSyncEnabled(boolean v) { scrubSyncEnabled = v; return this; }
         Builder charLiftEnabled(boolean v) { charLiftEnabled = v; return this; }
         Builder charLiftStrengthPercent(int v) { charLiftStrengthPercent = v; return this; }
         Builder wordEmphasisEnabled(boolean v) { wordEmphasisEnabled = v; return this; }

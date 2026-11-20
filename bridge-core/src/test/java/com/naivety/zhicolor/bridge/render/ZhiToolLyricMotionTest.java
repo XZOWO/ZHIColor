@@ -53,6 +53,24 @@ public class ZhiToolLyricMotionTest {
     }
 
     @Test
+    public void retargetFocusFollowsAppleFocusCurveAndInterruptsSmoothly() {
+        ZhiToolLyricMotion.Value scale = new ZhiToolLyricMotion.Value();
+        scale.reset(0.90f);
+        scale.retargetFocus(1.00f, 1_000L, AppleLyricMotionPolicy.FOCUS_MS, true, true);
+        assertTrue(scale.isRunning(1_000L));
+        float midExpected = 0.90f + 0.10f * AppleLyricMotionPolicy.focusInterpolation(0.5f);
+        assertEquals(midExpected, scale.value(1_000L + AppleLyricMotionPolicy.FOCUS_MS / 2L), 0.0005f);
+
+        // Retargeting mid-flight preserves current scale without snapping.
+        float beforeReverse = scale.value(1_000L + AppleLyricMotionPolicy.FOCUS_MS / 2L);
+        scale.retargetFocus(0.90f, 1_000L + AppleLyricMotionPolicy.FOCUS_MS / 2L,
+                AppleLyricMotionPolicy.FOCUS_MS, true, true);
+        assertEquals(beforeReverse, scale.value(1_000L + AppleLyricMotionPolicy.FOCUS_MS / 2L), 0.0005f);
+        assertEquals(0.90f, scale.value(1_000L + AppleLyricMotionPolicy.FOCUS_MS * 2L), 0.0001f);
+        assertFalse(scale.isRunning(1_000L + AppleLyricMotionPolicy.FOCUS_MS * 2L));
+    }
+
+    @Test
     public void longFrameGapFinishesAtTheExactTarget() {
         ZhiToolLyricMotion.Value value = new ZhiToolLyricMotion.Value();
         value.reset(100f);
@@ -74,6 +92,53 @@ public class ZhiToolLyricMotionTest {
         value.retarget(1f, 100L, 1_000L, false);
         assertEquals(1f, value.value(100L), EPSILON);
         assertFalse(value.isRunning(100L));
+    }
+
+    @Test
+    public void physicsSpringApproachesTargetSmoothlyAndPreservesVelocityOnInterruption() {
+        double hideOmega = (2d * Math.PI) / 0.2d;
+        double hideStiffness = hideOmega * hideOmega;
+        double hideDamping = 2d * hideOmega;
+
+        ZhiToolLyricMotion.Value show = new ZhiToolLyricMotion.Value();
+        show.reset(0f);
+        show.retargetSpring(1f, 0L, 30d, 9d, true);
+        assertTrue(show.isRunning(0L));
+        float mid = show.value(300L);
+        assertTrue(mid > 0.3f && mid < 1.02f);
+
+        // Repeated calls with identical spring target/parameters keep the active trajectory.
+        show.retargetSpring(1f, 300L, 30d, 9d, true);
+        assertEquals(mid, show.value(300L), EPSILON);
+        assertEquals(1f, show.value(3_000L), 0.001f);
+        assertFalse(show.isRunning(3_000L));
+
+        // Critically damped 0.2s hide spring decays without negative undershoot and settles quickly.
+        ZhiToolLyricMotion.Value hide = new ZhiToolLyricMotion.Value();
+        hide.reset(1f);
+        hide.retargetSpring(0f, 0L, hideStiffness, hideDamping, true);
+        float previous = 1f;
+        for (long t = 20L; t <= 400L; t += 20L) {
+            float sample = hide.value(t);
+            assertTrue(sample >= -0.0005f && sample <= previous + EPSILON);
+            previous = sample;
+        }
+        assertEquals(0f, hide.value(500L), 0.001f);
+        assertFalse(hide.isRunning(500L));
+
+        // Interrupting show mid-flight preserves continuity at the interruption timestamp.
+        ZhiToolLyricMotion.Value interrupted = new ZhiToolLyricMotion.Value();
+        interrupted.reset(0f);
+        interrupted.retargetSpring(1f, 0L, 30d, 9d, true);
+        float beforeReverse = interrupted.value(200L);
+        interrupted.retargetSpring(0f, 200L, hideStiffness, hideDamping, true);
+        assertEquals(beforeReverse, interrupted.value(200L), 0.001f);
+        assertEquals(0f, interrupted.value(1_000L), 0.001f);
+
+        // Non-animated spring update settles immediately.
+        interrupted.retargetSpring(1f, 1_100L, 30d, 9d, false);
+        assertEquals(1f, interrupted.value(1_100L), EPSILON);
+        assertFalse(interrupted.isRunning(1_100L));
     }
 
     @Test

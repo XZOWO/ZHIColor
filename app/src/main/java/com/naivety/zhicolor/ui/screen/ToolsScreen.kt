@@ -42,6 +42,7 @@ fun ToolsScreen(bottomInnerPadding: Dp = 0.dp) {
     val preferences = remember(context) { context.getSharedPreferences(ToolsSettings.PREFERENCES, 0) }
     var hideLockscreenIcon by remember(context) { mutableStateOf(ToolsSettings.hideLockscreenMusicApp(context)) }
     var hideControlCenterIcon by remember(context) { mutableStateOf(ToolsSettings.hideControlCenterMusicApp(context)) }
+    var hideFluidCloudIcon by remember(context) { mutableStateOf(ToolsSettings.hideFluidCloudMusicApp(context)) }
     DisposableEffect(preferences) {
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             when (key) {
@@ -49,6 +50,8 @@ fun ToolsScreen(bottomInnerPadding: Dp = 0.dp) {
                     hideLockscreenIcon = ToolsSettings.hideLockscreenMusicApp(context)
                 ToolsSettings.HIDE_CONTROL_CENTER_MUSIC_APP ->
                     hideControlCenterIcon = ToolsSettings.hideControlCenterMusicApp(context)
+                ToolsSettings.HIDE_FLUID_CLOUD_MUSIC_APP ->
+                    hideFluidCloudIcon = ToolsSettings.hideFluidCloudMusicApp(context)
             }
         }
         preferences.registerOnSharedPreferenceChangeListener(listener)
@@ -93,6 +96,14 @@ fun ToolsScreen(bottomInnerPadding: Dp = 0.dp) {
                         onCheckedChange = { hidden ->
                             ToolsSettings.setHideControlCenterMusicApp(context, hidden)
                             hideControlCenterIcon = hidden
+                        },
+                    )
+                    SwitchPreference(
+                        title = stringResource(R.string.tool_hide_fluid_cloud_music_app),
+                        checked = hideFluidCloudIcon,
+                        onCheckedChange = { hidden ->
+                            ToolsSettings.setHideFluidCloudMusicApp(context, hidden)
+                            hideFluidCloudIcon = hidden
                         },
                     )
                 }

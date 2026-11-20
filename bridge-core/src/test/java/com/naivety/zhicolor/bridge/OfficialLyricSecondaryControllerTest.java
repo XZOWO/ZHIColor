@@ -58,6 +58,10 @@ public final class OfficialLyricSecondaryControllerTest {
 
     @Test public void sameParentSeekCrossesVocalThresholdAndLeavesNoUnusedVocalSlot() throws Exception {
         Object renderer = renderer();
+        call(renderer, "setConfig", new Class<?>[]{LyricUiConfig.class},
+                LyricUiConfig.defaults().buildUpon()
+                        .secondaryMotionMode(LyricUiConfig.SECONDARY_MOTION_STANDARD)
+                        .build());
         WordLyricModel model = model();
         WordLine main = model.lines.get(0);
         assertFalse(prepare(renderer, model, 0, 3699L, false));
@@ -67,6 +71,25 @@ public final class OfficialLyricSecondaryControllerTest {
         prepare(renderer, model, 0, 2000L, false);
         assertEquals(0f, main.vocalLayout.value(0L), 0f);
         assertEquals(1f, main.secondaryLayout.value(0L), 0f);
+    }
+
+    @Test public void appleStyleShowsVocalThroughoutParentFocusWithoutWaitingForVocalThreshold() throws Exception {
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_APPLE, LyricUiConfig.defaults().secondaryMotionMode);
+        Object renderer = renderer();
+        WordLyricModel model = model();
+        WordLine main = model.lines.get(0);
+        prepare(renderer, model, 0, 1200L, false);
+        assertTrue(main.vocalVisible);
+        assertEquals(1f, main.vocalLayout.value(0L), 0f);
+        assertEquals(1f, main.vocalAppearance.value(0L), 0f);
+        prepare(renderer, model, 0, 3699L, true);
+        assertTrue(main.vocalVisible);
+        assertEquals(1f, main.vocalLayout.target(), 0f);
+        assertEquals(1f, main.vocalAppearance.target(), 0f);
+        prepare(renderer, model, 1, 7000L, true);
+        assertFalse(main.vocalVisible);
+        assertEquals(0f, main.vocalLayout.target(), 0f);
+        assertEquals(0f, main.vocalAppearance.target(), 0f);
     }
 
     @Test public void focusChangeCollapsesBothSecondarySlotsAndAllModeKeepsTranslation() throws Exception {

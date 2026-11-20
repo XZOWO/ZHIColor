@@ -11,8 +11,100 @@ package com.naivety.zhicolor.bridge.render;
 public final class LyricViewportMotionPolicy {
     /** A partially visible row retains pixels; the viewport clip removes it at the boundary. */
     private static final float EDGE_OPACITY_FRACTION = 0.18f;
+    private static final float TRANSFORM_TRANSLATION_EPSILON_PX = 0.5f;
+    private static final float TRANSFORM_SCALE_EPSILON = 0.005f;
+    private static final float TRANSFORM_ROTATION_EPSILON_DEG = 0.05f;
 
     private LyricViewportMotionPolicy() {}
+
+    /** Reusable vertical viewport bounds in the RecyclerView's local coordinate space. */
+    public static final class ViewportBounds {
+        public float top;
+        public float bottom;
+    }
+
+    /**
+     * Reports whether a view on the RecyclerView-to-window chain has a non-identity transform or
+     * partial clip bounds that distorts {@code View#getLocalVisibleRect(Rect)} (for example,
+     * translation clipping against the display edge or un-inverted scale shrinking the rect).
+     */
+    public static boolean hasViewportTransformOrClip(
+            float translationX,
+            float translationY,
+            float scaleX,
+            float scaleY,
+            float rotation,
+            float rotationX,
+            float rotationY,
+            boolean hasPartialClipBounds,
+            boolean hasAnimationMatrix) {
+        return hasPartialClipBounds
+                || hasAnimationMatrix
+                || !Float.isFinite(translationX)
+                || !Float.isFinite(translationY)
+                || !Float.isFinite(scaleX)
+                || !Float.isFinite(scaleY)
+                || !Float.isFinite(rotation)
+                || !Float.isFinite(rotationX)
+                || !Float.isFinite(rotationY)
+                || Math.abs(translationX) > TRANSFORM_TRANSLATION_EPSILON_PX
+                || Math.abs(translationY) > TRANSFORM_TRANSLATION_EPSILON_PX
+                || Math.abs(scaleX - 1f) > TRANSFORM_SCALE_EPSILON
+                || Math.abs(scaleY - 1f) > TRANSFORM_SCALE_EPSILON
+                || Math.abs(rotation) > TRANSFORM_ROTATION_EPSILON_DEG
+                || Math.abs(rotationX) > TRANSFORM_ROTATION_EPSILON_DEG
+                || Math.abs(rotationY) > TRANSFORM_ROTATION_EPSILON_DEG;
+    }
+
+    /**
+     * Resolves the effective vertical lyric viewport inside the RecyclerView's local coordinates.
+     *
+     * <p>During page/mode enter or exit animations (such as ColorOS 17's cover-to-lyrics spring,
+     * which starts with a large positive {@code translationY} or shrunk {@code scaleY}),
+     * {@code View#getLocalVisibleRect(Rect)} clips against the screen boundary and fails to invert
+     * scaling, truncating {@code bottom}. Any inactive row drawn while outside that transient rect
+     * would bake {@code visible = false} (alpha 0) into its display list and remain invisible once
+     * the spring settles while playback is paused. Falling back to the RecyclerView's own
+     * padding-clipped layout bounds during transient transforms/clips or off-screen pre-draws
+     * preserves resting visibility, fade and blur for every row.</p>
+     */
+    public static boolean resolveViewportBounds(
+            int recyclerHeight,
+            int paddingTop,
+            int paddingBottom,
+            boolean clipToPadding,
+            boolean localVisibleAvailable,
+            int localVisibleTop,
+            int localVisibleBottom,
+            boolean transientTransformOrClip,
+            ViewportBounds out) {
+        if (out == null) throw new IllegalArgumentException("out");
+        out.top = 0f;
+        out.bottom = 0f;
+        if (recyclerHeight <= 0) {
+            return false;
+        }
+        int layoutTop = clipToPadding ? Math.max(0, paddingTop) : 0;
+        int layoutBottom = recyclerHeight - (clipToPadding ? Math.max(0, paddingBottom) : 0);
+        if (layoutBottom <= layoutTop) {
+            return false;
+        }
+        if (transientTransformOrClip || !localVisibleAvailable) {
+            out.top = layoutTop;
+            out.bottom = layoutBottom;
+            return true;
+        }
+        int top = Math.max(localVisibleTop, layoutTop);
+        int bottom = Math.min(localVisibleBottom, layoutBottom);
+        if (bottom <= top) {
+            out.top = layoutTop;
+            out.bottom = layoutBottom;
+            return true;
+        }
+        out.top = top;
+        out.bottom = bottom;
+        return true;
+    }
 
     /** Reusable output, so sampling several visible rows each frame does not allocate. */
     public static final class State {

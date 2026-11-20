@@ -6,4 +6,5 @@
     <string name="tab_about">About</string>
     <string name="tool_hide_lockscreen_music_app">Hide lock screen card icon</string>
     <string name="tool_hide_control_center_music_app">Hide Control Center card icon</string>
+    <string name="tool_hide_fluid_cloud_music_app">Hide Fluid Cloud icon</string>
 </resources>

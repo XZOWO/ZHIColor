@@ -150,6 +150,96 @@ public final class AppleLyricMotionPolicy {
         return Float.isFinite(translation) ? translation : 0f;
     }
 
+    /**
+     * Dimensionless lag fraction in [0, 1] used to scale a row's stagger translation strictly by
+     * that row's own observed screen displacement:
+     *   r(t) = 1                                         for 0 <= t <= delay
+     *   r(t) = (S_main(t) - S_delayed(t - delay)) / S_main(t)  for delay < t < duration + delay
+     *   r(t) = 0                                         for t >= duration + delay
+     */
+    public static float cascadeLagRatio(
+            long elapsedMillis,
+            long scrollDurationMillis,
+            long delayMillis,
+            float dampingRatio,
+            float responseSeconds) {
+        if (delayMillis <= 0L || scrollDurationMillis <= 0L) {
+            return 0f;
+        }
+        if (elapsedMillis <= delayMillis) {
+            return 1f;
+        }
+        if (elapsedMillis >= scrollDurationMillis + delayMillis) {
+            return 0f;
+        }
+        float mainProgress = springValue(
+                clampUnit((float) elapsedMillis / (float) scrollDurationMillis),
+                dampingRatio,
+                responseSeconds);
+        if (!Float.isFinite(mainProgress) || mainProgress <= 1e-6f) {
+            return 1f;
+        }
+        float delayedProgress = springValue(
+                clampUnit((float) (elapsedMillis - delayMillis) / (float) scrollDurationMillis),
+                dampingRatio,
+                responseSeconds);
+        float ratio = (mainProgress - delayedProgress) / mainProgress;
+        return clampUnit(ratio);
+    }
+
+    /**
+     * Computes a single row's cascade translationY from its own measured layout displacement
+     * (currentTop - startTop) and its pre-transition carry translationY.
+     *
+     * Visual position = currentTop + ty
+     *                 = startTop + carry * (1 - S_delayed) + actualDeltaY * (S_delayed / S_main).
+     * When a row's actual travel is reduced, reversed, or clamped by secondary vocals, waiting
+     * dots, or scroll bounds, its spring amplitude scales identically with its true movement and
+     * never injects a reverse-spring kick.
+     */
+    public static float cascadeRowTranslationY(
+            float actualRowLayoutDeltaPx,
+            float carryTranslationYPx,
+            long elapsedMillis,
+            long scrollDurationMillis,
+            long delayMillis,
+            float dampingRatio,
+            float responseSeconds) {
+        if (scrollDurationMillis <= 0L) {
+            return 0f;
+        }
+        float safeDelta = Float.isFinite(actualRowLayoutDeltaPx) ? actualRowLayoutDeltaPx : 0f;
+        float safeCarry = Float.isFinite(carryTranslationYPx) ? carryTranslationYPx : 0f;
+        long safeDelay = Math.max(0L, delayMillis);
+        if (elapsedMillis <= 0L) {
+            return safeCarry;
+        }
+        if (elapsedMillis >= scrollDurationMillis + safeDelay) {
+            return 0f;
+        }
+        float delayedProgress = elapsedMillis <= safeDelay
+                ? 0f
+                : springValue(
+                        clampUnit((float) (elapsedMillis - safeDelay) / (float) scrollDurationMillis),
+                        dampingRatio,
+                        responseSeconds);
+        float carryTerm = Math.abs(safeCarry) < 0.01f
+                ? 0f
+                : safeCarry * (1f - delayedProgress);
+        float lagTerm = 0f;
+        if (safeDelay > 0L && Math.abs(safeDelta) >= 0.01f) {
+            float lagRatio = cascadeLagRatio(
+                    elapsedMillis,
+                    scrollDurationMillis,
+                    safeDelay,
+                    dampingRatio,
+                    responseSeconds);
+            lagTerm = -safeDelta * lagRatio;
+        }
+        float total = carryTerm + lagTerm;
+        return Float.isFinite(total) ? total : 0f;
+    }
+
     private static float intervalInterpolation(long intervalMillis) {
         if (intervalMillis <= 0L) {
             return 1f;

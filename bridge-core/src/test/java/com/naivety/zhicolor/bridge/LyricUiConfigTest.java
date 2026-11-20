@@ -49,6 +49,9 @@ public final class LyricUiConfigTest {
         assertFalse(config.lineTimedProgressEnabled);
         assertFalse(config.translationProgressEnabled);
         assertTrue(config.secondaryProgressEnabled);
+        assertTrue(config.scrubSyncEnabled);
+        assertTrue(config.wrappedWindowMotionEnabled);
+        assertTrue(config.translationMarqueeReturnEnabled);
     }
 
     @Test
@@ -255,6 +258,9 @@ public final class LyricUiConfigTest {
                 .wrappedLineSpacingTenthsDp(30)
                 .screenTimeoutSeconds(30)
                 .defaultTranslationEnabled(false)
+                .scrubSyncEnabled(false)
+                .wrappedWindowMotionEnabled(false)
+                .translationMarqueeReturnEnabled(false)
                 .maxRefreshRateHz(90)
                 .build()
                 .resetAppearance();
@@ -273,6 +279,9 @@ public final class LyricUiConfigTest {
         assertEquals(0, config.wrappedLineSpacingTenthsDp);
         assertEquals(30, config.screenTimeoutSeconds);
         assertFalse(config.defaultTranslationEnabled);
+        assertFalse(config.scrubSyncEnabled);
+        assertFalse(config.wrappedWindowMotionEnabled);
+        assertFalse(config.translationMarqueeReturnEnabled);
         assertEquals(90, config.maxRefreshRateHz);
     }
 

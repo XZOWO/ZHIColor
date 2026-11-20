@@ -37,13 +37,17 @@ public final class LyricUiConfigContractTest {
             "primaryColor",
             "glowColor",
             "motionMode",
+            "secondaryMotionMode",
+            "wrappedWindowMotionEnabled",
             "translationMarqueeEnabled",
+            "translationMarqueeReturnEnabled",
             "maxRefreshRateHz",
             "defaultTranslationEnabled",
             "translationDisplayMode",
             "lineTimedProgressEnabled",
             "translationProgressEnabled",
             "secondaryProgressEnabled",
+            "scrubSyncEnabled",
             "charLiftEnabled",
             "charLiftStrengthPercent",
             "wordEmphasisEnabled",
@@ -81,13 +85,17 @@ public final class LyricUiConfigContractTest {
                 .primaryColor("#123456")
                 .glowColor("#654321")
                 .motionMode(LyricUiConfig.MOTION_REDUCED)
+                .secondaryMotionMode(LyricUiConfig.SECONDARY_MOTION_STANDARD)
+                .wrappedWindowMotionEnabled(false)
                 .translationMarqueeEnabled(false)
+                .translationMarqueeReturnEnabled(false)
                 .maxRefreshRateHz(90)
                 .defaultTranslationEnabled(false)
                 .translationDisplayMode(LyricUiConfig.TRANSLATION_ALL_LINES)
                 .lineTimedProgressEnabled(true)
                 .translationProgressEnabled(true)
                 .secondaryProgressEnabled(false)
+                .scrubSyncEnabled(false)
                 .charLiftEnabled(true)
                 .charLiftStrengthPercent(140)
                 .wordEmphasisEnabled(false)

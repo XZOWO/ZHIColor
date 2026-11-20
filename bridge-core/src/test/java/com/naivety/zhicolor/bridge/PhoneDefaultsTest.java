@@ -31,7 +31,7 @@ public final class PhoneDefaultsTest {
                 LyricUiConfigCodec.encode(LyricUiConfig.defaults()));
         actual.remove(LyricUiConfigCodec.SCHEMA);
 
-        assertEquals(41, expected.size());
+        assertEquals(45, expected.size());
         assertEquals(expected, actual);
     }
 
@@ -161,6 +161,10 @@ public final class PhoneDefaultsTest {
         expected.put(LyricUiConfigCodec.WORD_EMPHASIS_ENABLED,true);
         expected.put(LyricUiConfigCodec.CHINESE_TAIL_EMPHASIS_ENABLED,true);
         expected.put(LyricUiConfigCodec.MOTION_MODE,LyricUiConfig.MOTION_APPLE);
+        expected.put(LyricUiConfigCodec.SECONDARY_MOTION_MODE,LyricUiConfig.SECONDARY_MOTION_APPLE);
+        expected.put(LyricUiConfigCodec.WRAPPED_WINDOW_MOTION_ENABLED,true);
+        expected.put(LyricUiConfigCodec.TRANSLATION_MARQUEE_RETURN_ENABLED,true);
+        expected.put(LyricUiConfigCodec.SCRUB_SYNC_ENABLED,true);
         return expected;
     }
 

@@ -36,10 +36,18 @@ final class LyricBackgroundHost {
         boolean active();
         boolean mediaPlaying();
         MediaController controller();
+        default boolean packageActive(String packageName) {
+            return packageName == null || packageName.isEmpty()
+                    ? active()
+                    : ZhiBridgeRuntime.enabledFor(packageName);
+        }
+        default Context context() {
+            return null;
+        }
     }
     private static final String TAG = "ZHIBackground";
     private final Runtime runtime;
-    private final SystemShapedArtworkPolicy systemShapedArtwork = new SystemShapedArtworkPolicy();
+    private final SystemShapedArtworkPolicy systemShapedArtwork;
     private String reportedState = "";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService mediaWorker = Executors.newSingleThreadExecutor(r -> {
@@ -48,7 +56,7 @@ final class LyricBackgroundHost {
     private final Map<View, BackdropSlot> backgrounds = new IdentityHashMap<>();
     private final Map<View, SectionSlot> sections = new IdentityHashMap<>();
     private static final long UNATTACHED_RETENTION_MS = 5_000L;
-    private LyricAppearanceSettings options;
+    private volatile LyricAppearanceSettings options;
     private Context hostContext, moduleContext;
     private boolean scheduled, mediaPending;
     private DisplayManager displays;
@@ -77,15 +85,33 @@ final class LyricBackgroundHost {
         schedule();
     };
 
-    LyricBackgroundHost(Runtime runtime) { this.runtime = runtime; }
+    LyricBackgroundHost(Runtime runtime) {
+        this.runtime = runtime;
+        this.systemShapedArtwork = new SystemShapedArtworkPolicy(this.runtime::packageActive);
+    }
 
+
+    private LyricAppearanceSettings ensureOptions() {
+        LyricAppearanceSettings current = options;
+        if (current != null) return current;
+        Context context = hostContext != null ? hostContext : runtime.context();
+        if (context == null) return null;
+        current = LyricAppearanceSettings.load(context);
+        options = current;
+        return current;
+    }
+
+    private boolean systemShapedOptionEnabled() {
+        LyricAppearanceSettings current = ensureOptions();
+        return current != null && current.systemShapedArtwork && ZhiBridgeRuntime.enabled();
+    }
 
     /** Native visibility/playback events are immediate; the periodic pulse is only clock correction. */
     void stateChanged() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             main.removeCallbacks(immediateRefresh); main.post(immediateRefresh); return;
         }
-        systemShapedArtwork.setEnabled(options != null && options.systemShapedArtwork && runtime.active());
+        systemShapedArtwork.setEnabled(systemShapedOptionEnabled());
         if (!backgrounds.isEmpty() || !sections.isEmpty()) {
             main.removeCallbacks(immediateRefresh); main.post(immediateRefresh);
         }
@@ -100,7 +126,7 @@ final class LyricBackgroundHost {
             if (displays != null) displays.registerDisplayListener(displayListener, main);
         }
         options = LyricAppearanceSettings.load(context);
-        systemShapedArtwork.setEnabled(options.systemShapedArtwork && runtime.active());
+        systemShapedArtwork.setEnabled(systemShapedOptionEnabled());
         reportState();
         for (View target : backgrounds.keySet()) target.invalidate();
         refreshSlots();
@@ -200,9 +226,10 @@ final class LyricBackgroundHost {
     }
     private boolean enabled() { return options != null && options.appleBackground && runtime.active(); }
     Object nativeBackgroundModelBuilt(Object builder, Object nativeModel) {
-        if (Looper.myLooper() == Looper.getMainLooper())
-            systemShapedArtwork.setEnabled(options != null && options.systemShapedArtwork && runtime.active());
-        else main.post(immediateRefresh);
+        systemShapedArtwork.setEnabled(systemShapedOptionEnabled());
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post(immediateRefresh);
+        }
         return systemShapedArtwork.modelBuilt(builder, nativeModel);
     }
     private boolean interactive() {
@@ -247,7 +274,7 @@ final class LyricBackgroundHost {
 
 
     private void refreshSlots() {
-        systemShapedArtwork.setEnabled(options != null && options.systemShapedArtwork && runtime.active());
+        systemShapedArtwork.setEnabled(systemShapedOptionEnabled());
         synchronizeMediaController();
         long now = SystemClock.uptimeMillis();
         for (SectionSlot slot : new ArrayList<>(sections.values())) {

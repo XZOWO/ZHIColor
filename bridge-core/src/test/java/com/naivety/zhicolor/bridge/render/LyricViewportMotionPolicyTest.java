@@ -172,6 +172,91 @@ public class LyricViewportMotionPolicyTest {
         assertFalse(state.isVisible());
     }
 
+    @Test
+    public void viewportTransformOrClipDetectorIdentifiesEnterTransitionsOnly() {
+        assertFalse(LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, 0f, 1f, 1f, 0f, 0f, 0f, false, false));
+        assertFalse(LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0.2f, -0.4f, 1.002f, 0.998f, 0.01f, 0f, 0f, false, false));
+        assertTrue(LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, 650f, 1f, 1f, 0f, 0f, 0f, false, false));
+        assertTrue(LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, 0f, 0.6f, 0.6f, 0f, 0f, 0f, false, false));
+        assertTrue(LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, 0f, 1f, 1f, 0f, 0f, 0f, true, false));
+        assertTrue(LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, 0f, 1f, 1f, 0f, 0f, 0f, false, true));
+    }
+
+    @Test
+    public void translatedEnterSpringKeepsBottomRowVisibleInsteadOfUsingClippedLocalRect() {
+        // ColorOS 17 cover->lyrics enter spring translates LyricsRecyclerView downward (+833px),
+        // so getLocalVisibleRect chops off ~200px (~1 lyric row) at the bottom of the screen.
+        LyricViewportMotionPolicy.ViewportBounds bounds =
+                new LyricViewportMotionPolicy.ViewportBounds();
+        boolean transientTransform = LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, 833f, 1f, 1f, 0f, 0f, 0f, false, false);
+        assertTrue(transientTransform);
+        assertTrue(LyricViewportMotionPolicy.resolveViewportBounds(
+                1_800, 0, 0, true, true, 0, 1_597, transientTransform, bounds));
+        assertEquals(0f, bounds.top, EPSILON);
+        assertEquals(1_800f, bounds.bottom, EPSILON);
+
+        LyricViewportMotionPolicy.State bottomRow = new LyricViewportMotionPolicy.State();
+        LyricViewportMotionPolicy.resolveAnchored(
+                1_610f, 1_750f, 1_610f, 1_750f,
+                500f, 100f, bounds.top, bounds.bottom, bottomRow);
+        assertTrue(bottomRow.hasGeometry());
+        assertTrue(bottomRow.isVisible());
+        assertTrue(bottomRow.opacity(false, true, 0.65f) > 0f);
+    }
+
+    @Test
+    public void scaledEnterTransitionAndOffscreenPredrawUsePaddingClippedLayoutBounds() {
+        LyricViewportMotionPolicy.ViewportBounds bounds =
+                new LyricViewportMotionPolicy.ViewportBounds();
+        boolean scaled = LyricViewportMotionPolicy.hasViewportTransformOrClip(
+                0f, -200f, 0.6f, 0.6f, 0f, 0f, 0f, false, false);
+        assertTrue(scaled);
+        assertTrue(LyricViewportMotionPolicy.resolveViewportBounds(
+                1_800, 40, 60, true, true, 0, 1_080, scaled, bounds));
+        assertEquals(40f, bounds.top, EPSILON);
+        assertEquals(1_740f, bounds.bottom, EPSILON);
+
+        // Off-screen pre-draw (getLocalVisibleRect == false) still resolves resting viewport bounds.
+        assertTrue(LyricViewportMotionPolicy.resolveViewportBounds(
+                1_800, 40, 60, true, false, 0, 0, false, bounds));
+        assertEquals(40f, bounds.top, EPSILON);
+        assertEquals(1_740f, bounds.bottom, EPSILON);
+
+        // clipToPadding == false keeps full [0, recyclerHeight].
+        assertTrue(LyricViewportMotionPolicy.resolveViewportBounds(
+                1_800, 40, 60, false, false, 0, 0, false, bounds));
+        assertEquals(0f, bounds.top, EPSILON);
+        assertEquals(1_800f, bounds.bottom, EPSILON);
+    }
+
+    @Test
+    public void restingStaticAncestorClipAndUnlaidOutRecyclerRemainHandled() {
+        LyricViewportMotionPolicy.ViewportBounds bounds =
+                new LyricViewportMotionPolicy.ViewportBounds();
+        // At rest (no transform/clip), static ancestor clipping and padding clip are preserved.
+        assertTrue(LyricViewportMotionPolicy.resolveViewportBounds(
+                1_000, 20, 100, true, true, 80, 1_000, false, bounds));
+        assertEquals(80f, bounds.top, EPSILON);
+        assertEquals(900f, bounds.bottom, EPSILON);
+
+        // Empty/collapsed localVisibleRect on a laid-out view falls back to layout bounds.
+        assertTrue(LyricViewportMotionPolicy.resolveViewportBounds(
+                1_000, 20, 100, true, true, 0, 0, false, bounds));
+        assertEquals(20f, bounds.top, EPSILON);
+        assertEquals(900f, bounds.bottom, EPSILON);
+
+        // Zero-height unlaid-out RecyclerView returns false so caller keeps non-blanking fallback.
+        assertFalse(LyricViewportMotionPolicy.resolveViewportBounds(
+                0, 0, 0, true, false, 0, 0, false, bounds));
+    }
+
     private static LyricViewportMotionPolicy.State sample(
             float rowTop, float rowBottom, float focusCenter, float focusHeight,
             float viewportTop, float viewportBottom) {

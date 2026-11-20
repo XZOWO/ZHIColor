@@ -148,6 +148,7 @@ internal fun lyricGroups(): List<LyricGroup> = listOf(
         LyricField("inactive_row_fade_percent",stringResource(R.string.ov_fade_strength),min=50,max=100,dependsOn="inactive_row_fade_enabled"))),
     LyricGroup(stringResource(R.string.ov_group_motion),listOf(
         LyricField("motion_mode",stringResource(R.string.ov_motion),"choice",options=listOf(stringResource(R.string.ov_standard),stringResource(R.string.ov_gentle),stringResource(R.string.ov_off),stringResource(R.string.scr_apple_style))),
+        LyricField("secondary_motion_mode",stringResource(R.string.ov_secondary_animation),"choice",options=listOf(stringResource(R.string.scr_apple_style),stringResource(R.string.ov_normal_style)),optionValues=listOf(1,0)),
         LyricField("lyric_ui_inactive_blur_enabled",stringResource(R.string.ov_inactive_blur),"switch"),
         LyricField("blur_radius_tenths_px",stringResource(R.string.ov_blur_radius),min=0,max=80,step=5,factor=10f,unit="px",dependsOn="lyric_ui_inactive_blur_enabled"),
         LyricField("lyric_ui_scroll_scale_enabled",stringResource(R.string.ov_inactive_scale),"switch"),
@@ -155,10 +156,12 @@ internal fun lyricGroups(): List<LyricGroup> = listOf(
         LyricField("char_lift_enabled",stringResource(R.string.ov_char_lift),"switch"),
         LyricField("char_lift_strength_percent",stringResource(R.string.ov_lift_strength),min=0,max=200,dependsOn="char_lift_enabled"),
         LyricField("word_emphasis_enabled",stringResource(R.string.ov_word_emphasis),"switch"),
-        LyricField("chinese_tail_emphasis_enabled",stringResource(R.string.ov_chinese_tail_emphasis),"switch",dependsOn="word_emphasis_enabled"))),
+        LyricField("chinese_tail_emphasis_enabled",stringResource(R.string.ov_chinese_tail_emphasis),"switch",dependsOn="word_emphasis_enabled"),
+        LyricField("wrapped_window_motion_enabled",stringResource(R.string.ov_wrapped_window_motion),"switch"))),
     LyricGroup(stringResource(R.string.ov_group_playback),listOf(
         LyricField("lyric_ui_line_timed_progress_enabled",stringResource(R.string.ov_line_progress),"switch"),
         LyricField("secondary_progress_enabled",stringResource(R.string.ov_secondary_progress),"switch"),
+        LyricField("scrub_sync_enabled",stringResource(R.string.ov_scrub_sync),"switch"),
         LyricField("max_refresh_rate_hz",stringResource(R.string.ov_refresh_rate),"choice",options=listOf(stringResource(R.string.ov_follow_system),"60 Hz","90 Hz","120 Hz"),optionValues=listOf(0,60,90,120)),
         LyricField("screen_timeout_enabled",stringResource(R.string.ov_keep_screen_on),"switch"),
         LyricField("screen_timeout_seconds",stringResource(R.string.ov_screen_timeout),"number",unit=stringResource(R.string.ov_seconds),dependsOn="screen_timeout_enabled")))
@@ -171,6 +174,7 @@ internal fun translationFields(): List<LyricField> = listOf(
     LyricField("translation_font_ratio_percent",stringResource(R.string.ov_translation_font_size),min=55,max=75),
     LyricField("lyric_ui_translation_progress_enabled",stringResource(R.string.ov_translation_progress),"switch"),
     LyricField("translation_marquee_enabled",stringResource(R.string.ov_translation_marquee),"switch"),
+    LyricField("translation_marquee_return_enabled",stringResource(R.string.ov_translation_marquee_return),"switch",dependsOn="translation_marquee_enabled"),
     LyricField("active_translation_progress_opacity_percent",stringResource(R.string.ov_active_translation_sung),min=20,max=100),
     LyricField("active_translation_opacity_percent",stringResource(R.string.ov_active_translation_upcoming),min=20,max=100),
     LyricField("inactive_translation_follows_main",stringResource(R.string.ov_translation_follow),"switch"),

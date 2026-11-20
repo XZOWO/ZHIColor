@@ -27,13 +27,17 @@ final class LyricAuxiliaryVisualPolicy {
 
     /** Called once when the parent enters its tail; incoming and still-singing lanes retain ownership. */
     static void synchronizeExit(WordLine parent, long now) {
+        synchronizeExit(parent, now, true);
+    }
+
+    static void synchronizeExit(WordLine parent, long now, boolean synchronizeVocal) {
         if (parent == null || !parent.highlightExit.isExiting()) return;
         long duration = parent.highlightExit.exitDurationMillis();
         if (!parent.secondaryFocus) {
             synchronizeExit(parent.secondaryLayout, now, duration);
             synchronizeExit(parent.visualSecondary, now, duration);
         }
-        if (!parent.vocalVisible) {
+        if (!parent.vocalVisible && synchronizeVocal) {
             synchronizeExit(parent.vocalLayout, now, duration);
             synchronizeExit(parent.vocalAppearance, now, duration);
         }

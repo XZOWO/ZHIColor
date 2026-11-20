@@ -58,6 +58,25 @@ class LockscreenMusicAppPolicyTest {
             hidden.map { LockscreenMusicAppPolicy.visibility(8, it) })
     }
 
+    @Test fun fluidCloudHidesOnlyEnabledNonNotificationCards() {
+        assertTrue(LockscreenMusicAppPolicy.fluidCloudHidden(true, false))
+        assertFalse(LockscreenMusicAppPolicy.fluidCloudHidden(true, true))
+        assertFalse(LockscreenMusicAppPolicy.fluidCloudHidden(false, false))
+        assertFalse(LockscreenMusicAppPolicy.fluidCloudHidden(false, true))
+    }
+
+    @Test fun fluidCloudSwitchNeverChangesLockscreenCardDecision() {
+        for (keyguard in listOf(false, true)) {
+            for (aod in listOf(false, true)) {
+                for (screenOn in listOf(false, true)) {
+                    // Lockscreen cards are notification cards; the Fluid Cloud flag cannot hide them.
+                    assertFalse(LockscreenMusicAppPolicy.fluidCloudHidden(true, true))
+                    assertFalse(LockscreenMusicAppPolicy.hidden(true, false, keyguard, aod, screenOn))
+                }
+            }
+        }
+    }
+
     @Test fun disablingRestoresEveryNativeVisibilityIncludingGone() {
         for (native in listOf(0, 4, 8)) {
             assertEquals(if (native == 0) 4 else native,

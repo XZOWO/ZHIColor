@@ -70,7 +70,6 @@ final class OplusLyricNormalizer {
             TimedLyricGroup group = groupedLines.get(i);
             appendGroupedLyricLine(out, group, group.timeMillis, explicitMainRows);
         }
-        appendTailSpacerLyricLine(out, groupedLines);
         return out.toString();
     }
 
@@ -113,21 +112,6 @@ final class OplusLyricNormalizer {
             out.append('\n');
         }
         out.append('[').append(formatLrcTime(timeMillis)).append(']').append(text);
-    }
-
-    private static void appendTailSpacerLyricLine(
-            StringBuilder out, ArrayList<TimedLyricGroup> groups) {
-        if (groups.isEmpty()) {
-            return;
-        }
-        TimedLyricGroup last = groups.get(groups.size() - 1);
-        if (last == null) {
-            return;
-        }
-        appendLyricLine(
-                out,
-                last.timeMillis + TAIL_SPACER_DELAY_MS,
-                LyricTextSanitizer.ZERO_WIDTH_SPACE);
     }
 
     private static String cleanPlainLyricText(String text) {

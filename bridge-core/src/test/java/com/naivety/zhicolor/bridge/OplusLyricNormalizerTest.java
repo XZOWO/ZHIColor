@@ -12,8 +12,7 @@ public final class OplusLyricNormalizerTest {
 
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
-        assertEquals("[00:01.200]Put your lips close to mine\n"
-                + "[00:09.200]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+        assertEquals("[00:01.200]Put your lips close to mine", normalized);
     }
 
     @Test
@@ -26,8 +25,7 @@ public final class OplusLyricNormalizerTest {
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
         assertEquals("[00:00.000]We are, we are, we are\n"
-                + "[00:05.100]We are not beautiful\n"
-                + "[00:13.100]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:05.100]We are not beautiful", normalized);
     }
 
     @Test
@@ -43,8 +41,7 @@ public final class OplusLyricNormalizerTest {
 
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
-        assertEquals("[00:00.000]こんな私の未熟なうたを\n"
-                + "[00:38.436]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+        assertEquals("[00:00.000]こんな私の未熟なうたを", normalized);
     }
 
     @Test
@@ -64,8 +61,7 @@ public final class OplusLyricNormalizerTest {
                 + "[00:00.283]作曲: ナユタン星人\n"
                 + "[00:00.566]编曲: ナユタン星人\n"
                 + "[00:00.850]あの一等星のさんざめく光で\n"
-                + "[00:07.230]我が太陽系の鼓動に合わせて\n"
-                + "[00:15.230]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:07.230]我が太陽系の鼓動に合わせて", normalized);
     }
 
     @Test
@@ -74,7 +70,7 @@ public final class OplusLyricNormalizerTest {
 
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
-        assertEquals("[00:00.000]Hello\n[00:10.000]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+        assertEquals("[00:00.000]Hello", normalized);
     }
 
     @Test
@@ -87,8 +83,7 @@ public final class OplusLyricNormalizerTest {
 
         assertEquals("[00:01.000]Stay\n"
                 + "[00:05.000]Run\n"
-                + "[00:09.000]Stay\n"
-                + "[00:17.000]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:09.000]Stay", normalized);
     }
 
     @Test
@@ -97,7 +92,7 @@ public final class OplusLyricNormalizerTest {
 
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
-        assertEquals("[00:01.000]Hello world\n[00:09.000]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+        assertEquals("[00:01.000]Hello world", normalized);
     }
 
     @Test
@@ -111,8 +106,7 @@ public final class OplusLyricNormalizerTest {
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
         assertEquals("[00:00.000]Before\n"
-                + "[00:38.150]And all of the foes and all of the friends\n"
-                + "[00:46.150]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:38.150]And all of the foes and all of the friends", normalized);
     }
 
     @Test
@@ -125,8 +119,7 @@ public final class OplusLyricNormalizerTest {
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
         assertEquals("[00:00.000]I walk a lonely road\n"
-                + "[00:14.270]The only one that I have ever known\n"
-                + "[00:22.270]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:14.270]The only one that I have ever known", normalized);
     }
 
     @Test
@@ -141,8 +134,7 @@ public final class OplusLyricNormalizerTest {
         String normalized = OplusLyricNormalizer.normalizeForOfficialList(lrc);
 
         assertEquals("[00:00.000]You say \"I don't understand\"\n"
-                + "[00:14.583]We thought a cure\n"
-                + "[00:22.583]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:14.583]We thought a cure", normalized);
     }
 
     @Test
@@ -169,8 +161,7 @@ public final class OplusLyricNormalizerTest {
                 + "[00:07.820]鼓：胖小\n"
                 + "[00:10.950]和音编写：曾恒乐\n"
                 + "[00:18.780]监棚：林启得\n"
-                + "[00:21.000]我出生的地方\n"
-                + "[00:29.000]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:21.000]我出生的地方", normalized);
     }
 
     @Test
@@ -185,8 +176,7 @@ public final class OplusLyricNormalizerTest {
 
         assertEquals("[00:00.000]I did something bad\n"
                 + "[00:04.000]以下歌词翻译由 Salt Player 提供\n"
-                + "[00:08.000]Then why's it feel so good?\n"
-                + "[00:16.000]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", normalized);
+                + "[00:08.000]Then why's it feel so good?", normalized);
     }
 
 }

@@ -32,6 +32,26 @@ public final class LyricsRecyclerFieldAccessor {
         }
     }
 
+    public boolean writeCurrentIndex(Object recycler, int index) {
+        if (recycler == null) {
+            return false;
+        }
+        Field field = resolveCurrentIndexField(recycler.getClass());
+        if (field == null) {
+            return false;
+        }
+        try {
+            if (field.getType() == int.class) {
+                field.setInt(recycler, index);
+            } else {
+                field.set(recycler, Integer.valueOf(index));
+            }
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private Field resolveCurrentIndexField(Class<?> recyclerClass) {
         synchronized (lock) {
             WeakReference<Field> reference = currentIndexFields.get(recyclerClass);

@@ -62,9 +62,18 @@ public final class WordLyricModel {
     public int overlapIndexAt(long position) {
         int latest = lastLineIndexAtOrBefore(position);
         WordLine previous = lineAt(latest - 1);
-        return LyricOverlapPolicy.overlapIndex(latest,
+        int overlap = LyricOverlapPolicy.overlapIndex(latest,
                 previous == null ? -1L : previous.endTimeMillis,
                 position, hasVerifiedOverlapAfter(previous));
+        if (overlap >= 0) {
+            WordLine incoming = lineAt(overlap);
+            if (incoming != null && incoming.explicitEndTimeProvided
+                    && incoming.endTimeMillis > incoming.timeMillis
+                    && incoming.endTimeMillis <= position) {
+                return -1;
+            }
+        }
+        return overlap;
     }
 
     public boolean isSingingLine(int index, long position) {

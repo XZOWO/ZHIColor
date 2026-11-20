@@ -88,7 +88,7 @@ public final class LyricParsingRegressionMatrixTest {
         assertEquals("Have you heard", line.text);
         assertEquals("你有没有用心倾听", line.translation);
         assertTrue(line.words.size() > 1);
-        assertEquals("[00:00.000]Have you heard\n[01:23.691]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", official);
+        assertEquals("[00:00.000]Have you heard", official);
     }
 
     @Test
@@ -113,7 +113,7 @@ public final class LyricParsingRegressionMatrixTest {
         assertEquals("Over and over", line.text);
         assertEquals("一次又一次", line.translation);
         assertTrue(line.words.size() > 1);
-        assertEquals("[00:00.000]Over and over\n[01:18.060]" + LyricTextSanitizer.ZERO_WIDTH_SPACE + "", official);
+        assertEquals("[00:00.000]Over and over", official);
     }
 
     @Test

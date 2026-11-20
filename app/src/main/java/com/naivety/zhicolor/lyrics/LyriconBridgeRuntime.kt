@@ -76,8 +76,11 @@ internal object LyriconBridgeRuntime : ZhiBridgeRuntime.Input {
         selectCurrent()
     }
     private fun selectCurrent() {
-        val active=controllers.firstOrNull {it.playbackState?.state==PlaybackState.STATE_PLAYING}
-            ?: controllers.firstOrNull {it.packageName==source.player} ?: controllers.firstOrNull()
+        val active=controllers.firstOrNull {ZhiBridgeRuntime.enabledFor(it.packageName) && it.playbackState?.state==PlaybackState.STATE_PLAYING}
+            ?: controllers.firstOrNull {it.playbackState?.state==PlaybackState.STATE_PLAYING}
+            ?: controllers.firstOrNull {it.packageName==source.player}
+            ?: controllers.firstOrNull {ZhiBridgeRuntime.enabledFor(it.packageName)}
+            ?: controllers.firstOrNull()
         val metadata=active?.metadata
         val next=if(active!=null && metadata!=null)SessionSnapshot(
             active.packageName,

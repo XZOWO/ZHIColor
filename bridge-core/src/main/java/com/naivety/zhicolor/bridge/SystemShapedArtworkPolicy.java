@@ -7,34 +7,48 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.Objects;
 import java.util.WeakHashMap;
+import java.util.function.Predicate;
 
 /** Selects the OEM's independent artwork/FlowLight model without changing artwork geometry. */
 public final class SystemShapedArtworkPolicy {
     private final Access access;
+    private final Predicate<String> packageFilter;
     private final Map<Object, Models> models = new WeakHashMap<>();
     private boolean enabled;
 
-    public SystemShapedArtworkPolicy() { this(new NativeAccess()); }
+    public SystemShapedArtworkPolicy() { this(new NativeAccess(), pkg -> true); }
 
-    SystemShapedArtworkPolicy(Access access) { this.access = access; }
+    public SystemShapedArtworkPolicy(Predicate<String> packageFilter) {
+        this(new NativeAccess(), packageFilter);
+    }
+
+    SystemShapedArtworkPolicy(Access access) { this(access, pkg -> true); }
+
+    SystemShapedArtworkPolicy(Access access, Predicate<String> packageFilter) {
+        this.access = access;
+        this.packageFilter = packageFilter != null ? packageFilter : pkg -> true;
+    }
 
     /** Called after the native background-model builder; all native fallback models stay intact. */
     public Object modelBuilt(Object builder, Object nativeModel) {
         if (nativeModel == null) return null;
         final Object owner;
         final Object shaped;
+        final String packageName;
         try {
             owner = access.owner(builder);
             if (owner == null) return nativeModel;
             shaped = access.fullScreen(nativeModel) ? access.flowLight(builder, nativeModel) : nativeModel;
             if (shaped == null) return nativeModel;
+            packageName = access.packageName(builder);
         } catch (ReflectiveOperationException | RuntimeException failure) {
             // Unverified OEM variants keep their original model and renderer.
             return nativeModel;
         }
         synchronized (models) {
-            models.put(owner, new Models(nativeModel, shaped));
-            return enabled ? shaped : nativeModel;
+            Models entry = new Models(nativeModel, shaped, packageName);
+            models.put(owner, entry);
+            return shouldUseShaped(entry) ? shaped : nativeModel;
         }
     }
 
@@ -52,13 +66,17 @@ public final class SystemShapedArtworkPolicy {
     /** Drops old plugin objects while retaining the user's current selection. */
     public void reset() { synchronized (models) { models.clear(); } }
 
+    private boolean shouldUseShaped(Models model) {
+        return enabled && model != null && packageFilter.test(model.packageName);
+    }
+
     private void publish(Update update) {
         // A collector can re-enter this policy. Never invoke OEM code while holding the cache lock.
         for (int retry = 0; retry < 3; retry++) {
             final Object selected;
             synchronized (models) {
                 if (models.get(update.owner) != update.models) return;
-                selected = enabled ? update.models.shaped : update.models.nativeModel;
+                selected = shouldUseShaped(update.models) ? update.models.shaped : update.models.nativeModel;
             }
             try {
                 Object current = access.current(update.owner);
@@ -69,7 +87,8 @@ public final class SystemShapedArtworkPolicy {
             } catch (ReflectiveOperationException | RuntimeException failure) { return; }
             synchronized (models) {
                 if (models.get(update.owner) != update.models) return;
-                if (selected == (enabled ? update.models.shaped : update.models.nativeModel)) return;
+                Object target = shouldUseShaped(update.models) ? update.models.shaped : update.models.nativeModel;
+                if (selected == target) return;
             }
         }
     }
@@ -80,11 +99,17 @@ public final class SystemShapedArtworkPolicy {
         Object flowLight(Object builder, Object model) throws ReflectiveOperationException;
         Object current(Object owner) throws ReflectiveOperationException;
         void publish(Object owner, Object model) throws ReflectiveOperationException;
+        default String packageName(Object builder) { return ""; }
     }
 
     private static final class Models {
         final Object nativeModel, shaped;
-        Models(Object nativeModel, Object shaped) { this.nativeModel = nativeModel; this.shaped = shaped; }
+        final String packageName;
+        Models(Object nativeModel, Object shaped, String packageName) {
+            this.nativeModel = nativeModel;
+            this.shaped = shaped;
+            this.packageName = packageName == null ? "" : packageName;
+        }
     }
 
     private static final class Update {
@@ -136,6 +161,16 @@ public final class SystemShapedArtworkPolicy {
 
         @Override public boolean fullScreen(Object model) {
             return model != null && named(model.getClass(), MODEL + "b");
+        }
+
+        @Override public String packageName(Object builder) {
+            try {
+                Object media = read(builder, BUILDER, "L$0", Object.class.getName());
+                Object pkg = nullableRead(media, DATA + "t", "m", String.class.getName());
+                return pkg instanceof String ? (String) pkg : "";
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                return "";
+            }
         }
 
         @Override public Object flowLight(Object builder, Object model) throws ReflectiveOperationException {

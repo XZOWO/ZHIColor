@@ -107,11 +107,13 @@ public final class LyricUiControlsConfigTest {
                 .scaleEnabled(false).inactiveScalePercent(83).glowEnabled(false)
                 .glowIntensityPercent(72).glowRadiusPercent(23)
                 .primaryColor("#123456").glowColor("#ABCDEF")
-                .motionMode(LyricUiConfig.MOTION_REDUCED).translationMarqueeEnabled(false)
+                .motionMode(LyricUiConfig.MOTION_REDUCED).wrappedWindowMotionEnabled(false)
+                .translationMarqueeEnabled(false).translationMarqueeReturnEnabled(false)
                 .maxRefreshRateHz(90).defaultTranslationEnabled(true)
                 .translationDisplayMode(LyricUiConfig.TRANSLATION_CURRENT_ONLY)
                 .lineTimedProgressEnabled(true).translationProgressEnabled(true)
-                .secondaryProgressEnabled(false).charLiftEnabled(false).charLiftStrengthPercent(135)
+                .secondaryProgressEnabled(false).scrubSyncEnabled(false)
+                .charLiftEnabled(false).charLiftStrengthPercent(135)
                 .wordEmphasisEnabled(false).chineseTailEmphasisEnabled(false)
                 .screenTimeoutEnabled(false).screenTimeoutSeconds(29)
                 .mainFontTenthsSp(253).translationFontRatioPercent(71).secondaryFontRatioPercent(58)
@@ -129,7 +131,7 @@ public final class LyricUiControlsConfigTest {
                 assertEquals(entry.getKey(), entry.getValue(), reset.get(entry.getKey()));
             }
         }
-        assertEquals(15, switches);
+        assertEquals(18, switches);
     }
 
     @Test
@@ -258,6 +260,88 @@ public final class LyricUiControlsConfigTest {
         assertEquals(source, LyricUiConfigRepository.load(preferences(restored)));
         assertEquals(false, restored.get(translation));
         assertEquals(true, restored.get(button));
+    }
+
+    @Test
+    public void secondaryMotionModeDefaultsToAppleAndFollowsAppearanceReset() {
+        LyricUiConfig defaults = LyricUiConfig.defaults();
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_APPLE, defaults.secondaryMotionMode);
+
+        LyricUiConfig standard = defaults.buildUpon()
+                .secondaryMotionMode(LyricUiConfig.SECONDARY_MOTION_STANDARD)
+                .build();
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_STANDARD,
+                LyricUiConfigCodec.decode(LyricUiConfigCodec.encode(standard), null, true).secondaryMotionMode);
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_STANDARD, standard.resetSwitches().secondaryMotionMode);
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_APPLE, standard.resetAppearance().secondaryMotionMode);
+
+        Map<String, Object> legacy = new HashMap<>(LyricUiConfigCodec.encode(defaults));
+        legacy.remove(LyricUiConfigCodec.SECONDARY_MOTION_MODE);
+        SharedPreferences prefs = preferences(legacy);
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_APPLE,
+                LyricUiConfigRepository.load(prefs).secondaryMotionMode);
+        assertEquals(LyricUiConfig.SECONDARY_MOTION_APPLE,
+                legacy.get(LyricUiConfigCodec.SECONDARY_MOTION_MODE));
+    }
+
+    @Test
+    public void scrubSyncEnabledDefaultsToTrueAndFollowsSwitchReset() {
+        LyricUiConfig defaults = LyricUiConfig.defaults();
+        assertTrue(defaults.scrubSyncEnabled);
+
+        LyricUiConfig disabled = defaults.buildUpon()
+                .scrubSyncEnabled(false)
+                .build();
+        assertFalse(LyricUiConfigCodec.decode(
+                LyricUiConfigCodec.encode(disabled), null, false).scrubSyncEnabled);
+        assertTrue(disabled.resetSwitches().scrubSyncEnabled);
+        assertFalse(disabled.resetAppearance().scrubSyncEnabled);
+
+        Map<String, Object> legacy = new HashMap<>(LyricUiConfigCodec.encode(defaults));
+        legacy.remove(LyricUiConfigCodec.SCRUB_SYNC_ENABLED);
+        SharedPreferences prefs = preferences(legacy);
+        assertTrue(LyricUiConfigRepository.load(prefs).scrubSyncEnabled);
+        assertEquals(Boolean.TRUE, legacy.get(LyricUiConfigCodec.SCRUB_SYNC_ENABLED));
+    }
+
+    @Test
+    public void wrappedWindowMotionEnabledDefaultsToTrueAndFollowsSwitchReset() {
+        LyricUiConfig defaults = LyricUiConfig.defaults();
+        assertTrue(defaults.wrappedWindowMotionEnabled);
+
+        LyricUiConfig disabled = defaults.buildUpon()
+                .wrappedWindowMotionEnabled(false)
+                .build();
+        assertFalse(LyricUiConfigCodec.decode(
+                LyricUiConfigCodec.encode(disabled), null, false).wrappedWindowMotionEnabled);
+        assertTrue(disabled.resetSwitches().wrappedWindowMotionEnabled);
+        assertFalse(disabled.resetAppearance().wrappedWindowMotionEnabled);
+
+        Map<String, Object> legacy = new HashMap<>(LyricUiConfigCodec.encode(defaults));
+        legacy.remove(LyricUiConfigCodec.WRAPPED_WINDOW_MOTION_ENABLED);
+        SharedPreferences prefs = preferences(legacy);
+        assertTrue(LyricUiConfigRepository.load(prefs).wrappedWindowMotionEnabled);
+        assertEquals(Boolean.TRUE, legacy.get(LyricUiConfigCodec.WRAPPED_WINDOW_MOTION_ENABLED));
+    }
+
+    @Test
+    public void translationMarqueeReturnEnabledDefaultsToTrueAndFollowsSwitchReset() {
+        LyricUiConfig defaults = LyricUiConfig.defaults();
+        assertTrue(defaults.translationMarqueeReturnEnabled);
+
+        LyricUiConfig disabled = defaults.buildUpon()
+                .translationMarqueeReturnEnabled(false)
+                .build();
+        assertFalse(LyricUiConfigCodec.decode(
+                LyricUiConfigCodec.encode(disabled), null, false).translationMarqueeReturnEnabled);
+        assertTrue(disabled.resetSwitches().translationMarqueeReturnEnabled);
+        assertFalse(disabled.resetAppearance().translationMarqueeReturnEnabled);
+
+        Map<String, Object> legacy = new HashMap<>(LyricUiConfigCodec.encode(defaults));
+        legacy.remove(LyricUiConfigCodec.TRANSLATION_MARQUEE_RETURN_ENABLED);
+        SharedPreferences prefs = preferences(legacy);
+        assertTrue(LyricUiConfigRepository.load(prefs).translationMarqueeReturnEnabled);
+        assertEquals(Boolean.TRUE, legacy.get(LyricUiConfigCodec.TRANSLATION_MARQUEE_RETURN_ENABLED));
     }
 
     private static SharedPreferences preferences(Map<String, Object> values) {

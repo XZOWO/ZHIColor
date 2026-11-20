@@ -10,6 +10,7 @@ public final class ToolsSettings {
     public static final String PREFERENCES = "zhicolor_tools";
     public static final String HIDE_LOCKSCREEN_MUSIC_APP = "hide_lockscreen_music_app";
     public static final String HIDE_CONTROL_CENTER_MUSIC_APP = "hide_control_center_music_app";
+    public static final String HIDE_FLUID_CLOUD_MUSIC_APP = "hide_fluid_cloud_music_app";
     public static final String CHANGED = "com.naivety.zhicolor.action.TOOLS_SETTINGS_CHANGED";
     public static final String SNAPSHOT_METHOD = "tools_snapshot";
     public static final String REVISION = "revision";
@@ -32,6 +33,14 @@ public final class ToolsSettings {
         setHidden(context, HIDE_CONTROL_CENTER_MUSIC_APP, hidden);
     }
 
+    public static boolean hideFluidCloudMusicApp(Context context) {
+        return preferences(context).getBoolean(HIDE_FLUID_CLOUD_MUSIC_APP, false);
+    }
+
+    public static void setHideFluidCloudMusicApp(Context context, boolean hidden) {
+        setHidden(context, HIDE_FLUID_CLOUD_MUSIC_APP, hidden);
+    }
+
     private static void setHidden(Context context, String key, boolean hidden) {
         SharedPreferences preferences = preferences(context);
         long revision = Math.max(System.currentTimeMillis(), preferences.getLong(REVISION, 0L) + 1L);
@@ -48,6 +57,8 @@ public final class ToolsSettings {
                 preferences.getBoolean(HIDE_LOCKSCREEN_MUSIC_APP, false));
         snapshot.putBoolean(HIDE_CONTROL_CENTER_MUSIC_APP,
                 preferences.getBoolean(HIDE_CONTROL_CENTER_MUSIC_APP, false));
+        snapshot.putBoolean(HIDE_FLUID_CLOUD_MUSIC_APP,
+                preferences.getBoolean(HIDE_FLUID_CLOUD_MUSIC_APP, false));
         snapshot.putLong(REVISION, preferences.getLong(REVISION, 0L));
         return snapshot;
     }

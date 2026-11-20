@@ -38,6 +38,17 @@ public final class ToolsSettingsTest {
     }
 
     @Test
+    public void fluidCloudFlagIsIndependentAndIncludedInSnapshot() {
+        PreferenceTestContext context = new PreferenceTestContext();
+        assertFalse(ToolsSettings.hideFluidCloudMusicApp(context));
+
+        context.values(ToolsSettings.PREFERENCES).put(ToolsSettings.HIDE_FLUID_CLOUD_MUSIC_APP, true);
+        assertTrue(ToolsSettings.hideFluidCloudMusicApp(context));
+        assertFalse(ToolsSettings.hideLockscreenMusicApp(context));
+        assertFalse(ToolsSettings.hideControlCenterMusicApp(context));
+    }
+
+    @Test
     public void legacyLyricOnlyBackupRestoreLeavesBothToolFlagsAndRevisionUntouched() {
         PreferenceTestContext context = new PreferenceTestContext();
         Map<String, Object> tools = context.values(ToolsSettings.PREFERENCES);
