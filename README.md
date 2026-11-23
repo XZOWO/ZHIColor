@@ -7,7 +7,7 @@ ColorOS 原生锁屏音乐主要停留在基础播放信息，歌曲播放时锁
 - Android 12 及以上。具体功能取决于 ColorOS 版本和系统组件，尚未建立完整机型兼容列表。
 - 安装兼容 libxposed API 102 的框架，在框架管理器中启用模块并按模块声明配置作用域。
 - 必须授予 ZHIColor Root 权限和 LSPosed 权限；两项授权均通过后才能进入应用。
-- 歌词功能需要 Lyricon 与对应播放器的数据源。
+- 歌词功能依赖词幕（Lyricon）生态。请到 [词幕 Provider 发布页](https://github.com/XZOWO/LyricProvider/releases/latest) 下载对应播放器的 Provider，否则不能正常使用。
 
 ## 安装
 
